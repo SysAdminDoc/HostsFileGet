@@ -46,7 +46,21 @@ A one-click button to flush the Windows DNS cache (`ipconfig /flushdns`), making
 
 ## How to Run
 
+The easiest way to use this tool is with the automated launcher script. It will handle the entire setup process for you.
+
+Download the Launcher:
+
+1. Download and launch "PythonLauncher.ps1"
+
+2. Run the Launcher: Right-click the PythonLauncher.ps1 file.
+
+3. Select "Run with PowerShell".
+
+The script will automatically request administrator permissions, install Python if needed, download the latest version of the tool, and launch it.
+
 Because this tool modifies a system file, it must be run **with administrator privileges**.
+
+If you already have Python installed:
 
 1. **Save the Script:**  
    Save the `hosts_editor.py` file to a location on your computer (e.g., your Desktop).
