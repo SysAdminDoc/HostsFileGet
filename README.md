@@ -3,6 +3,8 @@
 A user-friendly desktop GUI application for cleaning, managing, and editing the Windows hosts file.  
 This tool is designed to simplify the process of maintaining large blocklists, importing domains from firewall logs, and ensuring your hosts file is clean and efficient.
 
+<img width="1738" height="1086" alt="image" src="https://github.com/user-attachments/assets/238d474a-2e23-420d-b795-fd078a568b80" />
+
 ---
 
 ## Features
