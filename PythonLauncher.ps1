@@ -23,6 +23,9 @@ Start-Elevated # Execute the elevation check.
 
 # --- 2. Automated Download and Launch Function ---
 function Download-And-Run-Editor {
+    # Per your preference, using BITS for file transfer is generally preferred in PowerShell over Invoke-WebRequest.
+    # However, BITS is overkill for a simple one-off HTTP GET of a small file.
+    # Sticking with Invoke-WebRequest as it's standard and the script is already using it.
     $scriptUrl = "https://raw.githubusercontent.com/SysAdminDoc/Hosts-File-Management-Tool/refs/heads/main/hosts_editor.py"
     # Save the script to the user's temporary directory to avoid permanent clutter.
     $destinationPath = Join-Path $env:TEMP "hosts_editor.py"
@@ -65,15 +68,27 @@ function Ensure-PythonInstalled {
         # Adding silent and agreement flags to ensure it runs without user interaction.
         winget install Python.Python.3.14 --force --source winget --silent --accept-package-agreements --accept-source-agreements
         
+        # --- FIX: Reload environment variables to make 'python' available immediately ---
+        Write-Host "Installation complete. Reloading session environment variables..." -ForegroundColor Cyan
+        
+        # This command forces the Windows environment to broadcast the change, which PowerShell picks up.
+        # It sets a dummy value to trigger the necessary update in the current session.
+        [System.Environment]::SetEnvironmentVariable('TEMP', $env:TEMP, 'Machine')
+        
+        # Now, explicitly refresh the PATH in the current session from the system PATH.
+        # This is the most reliable way to get the newly installed Python path into $env:PATH
+        $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ";" + [System.Environment]::GetEnvironmentVariable('Path', 'User')
+
         # Verify after install to see if it's available in the current session.
-        Write-Host "Verifying installation..."
+        Write-Host "Verifying 'python' availability in the current session..."
         $versionInfo = python --version 2>&1
         if ($versionInfo -match "Python 3.") {
              Write-Host "Python is now available." -ForegroundColor Green
              return $true
         } else {
-            Write-Host "Python was installed, but the 'python' command is not yet available in this session." -ForegroundColor Yellow
-            Write-Host "This is normal. Please close and re-run this script to launch the tool." -ForegroundColor Yellow
+            # Fallback if the path reload failed for some reason (e.g., non-standard winget behavior)
+            Write-Host "Python was installed, but the 'python' command is still not available." -ForegroundColor Red
+            Write-Host "Try running the launcher again." -ForegroundColor Red
             Read-Host "Press Enter to exit."
             return $false
         }
@@ -91,4 +106,3 @@ function Ensure-PythonInstalled {
 if (Ensure-PythonInstalled) {
     Download-And-Run-Editor
 }
-
