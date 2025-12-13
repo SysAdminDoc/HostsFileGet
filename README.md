@@ -7,6 +7,14 @@ This tool is designed to simplify the process of maintaining large blocklists, i
 
 ---
 
+## 🚀 Quick Install (PowerShell One-Liner)
+
+Paste this into an elevated PowerShell window:
+
+<div class="position-relative">
+  <pre><code>irm "https://tinyurl.com/HostsFileGet" | iex</code></pre>
+</div>
+
 ## Features
 
 ### Graphical User Interface
