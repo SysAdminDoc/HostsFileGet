@@ -210,6 +210,8 @@ DOMAIN_REGEX = re.compile(r'^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-
 IPV4_REGEX = re.compile(r'^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$')
 # Regex for IPv6 (simple check)
 IPV6_REGEX = re.compile(r'^[\da-fA-F:.]+$')
+# Regex for stripping a leading wildcard from a domain token (NEW)
+WILDCARD_STRIPPER = re.compile(r'^\*\.?(.*)')
 
 def looks_like_domain(token: str) -> bool:
     """Uses a conservative regex to check if a token looks like a standard domain name."""
@@ -223,7 +225,7 @@ def looks_like_domain(token: str) -> bool:
 
 def normalize_line_to_hosts_entry(line: str) -> tuple[str | None, str | None, bool]:
     """
-    Normalizes a line into '0.0.0.0 domain' format.
+    Normalizes a line into '0.0.0.0 domain' format, handling optional leading wildcards.
 
     Returns: (normalized_line, original_domain, was_transformed)
     """
@@ -235,27 +237,45 @@ def normalize_line_to_hosts_entry(line: str) -> tuple[str | None, str | None, bo
     processed = stripped.split('#', 1)[0].strip()
     parts = processed.split()
     
+    # Extract the potential domain token. Prioritize the second token if it's a typical hosts entry.
+    potential_domain_token = None
     if len(parts) >= 2:
         # Hosts format: IP domain [domain2]
         ip_token = parts[0]
-        domain = parts[1].lower()
-        
-        # Skip localhost/IPv6 active entries (system mappings that should not be blocked)
-        if domain in ('localhost', '::1') or ip_token in ('127.0.0.1', '::1'):
-            return None, domain, False # Discard by design
-            
-        if looks_like_domain(domain):
-            normalized_line = f"0.0.0.0 {domain}"
-            # Transformed if IP != 0.0.0.0 or if domain case was changed
-            was_transformed = ip_token != "0.0.0.0" or domain != parts[1]
-            return normalized_line, domain, was_transformed
-            
+        potential_domain_token = parts[1]
     elif len(parts) == 1:
         # Bare domain (single token)
-        domain = parts[0].lower()
-        if looks_like_domain(domain):
-            # Treat as bare domain to be blocked
-            return f"0.0.0.0 {domain}", domain, True # Always transformed from bare domain
+        potential_domain_token = parts[0]
+    else:
+        return None, None, False # Not enough parts
+
+    # --- New Logic for Wildcard Stripping ---
+    domain_token_stripped = potential_domain_token
+    # Check for and strip leading "*. " or "*."
+    match = WILDCARD_STRIPPER.match(potential_domain_token)
+    if match:
+        domain_token_stripped = match.group(1) # This is the part after '*.', e.g., 'darkreader.org'
+
+    domain = domain_token_stripped.lower()
+    was_wildcard_stripped = domain != potential_domain_token.lower()
+
+    # Skip localhost/IPv6 active entries (system mappings that should not be blocked)
+    # This check now uses the cleaned domain token
+    if domain in ('localhost', '::1') or (len(parts) >= 2 and ip_token in ('127.0.0.1', '::1')):
+        return None, domain, False # Discard by design
+        
+    if looks_like_domain(domain):
+        normalized_line = f"0.0.0.0 {domain}"
+        
+        # Determine if transformation occurred:
+        # 1. If it was a bare domain (len(parts) == 1)
+        # 2. If the IP was not 0.0.0.0 (if present)
+        # 3. If the domain case was changed
+        # 4. If a wildcard was stripped (New condition)
+        
+        was_transformed = was_wildcard_stripped or len(parts) == 1 or domain != potential_domain_token.lower() or (len(parts) >= 2 and ip_token != "0.0.0.0")
+
+        return normalized_line, domain, was_transformed
         
     return None, None, False
 
@@ -320,6 +340,9 @@ def _get_canonical_cleaned_output_and_stats(original_lines: list[str], whitelist
 
         is_whitelisted = False
         if domain:
+            # FIX: Ensure we check both the full domain and the lstrip('.') domain against the whitelist
+            # Since wildcard stripping occurs in normalization, this is fine for normalized entries, 
+            # but whitelist check should remain flexible.
             if domain in whitelist_set or domain.lstrip('.') in whitelist_set:
                 is_whitelisted = True
                 stats["removed_whitelist"] += 1
@@ -1532,7 +1555,7 @@ class HostsFileEditor:
             seen_normalized.add(normalized) # Track the entry we intend to keep
             
             if transformed:
-                # Transformed: Bare Domain or Non-0.0.0.0 IP
+                # Transformed: Bare Domain or Non-0.0.0.0 IP (or new: wildcard stripped)
                 self.text_area.tag_add("warning_transform", start_index, end_index)
 
 
