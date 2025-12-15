@@ -9,16 +9,13 @@
 # - ADDED: Dedicated Manual List Input area to paste and append hosts.
 # - FIXED: Widen left sidebar to 420px.
 # - FIXED: Initialized status_label and right_area correctly.
-# - FIXED: Implemented Admin Relaunch logic.
 # - FIXED: Moved 'Utilities' section to the top beneath 'File'.
 # - FIXED: Enhanced 'Clean' logic to remove ALL comments/headers.
 # - **FEATURE ADDED**: Non-interactive status updates for imports and utilities (removes popups).
 # - **FEATURE ADDED**: Persistent search highlighting on editor modification.
 # - **FIXED**: Improved error reporting for failed imports.
 # - **FEATURE ADDED**: NextDNS CSV Log Import for blocked domains.
-# - Kept all features: fixed-width left sidebar, full-height editor, diff preview windows,
-#   "Revert to Backup" with preview, pfSense import, imports, whitelist persistence,
-#   cleaning/dedup, DNS flush, save backup
+# - **FIXED**: Modified Admin Relaunch logic to automatically attempt relaunch if not running as Admin.
 
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, font, filedialog, simpledialog
@@ -524,9 +521,13 @@ class HostsFileEditor:
         self.save_config()
         self.root.destroy()
 
-    # --------------------------- Admin Check (New Relaunch Logic) ----------------------------------
+    # --------------------------- Admin Check (Automatic Relaunch Logic) ----------------------------------
     def check_admin_privileges(self):
-        """Checks for admin privileges and prompts for relaunch if needed (Windows only)."""
+        """
+        Checks for admin privileges. If running on Windows without admin, it attempts 
+        to relaunch the script with elevated privileges and instructs the current 
+        process to exit.
+        """
         try:
             is_admin = (os.getuid() == 0)
         except AttributeError:
@@ -541,14 +542,9 @@ class HostsFileEditor:
             self.root.after(100, lambda: self.update_status("Success: Running with Administrator privileges.", is_error=False))
             return True
         else:
-            self.root.after(100, lambda: self.update_status("Warning: Not running as Administrator. Read/write to hosts file will fail.", is_error=True))
-
-            if os.name == 'nt' and messagebox.askyesno(
-                "Admin Rights Required", 
-                "Administrative privileges are required to save changes to the hosts file. \n\nDo you want to relaunch as Administrator now?"
-            ):
+            if os.name == 'nt':
+                # Attempt silent relaunch as administrator
                 try:
-                    # Relaunch script with elevated privileges
                     script = os.path.abspath(sys.argv[0])
                     params = ' '.join(['"%s"' % arg for arg in sys.argv[1:]])
                     
@@ -557,11 +553,17 @@ class HostsFileEditor:
                         None, "runas", sys.executable, f'"{script}" {params}', None, 1
                     )
                     # Exit the non-admin instance
-                    return False
+                    return False 
                 except Exception as e:
-                    messagebox.showerror("Relaunch Failed", f"Could not relaunch as administrator.\nError: {e}")
-                    return True # Continue in non-admin mode
-            return True # Continue in non-admin mode
+                    # Inform user if relaunch fails, then proceed non-admin
+                    messagebox.showerror(
+                        "Relaunch Failed", 
+                        f"Could not relaunch as administrator. Saving the hosts file will fail due to permission error.\nError: {e}"
+                    )
+            
+            # If not Windows or relaunch failed, notify and continue non-admin
+            self.root.after(100, lambda: self.update_status("Warning: Not running as Administrator. Read/write to hosts file will fail.", is_error=True))
+            return True
             
 
     # ------------------------- Config Persistence -----------------------------
@@ -865,6 +867,7 @@ class HostsFileEditor:
             extracted_domains = set()
             
             # Identify required column names (case-insensitive mapping)
+            # Note: DictReader fieldnames might contain whitespace/non-printable chars if poorly formatted.
             fieldnames = [name.strip().lower() for name in reader.fieldnames or []]
             
             # Check for the minimum required columns based on the sample file
@@ -873,24 +876,16 @@ class HostsFileEditor:
                 messagebox.showerror("CSV Format Error", f"The NextDNS CSV file '{filename}' appears to be missing required columns ('domain', 'status').")
                 return
             
-            # Normalize column names to map to the correct index or key
+            # Normalize column names to map to the correct key in the row dictionary
             domain_key = reader.fieldnames[fieldnames.index('domain')]
             status_key = reader.fieldnames[fieldnames.index('status')]
-            # Reasons column is optional but helpful for filtering 'allowed,whitelist' entries
-            reasons_key = next((name for name in reader.fieldnames if name.strip().lower() == 'reasons'), None)
 
             for row in reader:
                 domain = row.get(domain_key, '').strip()
                 status = row.get(status_key, '').strip().lower()
-                reasons = row.get(reasons_key, '').strip().lower() if reasons_key else ''
 
                 if domain and status == 'blocked':
-                    # Only add if blocked and NOT explicitly whitelisted (i.e., status=allowed, reasons=whitelist)
-                    # Note: NextDNS logs "blocked" entries can also have "reasons" that mention blocklists,
-                    # but we are primarily concerned with ensuring we don't accidentally block a domain 
-                    # that was previously whitelisted in the NextDNS settings and thus allowed. 
-                    # Since the query is for *blocked* entries, we just extract them.
-                    # The internal whitelist in HostsFileEditor will handle true whitelisting.
+                    # Extract only the domain for blocking (NextDNS logs already contain subdomain details)
                     extracted_domains.add(domain)
 
             if not extracted_domains:
