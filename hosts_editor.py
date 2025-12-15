@@ -15,6 +15,7 @@
 # - **FEATURE ADDED**: Non-interactive status updates for imports and utilities (removes popups).
 # - **FEATURE ADDED**: Persistent search highlighting on editor modification.
 # - **FIXED**: Improved error reporting for failed imports.
+# - **FEATURE ADDED**: NextDNS CSV Log Import for blocked domains.
 # - Kept all features: fixed-width left sidebar, full-height editor, diff preview windows,
 #   "Revert to Backup" with preview, pfSense import, imports, whitelist persistence,
 #   cleaning/dedup, DNS flush, save backup
@@ -31,6 +32,8 @@ import json
 import webbrowser
 import hashlib
 import sys
+import csv
+import io
 
 # ----------------------------- Theme (Catppuccin Mocha) ----------------------
 PALETTE = {
@@ -327,6 +330,9 @@ class HostsFileEditor:
         local_import_frame = ttk.LabelFrame(import_frame, text="Import From File")
         local_import_frame.pack(fill="x", padx=8, pady=(8, 4))
         self._btn(local_import_frame, "From pfSense Log", self.import_pfsense_log, "Import domains from pfSense DNSBL log.").pack(fill="x", pady=2)
+        # ADDED: NextDNS Import Button
+        self._btn(local_import_frame, "From NextDNS Log (CSV)", self.import_nextdns_log, "Import blocked domains from a NextDNS Query Log CSV.").pack(fill="x", pady=2)
+
 
         # Dynamic Web Imports
         for category, sources in self.BLOCKLIST_SOURCES.items():
@@ -762,7 +768,8 @@ class HostsFileEditor:
 
                     new_lines = response.read().decode('utf-8', errors='ignore').splitlines()
             elif lines_to_add:
-                new_lines = lines_to_add
+                # Ensure lines_to_add is a list of strings
+                new_lines = [str(line) for line in lines_to_add if str(line).strip()]
             else:
                 raise ValueError("Either url or lines_to_add must be provided.")
 
@@ -833,6 +840,70 @@ class HostsFileEditor:
             self.update_status(f"Error importing log file: {e}", is_error=True)
             # Retain interactive pop-up for file system errors
             messagebox.showerror("Import Error", f"An unexpected error occurred while processing the log file:\n{e}")
+            
+    def import_nextdns_log(self):
+        """Import a NextDNS Query Log CSV file to extract blocked domains."""
+        filepath = filedialog.askopenfilename(
+            title="Select NextDNS Query Log CSV File",
+            filetypes=(("CSV files", "*.csv"), ("All files", "*.*"))
+        )
+        if not filepath:
+            return
+
+        filename = os.path.basename(filepath)
+        self.update_status(f"Importing blocked domains from NextDNS log: {filename}...")
+        self.root.update_idletasks()
+
+        try:
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                # Read content first, replace the non-standard header delimiter `` if present
+                content = f.read().replace('', '').strip()
+            
+            # Use io.StringIO to treat the string content as a file for csv.DictReader
+            reader = csv.DictReader(io.StringIO(content))
+            
+            extracted_domains = set()
+            
+            # Identify required column names (case-insensitive mapping)
+            fieldnames = [name.strip().lower() for name in reader.fieldnames or []]
+            
+            # Check for the minimum required columns based on the sample file
+            if 'domain' not in fieldnames or 'status' not in fieldnames:
+                self.update_status(f"CSV format error: Missing 'domain' or 'status' column in {filename}.", is_error=True)
+                messagebox.showerror("CSV Format Error", f"The NextDNS CSV file '{filename}' appears to be missing required columns ('domain', 'status').")
+                return
+            
+            # Normalize column names to map to the correct index or key
+            domain_key = reader.fieldnames[fieldnames.index('domain')]
+            status_key = reader.fieldnames[fieldnames.index('status')]
+            # Reasons column is optional but helpful for filtering 'allowed,whitelist' entries
+            reasons_key = next((name for name in reader.fieldnames if name.strip().lower() == 'reasons'), None)
+
+            for row in reader:
+                domain = row.get(domain_key, '').strip()
+                status = row.get(status_key, '').strip().lower()
+                reasons = row.get(reasons_key, '').strip().lower() if reasons_key else ''
+
+                if domain and status == 'blocked':
+                    # Only add if blocked and NOT explicitly whitelisted (i.e., status=allowed, reasons=whitelist)
+                    # Note: NextDNS logs "blocked" entries can also have "reasons" that mention blocklists,
+                    # but we are primarily concerned with ensuring we don't accidentally block a domain 
+                    # that was previously whitelisted in the NextDNS settings and thus allowed. 
+                    # Since the query is for *blocked* entries, we just extract them.
+                    # The internal whitelist in HostsFileEditor will handle true whitelisting.
+                    extracted_domains.add(domain)
+
+            if not extracted_domains:
+                self.update_status(f"No blocked domains found in '{filename}'.", is_error=True)
+                return
+
+            new_domains_to_add = sorted(list(extracted_domains))
+            self.fetch_and_append_hosts(f"NextDNS Log: {filename}", lines_to_add=new_domains_to_add)
+
+        except Exception as e:
+            self.update_status(f"Error importing NextDNS log file: {e}", is_error=True)
+            # Retain interactive pop-up for file system errors
+            messagebox.showerror("Import Error", f"An unexpected error occurred while processing the NextDNS log file:\n{e}")
             
     def append_manual_list(self):
         """Appends content from the manual list input area to the editor."""
@@ -1140,7 +1211,8 @@ class HostsFileEditor:
         """
         old_current_match = None
         if preserve_index and 0 <= self._search_index < len(self._search_matches):
-            old_current_match = self.text_area.get(self._search_matches[self._search_index][0], self._search_matches[self._search_index][1])
+            pos, end = self._search_matches[self._search_index]
+            old_current_match = self.text_area.get(pos, end)
 
         self.search_clear()
         if not query:
