@@ -3,106 +3,352 @@
 #
 # Description:
 # This script automatically downloads and runs the hosts_editor.py script.
-# It forces the installation of Python via winget, downloads the latest Python script,
-# and then launches it with the necessary administrator privileges.
+# It ensures winget is installed, forces the installation of Python via winget,
+# downloads the latest Python script, and then launches it with admin privileges.
 #
 
-# --- 1. Administrator Rights Check ---
-# Ensure the script is running with elevated privileges, which is required
-# to install Python and to run the hosts editor itself.
-function Start-Elevated {
-    if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] 'Administrator')) {
-        if ([int](Get-CimInstance -Class Win32_OperatingSystem | Select-Object -ExpandProperty BuildNumber) -ge 6000) {
-            $CommandLine = "-File `"" + $MyInvocation.MyCommand.Path + "`" " + $MyInvocation.UnboundArguments
-            Start-Process -FilePath PowerShell.exe -Verb Runas -ArgumentList $CommandLine
-            Exit
-        }
+#Requires -RunAsAdministrator
+
+# ==========================================================
+# 1. SETUP WPF SPLASH ENVIRONMENT
+# ==========================================================
+Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
+
+$xaml = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        Title="Hosts Editor Launcher"
+        Height="180" Width="450"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterScreen"
+        Background="#FF020617"
+        Topmost="True">
+    <Border BorderBrush="#FF22c55e"
+            BorderThickness="1"
+            CornerRadius="6"
+            Padding="10">
+        <Grid>
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="HOSTS EDITOR LAUNCHER"
+                           Foreground="#FF22c55e"
+                           FontSize="18"
+                           FontWeight="Bold"
+                           HorizontalAlignment="Center"
+                           Margin="0,0,0,15"/>
+                
+                <ProgressBar IsIndeterminate="True"
+                             Height="4"
+                             Foreground="#FF22c55e"
+                             Background="#FF1e293b"
+                             BorderThickness="0"
+                             Margin="20,0"/>
+
+                <TextBlock Name="StatusText"
+                           Text="Initializing..."
+                           Foreground="#FF94a3b8"
+                           FontSize="12"
+                           HorizontalAlignment="Center"
+                           Margin="0,15,0,0"/>
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>
+"@
+
+# Build the GUI
+try {
+    $reader = [System.Xml.XmlReader]::Create([System.IO.StringReader]::new($xaml))
+    $window = [System.Windows.Markup.XamlReader]::Load($reader)
+    $statusBlock = $window.FindName("StatusText")
+} catch {
+    Write-Host "Failed to load GUI resources." -ForegroundColor Red
+    exit
+}
+
+# Helper to update UI and keep it responsive
+function Log-Status {
+    param([string]$Message)
+    
+    Write-Host "[HostsLauncher] $Message" -ForegroundColor Gray
+
+    if ($window) {
+        $statusBlock.Text = $Message
+        [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::Render)
     }
 }
-Start-Elevated # Execute the elevation check.
 
-# --- 2. Automated Download and Launch Function ---
-function Download-And-Run-Editor {
-    # Per your preference, using BITS for file transfer is generally preferred in PowerShell over Invoke-WebRequest.
-    # However, BITS is overkill for a simple one-off HTTP GET of a small file.
-    # Sticking with Invoke-WebRequest as it's standard and the script is already using it.
-    $scriptUrl = "https://raw.githubusercontent.com/SysAdminDoc/Hosts-File-Management-Tool/refs/heads/main/hosts_editor.py"
-    # Save the script to the user's temporary directory to avoid permanent clutter.
-    $destinationPath = Join-Path $env:TEMP "hosts_editor.py"
-
-    Write-Host "Downloading the latest version of the Hosts Editor from GitHub..."
-    try {
-        # Use Invoke-WebRequest to download the file. -UseBasicParsing is good practice for compatibility.
-        Invoke-WebRequest -Uri $scriptUrl -OutFile $destinationPath -UseBasicParsing
-        Write-Host "Download complete." -ForegroundColor Green
-    }
-    catch {
-        Write-Host "ERROR: Failed to download the script from GitHub." -ForegroundColor Red
-        Write-Host "Please check your internet connection and try again." -ForegroundColor Red
-        Read-Host "Press Enter to exit."
-        return # Exit the function
-    }
-
-    Write-Host "Launching the Hosts File Management Tool..."
-    try {
-        # Launch the downloaded script using python.exe
-        # The python process will inherit the elevated privileges of this launcher.
-        Start-Process python -ArgumentList "`"$destinationPath`""
-    }
-    catch {
-        Write-Host "ERROR: Failed to launch the script." -ForegroundColor Red
-        Write-Host "This can happen if Python was just installed or if an error occurred." -ForegroundColor Red
-        Write-Host "Please try running the launcher again." -ForegroundColor Red
-        Read-Host "Press Enter to exit."
-    }
-}
-
-
-# --- 3. Python Installation Logic ---
-function Ensure-PythonInstalled {
-    Write-Host "Forcing Python installation via winget..." -ForegroundColor Yellow
-    Write-Host "This may take a few minutes. Please wait..."
+# Helper function to download files
+function Download-File {
+    param(
+        [string]$Uri,
+        [string]$OutFile
+    )
     
     try {
-        # Per user request, force the installation of a specific Python version without prior checks.
-        # Adding silent and agreement flags to ensure it runs without user interaction.
-        winget install Python.Python.3.14 --force --source winget --silent --accept-package-agreements --accept-source-agreements
-        
-        # --- FIX: Reload environment variables to make 'python' available immediately ---
-        Write-Host "Installation complete. Reloading session environment variables..." -ForegroundColor Cyan
-        
-        # This command forces the Windows environment to broadcast the change, which PowerShell picks up.
-        # It sets a dummy value to trigger the necessary update in the current session.
-        [System.Environment]::SetEnvironmentVariable('TEMP', $env:TEMP, 'Machine')
-        
-        # Now, explicitly refresh the PATH in the current session from the system PATH.
-        # This is the most reliable way to get the newly installed Python path into $env:PATH
-        $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ";" + [System.Environment]::GetEnvironmentVariable('Path', 'User')
-
-        # Verify after install to see if it's available in the current session.
-        Write-Host "Verifying 'python' availability in the current session..."
-        $versionInfo = python --version 2>&1
-        if ($versionInfo -match "Python 3.") {
-             Write-Host "Python is now available." -ForegroundColor Green
-             return $true
-        } else {
-            # Fallback if the path reload failed for some reason (e.g., non-standard winget behavior)
-            Write-Host "Python was installed, but the 'python' command is still not available." -ForegroundColor Red
-            Write-Host "Try running the launcher again." -ForegroundColor Red
-            Read-Host "Press Enter to exit."
-            return $false
-        }
-    }
-    catch {
-        Write-Host "ERROR: Failed to install Python using winget." -ForegroundColor Red
-        Write-Host "Please ensure winget is working and try again." -ForegroundColor Red
-        Read-Host "Press Enter to exit."
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
+        return $true
+    } catch {
         return $false
     }
 }
 
-# --- 4. Main Execution ---
-# The script will first force the Python install, then download and run the editor.
-if (Ensure-PythonInstalled) {
-    Download-And-Run-Editor
+# ==========================================================
+# 2. WINGET INSTALLATION LOGIC
+# ==========================================================
+function Install-Winget {
+    $arch = if ([System.Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" }
+    Log-Status "System: Windows $arch"
+    Start-Sleep -Milliseconds 300
+    
+    # Create working directory
+    $workDir = "$env:TEMP\WingetInstall"
+    if (-not (Test-Path $workDir)) {
+        New-Item -Path $workDir -ItemType Directory -Force | Out-Null
+    }
+    
+    # Clean existing broken installations
+    Log-Status "Checking for conflicting packages..."
+    try {
+        $existingWinget = Get-AppxPackage -Name "Microsoft.DesktopAppInstaller" -AllUsers -ErrorAction SilentlyContinue
+        if ($existingWinget) {
+            Log-Status "Removing existing Winget installation..."
+            Remove-AppxPackage -Package $existingWinget.PackageFullName -AllUsers -ErrorAction SilentlyContinue
+        }
+    } catch { }
+    
+    # Download required packages
+    Log-Status "Downloading installation packages..."
+    
+    $packages = @{
+        VCLibs_x64 = @{
+            Url = "https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx"
+            Path = "$workDir\VCLibs_x64.appx"
+            Name = "VCLibs x64"
+        }
+        VCLibs_x86 = @{
+            Url = "https://aka.ms/Microsoft.VCLibs.x86.14.00.Desktop.appx"
+            Path = "$workDir\VCLibs_x86.appx"
+            Name = "VCLibs x86"
+        }
+        UIXaml = @{
+            Url = "https://github.com/microsoft/microsoft-ui-xaml/releases/download/v2.8.6/Microsoft.UI.Xaml.2.8.x64.appx"
+            Path = "$workDir\UIXaml.appx"
+            Name = "UI.Xaml 2.8"
+        }
+        Winget = @{
+            Url = "https://github.com/microsoft/winget-cli/releases/latest/download/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle"
+            Path = "$workDir\Winget.msixbundle"
+            Name = "Winget"
+        }
+    }
+    
+    $downloadSuccess = $true
+    foreach ($pkg in $packages.GetEnumerator()) {
+        if (-not (Test-Path $pkg.Value.Path)) {
+            Log-Status "Downloading $($pkg.Value.Name)..."
+            
+            if (-not (Download-File -Uri $pkg.Value.Url -OutFile $pkg.Value.Path)) {
+                Log-Status "Failed to download $($pkg.Value.Name)"
+                $downloadSuccess = $false
+            }
+            Start-Sleep -Milliseconds 200
+        }
+    }
+    
+    if (-not $downloadSuccess) {
+        throw "Failed to download required packages"
+    }
+    
+    # Install dependencies
+    Log-Status "Installing dependencies..."
+    
+    foreach ($vclib in @("VCLibs_x64", "VCLibs_x86")) {
+        if (Test-Path $packages[$vclib].Path) {
+            Log-Status "Installing $($packages[$vclib].Name)..."
+            try {
+                Add-AppxPackage -Path $packages[$vclib].Path -ErrorAction Stop
+            } catch {
+                try {
+                    Add-AppxPackage -Path $packages[$vclib].Path -ForceApplicationShutdown -ForceUpdateFromAnyVersion -ErrorAction Stop
+                } catch { }
+            }
+            Start-Sleep -Milliseconds 300
+        }
+    }
+    
+    # Install UI.Xaml
+    if (Test-Path $packages.UIXaml.Path) {
+        Log-Status "Installing UI.Xaml..."
+        try {
+            Add-AppxPackage -Path $packages.UIXaml.Path -ErrorAction Stop
+        } catch { }
+        Start-Sleep -Milliseconds 300
+    }
+    
+    # Verify VCLibs
+    $vcLibsInstalled = Get-AppxPackage -Name "Microsoft.VCLibs.140.00*" -AllUsers
+    
+    if (-not $vcLibsInstalled) {
+        Log-Status "Trying DISM installation method..."
+        foreach ($vclib in @("VCLibs_x64", "VCLibs_x86")) {
+            $pkgPath = $packages[$vclib].Path
+            if (Test-Path $pkgPath) {
+                try {
+                    dism /Online /Add-ProvisionedAppxPackage /PackagePath:"$pkgPath" /SkipLicense 2>&1 | Out-Null
+                } catch { }
+            }
+        }
+        Start-Sleep -Seconds 2
+    }
+    
+    # Install Winget
+    if (Test-Path $packages.Winget.Path) {
+        Log-Status "Installing Winget..."
+        Start-Sleep -Milliseconds 500
+        
+        $dependencies = @()
+        if (Test-Path $packages.VCLibs_x64.Path) { $dependencies += $packages.VCLibs_x64.Path }
+        if (Test-Path $packages.VCLibs_x86.Path) { $dependencies += $packages.VCLibs_x86.Path }
+        if (Test-Path $packages.UIXaml.Path) { $dependencies += $packages.UIXaml.Path }
+        
+        try {
+            if ($dependencies.Count -gt 0) {
+                Add-AppxPackage -Path $packages.Winget.Path -DependencyPath $dependencies -ForceApplicationShutdown -ErrorAction Stop
+            } else {
+                Add-AppxPackage -Path $packages.Winget.Path -ForceApplicationShutdown -ErrorAction Stop
+            }
+            
+            Log-Status "Winget installed successfully!"
+            Start-Sleep -Seconds 2
+            
+        } catch {
+            Log-Status "ERROR: Failed to install Winget"
+            throw "Winget installation failed: $($_.Exception.Message)"
+        }
+    }
+    
+    # Cleanup
+    Log-Status "Cleaning up temp files..."
+    Remove-Item -Path $workDir -Recurse -Force -ErrorAction SilentlyContinue
+    
+    return $true
 }
+
+# ==========================================================
+# 3. PYTHON INSTALLATION LOGIC
+# ==========================================================
+function Ensure-PythonInstalled {
+    Log-Status "Installing Python via winget..."
+    
+    try {
+        $wingetResult = winget install Python.Python.3.14 --force --source winget --silent --accept-package-agreements --accept-source-agreements 2>&1
+        
+        Log-Status "Reloading environment variables..."
+        
+        # Refresh PATH in the current session
+        $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ";" + [System.Environment]::GetEnvironmentVariable('Path', 'User')
+
+        Log-Status "Verifying Python installation..."
+        Start-Sleep -Milliseconds 500
+        
+        $versionInfo = python --version 2>&1
+        if ($versionInfo -match "Python 3.") {
+            Log-Status "Python is ready!"
+            return $true
+        } else {
+            Log-Status "Python installed but not in PATH"
+            return $false
+        }
+    }
+    catch {
+        Log-Status "ERROR: Failed to install Python"
+        return $false
+    }
+}
+
+# ==========================================================
+# 4. DOWNLOAD AND RUN EDITOR
+# ==========================================================
+function Download-And-Run-Editor {
+    $scriptUrl = "https://raw.githubusercontent.com/SysAdminDoc/Hosts-File-Management-Tool/refs/heads/main/hosts_editor.py"
+    $destinationPath = Join-Path $env:TEMP "hosts_editor.py"
+
+    Log-Status "Downloading Hosts Editor..."
+    
+    try {
+        if (Download-File -Uri $scriptUrl -OutFile $destinationPath) {
+            Log-Status "Download complete!"
+        } else {
+            throw "Download failed"
+        }
+    }
+    catch {
+        Log-Status "ERROR: Failed to download script"
+        Start-Sleep -Seconds 3
+        return $false
+    }
+
+    Log-Status "Launching Hosts Editor..."
+    Start-Sleep -Milliseconds 500
+    
+    try {
+        Start-Process python -ArgumentList "`"$destinationPath`""
+        return $true
+    }
+    catch {
+        Log-Status "ERROR: Failed to launch script"
+        Start-Sleep -Seconds 3
+        return $false
+    }
+}
+
+# ==========================================================
+# 5. MAIN EXECUTION
+# ==========================================================
+$window.Show()
+Log-Status "Initializing..."
+Start-Sleep -Milliseconds 500
+
+try {
+    # Step 1: Check if winget is installed
+    Log-Status "Checking for winget..."
+    $wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
+    
+    if (-not $wingetCmd) {
+        Log-Status "Winget not found. Installing..."
+        Start-Sleep -Milliseconds 300
+        
+        if (-not (Install-Winget)) {
+            Log-Status "Failed to install winget!"
+            Start-Sleep -Seconds 5
+            $window.Close()
+            exit 1
+        }
+    } else {
+        Log-Status "Winget is available"
+        Start-Sleep -Milliseconds 300
+    }
+    
+    # Step 2: Install Python
+    if (-not (Ensure-PythonInstalled)) {
+        Log-Status "Python installation failed!"
+        Start-Sleep -Seconds 5
+        $window.Close()
+        exit 1
+    }
+    
+    # Step 3: Download and run the editor
+    if (Download-And-Run-Editor) {
+        Log-Status "Success! Closing launcher..."
+        Start-Sleep -Seconds 2
+    }
+    
+} catch {
+    Log-Status "Critical Error: $($_.Exception.Message)"
+    Write-Host "`nFull error details:" -ForegroundColor Red
+    Write-Host $_.Exception | Format-List -Force
+    Start-Sleep -Seconds 10
+}
+
+$window.Close()
