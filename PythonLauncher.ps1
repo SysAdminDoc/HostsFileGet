@@ -120,168 +120,26 @@ function Download-File {
 # 2. WINGET INSTALLATION LOGIC
 # ==========================================================
 function Install-Winget {
-    $arch = if ([System.Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" }
-    Log-Status "System: Windows $arch"
-    Start-Sleep -Milliseconds 300
+    Log-Status "Installing WinGet via PSGallery script..."
     
-    # Check if VCLibs already installed
-    $existingVCLibs = Get-AppxPackage -Name "Microsoft.VCLibs.140.00*" -ErrorAction SilentlyContinue
-    $vcLibsInstalled = $existingVCLibs -ne $null
-    
-    if ($vcLibsInstalled) {
-        Log-Status "VCLibs already installed"
-    }
-    
-    # Create working directory
-    $workDir = "$env:TEMP\WingetInstall"
-    if (-not (Test-Path $workDir)) {
-        New-Item -Path $workDir -ItemType Directory -Force | Out-Null
-    }
-    
-    # Clean existing broken winget installations
-    Log-Status "Checking for conflicting packages..."
     try {
-        $existingWinget = Get-AppxPackage -Name "Microsoft.DesktopAppInstaller" -AllUsers -ErrorAction SilentlyContinue
-        if ($existingWinget) {
-            Log-Status "Removing existing Winget installation..."
-            Remove-AppxPackage -Package $existingWinget.PackageFullName -AllUsers -ErrorAction SilentlyContinue
-        }
-    } catch { }
-    
-    # Download required packages
-    Log-Status "Downloading installation packages..."
-    
-    $packages = @{
-        UIXaml = @{
-            Url = "https://github.com/microsoft/microsoft-ui-xaml/releases/download/v2.8.6/Microsoft.UI.Xaml.2.8.x64.appx"
-            Path = "$workDir\UIXaml.appx"
-            Name = "UI.Xaml 2.8"
-            Required = $true
-        }
-        Winget = @{
-            Url = "https://github.com/microsoft/winget-cli/releases/latest/download/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle"
-            Path = "$workDir\Winget.msixbundle"
-            Name = "Winget"
-            Required = $true
-        }
-    }
-    
-    # Only add VCLibs to download list if not already installed
-    if (-not $vcLibsInstalled) {
-        $packages["VCLibs_x64"] = @{
-            Url = "https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx"
-            Path = "$workDir\VCLibs_x64.appx"
-            Name = "VCLibs x64"
-            Required = $false
-        }
-        $packages["VCLibs_x86"] = @{
-            Url = "https://aka.ms/Microsoft.VCLibs.x86.14.00.Desktop.appx"
-            Path = "$workDir\VCLibs_x86.appx"
-            Name = "VCLibs x86"
-            Required = $false
-        }
-    }
-    
-    $downloadSuccess = $true
-    foreach ($pkg in $packages.GetEnumerator()) {
-        if (-not (Test-Path $pkg.Value.Path)) {
-            Log-Status "Downloading $($pkg.Value.Name)..."
-            
-            if (-not (Download-File -Uri $pkg.Value.Url -OutFile $pkg.Value.Path)) {
-                Log-Status "Failed to download $($pkg.Value.Name)"
-                if ($pkg.Value.Required) {
-                    $downloadSuccess = $false
-                }
-            }
-            Start-Sleep -Milliseconds 200
-        }
-    }
-    
-    if (-not $downloadSuccess) {
-        throw "Failed to download required packages"
-    }
-    
-    # Install VCLibs dependencies (only if downloaded)
-    if (-not $vcLibsInstalled) {
-        Log-Status "Installing dependencies..."
+        # Install NuGet provider (required for PSGallery)
+        Install-PackageProvider -Name NuGet -Force -ErrorAction Stop | Out-Null
         
-        foreach ($vclib in @("VCLibs_x64", "VCLibs_x86")) {
-            if ($packages.ContainsKey($vclib) -and (Test-Path $packages[$vclib].Path)) {
-                Log-Status "Installing $($packages[$vclib].Name)..."
-                try {
-                    Add-AppxPackage -Path $packages[$vclib].Path -ErrorAction Stop
-                } catch {
-                    try {
-                        Add-AppxPackage -Path $packages[$vclib].Path -ForceApplicationShutdown -ForceUpdateFromAnyVersion -ErrorAction Stop
-                    } catch { }
-                }
-                Start-Sleep -Milliseconds 300
-            }
-        }
+        Log-Status "Downloading winget-install script..."
+        Install-Script -Name winget-install -Force -ErrorAction Stop
         
-        # Verify VCLibs after installation
-        $vcLibsInstalled = Get-AppxPackage -Name "Microsoft.VCLibs.140.00*" -AllUsers
+        Log-Status "Running winget-install..."
+        winget-install
         
-        if (-not $vcLibsInstalled) {
-            Log-Status "Trying DISM installation method..."
-            foreach ($vclib in @("VCLibs_x64", "VCLibs_x86")) {
-                if ($packages.ContainsKey($vclib)) {
-                    $pkgPath = $packages[$vclib].Path
-                    if (Test-Path $pkgPath) {
-                        try {
-                            dism /Online /Add-ProvisionedAppxPackage /PackagePath:"$pkgPath" /SkipLicense 2>&1 | Out-Null
-                        } catch { }
-                    }
-                }
-            }
-            Start-Sleep -Seconds 2
-        }
+        Log-Status "WinGet installed successfully!"
+        Start-Sleep -Seconds 2
+        return $true
+        
+    } catch {
+        Log-Status "ERROR: $($_.Exception.Message)"
+        return $false
     }
-    
-    # Install UI.Xaml
-    if (Test-Path $packages.UIXaml.Path) {
-        Log-Status "Installing UI.Xaml..."
-        try {
-            Add-AppxPackage -Path $packages.UIXaml.Path -ErrorAction Stop
-        } catch { }
-        Start-Sleep -Milliseconds 300
-    }
-    
-    # Install Winget
-    if (Test-Path $packages.Winget.Path) {
-        Log-Status "Installing Winget..."
-        Start-Sleep -Milliseconds 500
-        
-        # Build dependency array from files that exist
-        $dependencies = @()
-        foreach ($vclib in @("VCLibs_x64", "VCLibs_x86")) {
-            if ($packages.ContainsKey($vclib) -and (Test-Path $packages[$vclib].Path)) {
-                $dependencies += $packages[$vclib].Path
-            }
-        }
-        if (Test-Path $packages.UIXaml.Path) { $dependencies += $packages.UIXaml.Path }
-        
-        try {
-            if ($dependencies.Count -gt 0) {
-                Add-AppxPackage -Path $packages.Winget.Path -DependencyPath $dependencies -ForceApplicationShutdown -ErrorAction Stop
-            } else {
-                Add-AppxPackage -Path $packages.Winget.Path -ForceApplicationShutdown -ErrorAction Stop
-            }
-            
-            Log-Status "Winget installed successfully!"
-            Start-Sleep -Seconds 2
-            
-        } catch {
-            Log-Status "ERROR: Failed to install Winget"
-            throw "Winget installation failed: $($_.Exception.Message)"
-        }
-    }
-    
-    # Cleanup
-    Log-Status "Cleaning up temp files..."
-    Remove-Item -Path $workDir -Recurse -Force -ErrorAction SilentlyContinue
-    
-    return $true
 }
 
 # ==========================================================
