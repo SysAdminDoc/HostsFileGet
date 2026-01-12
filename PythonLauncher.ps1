@@ -77,7 +77,10 @@ function Log-Status {
     }
 }
 
-# Helper function to download files
+# Force TLS 1.2 for all downloads
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+# Helper function to download files with multiple methods
 function Download-File {
     param(
         [string]$Uri,
@@ -86,8 +89,28 @@ function Download-File {
     
     try {
         $ProgressPreference = 'SilentlyContinue'
-        Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
-        return $true
+        
+        # Method 1: Try Invoke-WebRequest with proper headers
+        try {
+            Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
+            if (Test-Path $OutFile) { return $true }
+        } catch { }
+        
+        # Method 2: Try WebClient (handles redirects better)
+        try {
+            $webClient = New-Object System.Net.WebClient
+            $webClient.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            $webClient.DownloadFile($Uri, $OutFile)
+            if (Test-Path $OutFile) { return $true }
+        } catch { }
+        
+        # Method 3: Try BITS transfer
+        try {
+            Start-BitsTransfer -Source $Uri -Destination $OutFile -ErrorAction Stop
+            if (Test-Path $OutFile) { return $true }
+        } catch { }
+        
+        return $false
     } catch {
         return $false
     }
@@ -101,13 +124,21 @@ function Install-Winget {
     Log-Status "System: Windows $arch"
     Start-Sleep -Milliseconds 300
     
+    # Check if VCLibs already installed
+    $existingVCLibs = Get-AppxPackage -Name "Microsoft.VCLibs.140.00*" -ErrorAction SilentlyContinue
+    $vcLibsInstalled = $existingVCLibs -ne $null
+    
+    if ($vcLibsInstalled) {
+        Log-Status "VCLibs already installed"
+    }
+    
     # Create working directory
     $workDir = "$env:TEMP\WingetInstall"
     if (-not (Test-Path $workDir)) {
         New-Item -Path $workDir -ItemType Directory -Force | Out-Null
     }
     
-    # Clean existing broken installations
+    # Clean existing broken winget installations
     Log-Status "Checking for conflicting packages..."
     try {
         $existingWinget = Get-AppxPackage -Name "Microsoft.DesktopAppInstaller" -AllUsers -ErrorAction SilentlyContinue
@@ -121,25 +152,33 @@ function Install-Winget {
     Log-Status "Downloading installation packages..."
     
     $packages = @{
-        VCLibs_x64 = @{
-            Url = "https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx"
-            Path = "$workDir\VCLibs_x64.appx"
-            Name = "VCLibs x64"
-        }
-        VCLibs_x86 = @{
-            Url = "https://aka.ms/Microsoft.VCLibs.x86.14.00.Desktop.appx"
-            Path = "$workDir\VCLibs_x86.appx"
-            Name = "VCLibs x86"
-        }
         UIXaml = @{
             Url = "https://github.com/microsoft/microsoft-ui-xaml/releases/download/v2.8.6/Microsoft.UI.Xaml.2.8.x64.appx"
             Path = "$workDir\UIXaml.appx"
             Name = "UI.Xaml 2.8"
+            Required = $true
         }
         Winget = @{
             Url = "https://github.com/microsoft/winget-cli/releases/latest/download/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle"
             Path = "$workDir\Winget.msixbundle"
             Name = "Winget"
+            Required = $true
+        }
+    }
+    
+    # Only add VCLibs to download list if not already installed
+    if (-not $vcLibsInstalled) {
+        $packages["VCLibs_x64"] = @{
+            Url = "https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx"
+            Path = "$workDir\VCLibs_x64.appx"
+            Name = "VCLibs x64"
+            Required = $false
+        }
+        $packages["VCLibs_x86"] = @{
+            Url = "https://aka.ms/Microsoft.VCLibs.x86.14.00.Desktop.appx"
+            Path = "$workDir\VCLibs_x86.appx"
+            Name = "VCLibs x86"
+            Required = $false
         }
     }
     
@@ -150,7 +189,9 @@ function Install-Winget {
             
             if (-not (Download-File -Uri $pkg.Value.Url -OutFile $pkg.Value.Path)) {
                 Log-Status "Failed to download $($pkg.Value.Name)"
-                $downloadSuccess = $false
+                if ($pkg.Value.Required) {
+                    $downloadSuccess = $false
+                }
             }
             Start-Sleep -Milliseconds 200
         }
@@ -160,20 +201,40 @@ function Install-Winget {
         throw "Failed to download required packages"
     }
     
-    # Install dependencies
-    Log-Status "Installing dependencies..."
-    
-    foreach ($vclib in @("VCLibs_x64", "VCLibs_x86")) {
-        if (Test-Path $packages[$vclib].Path) {
-            Log-Status "Installing $($packages[$vclib].Name)..."
-            try {
-                Add-AppxPackage -Path $packages[$vclib].Path -ErrorAction Stop
-            } catch {
+    # Install VCLibs dependencies (only if downloaded)
+    if (-not $vcLibsInstalled) {
+        Log-Status "Installing dependencies..."
+        
+        foreach ($vclib in @("VCLibs_x64", "VCLibs_x86")) {
+            if ($packages.ContainsKey($vclib) -and (Test-Path $packages[$vclib].Path)) {
+                Log-Status "Installing $($packages[$vclib].Name)..."
                 try {
-                    Add-AppxPackage -Path $packages[$vclib].Path -ForceApplicationShutdown -ForceUpdateFromAnyVersion -ErrorAction Stop
-                } catch { }
+                    Add-AppxPackage -Path $packages[$vclib].Path -ErrorAction Stop
+                } catch {
+                    try {
+                        Add-AppxPackage -Path $packages[$vclib].Path -ForceApplicationShutdown -ForceUpdateFromAnyVersion -ErrorAction Stop
+                    } catch { }
+                }
+                Start-Sleep -Milliseconds 300
             }
-            Start-Sleep -Milliseconds 300
+        }
+        
+        # Verify VCLibs after installation
+        $vcLibsInstalled = Get-AppxPackage -Name "Microsoft.VCLibs.140.00*" -AllUsers
+        
+        if (-not $vcLibsInstalled) {
+            Log-Status "Trying DISM installation method..."
+            foreach ($vclib in @("VCLibs_x64", "VCLibs_x86")) {
+                if ($packages.ContainsKey($vclib)) {
+                    $pkgPath = $packages[$vclib].Path
+                    if (Test-Path $pkgPath) {
+                        try {
+                            dism /Online /Add-ProvisionedAppxPackage /PackagePath:"$pkgPath" /SkipLicense 2>&1 | Out-Null
+                        } catch { }
+                    }
+                }
+            }
+            Start-Sleep -Seconds 2
         }
     }
     
@@ -186,30 +247,18 @@ function Install-Winget {
         Start-Sleep -Milliseconds 300
     }
     
-    # Verify VCLibs
-    $vcLibsInstalled = Get-AppxPackage -Name "Microsoft.VCLibs.140.00*" -AllUsers
-    
-    if (-not $vcLibsInstalled) {
-        Log-Status "Trying DISM installation method..."
-        foreach ($vclib in @("VCLibs_x64", "VCLibs_x86")) {
-            $pkgPath = $packages[$vclib].Path
-            if (Test-Path $pkgPath) {
-                try {
-                    dism /Online /Add-ProvisionedAppxPackage /PackagePath:"$pkgPath" /SkipLicense 2>&1 | Out-Null
-                } catch { }
-            }
-        }
-        Start-Sleep -Seconds 2
-    }
-    
     # Install Winget
     if (Test-Path $packages.Winget.Path) {
         Log-Status "Installing Winget..."
         Start-Sleep -Milliseconds 500
         
+        # Build dependency array from files that exist
         $dependencies = @()
-        if (Test-Path $packages.VCLibs_x64.Path) { $dependencies += $packages.VCLibs_x64.Path }
-        if (Test-Path $packages.VCLibs_x86.Path) { $dependencies += $packages.VCLibs_x86.Path }
+        foreach ($vclib in @("VCLibs_x64", "VCLibs_x86")) {
+            if ($packages.ContainsKey($vclib) -and (Test-Path $packages[$vclib].Path)) {
+                $dependencies += $packages[$vclib].Path
+            }
+        }
         if (Test-Path $packages.UIXaml.Path) { $dependencies += $packages.UIXaml.Path }
         
         try {
