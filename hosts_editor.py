@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # hosts_editor_v2_8_5.py
 # Hosts File Management Tool — v2.8.5
 # Patches vs v2.8.4:
