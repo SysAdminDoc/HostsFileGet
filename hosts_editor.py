@@ -26,7 +26,7 @@ import bz2
 
 APP_NAME = "Hosts File Get"
 APP_SLUG = "HostsFileGet"
-APP_VERSION = "2.8.5"
+APP_VERSION = "2.9.0"
 ELEVATION_ATTEMPT_FLAG = "--hostsfileget-elevation-attempted"
 
 # ----------------------------- Theme (Catppuccin Mocha) ----------------------
@@ -559,7 +559,7 @@ class MatchRemovalDialog(tk.Toplevel):
 # -------------------------------- Domain & Hosts Helpers -----------------------------------
 
 DOMAIN_REGEX = re.compile(r'^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$')
-IPV4_REGEX = re.compile(r'^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$')
+IPV4_REGEX = re.compile(r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$')
 IPV6_REGEX = re.compile(r'^[\da-fA-F:.]+$')
 WILDCARD_STRIPPER = re.compile(r'^\*\.?(.*)')
 TOKEN_SPLITTER = re.compile(r'[\s,;]+')
@@ -771,7 +771,7 @@ def _get_canonical_cleaned_output_and_stats(original_lines: list[str], whitelist
         f"#\t127.0.0.1       localhost ({len(active_entries_to_keep)} active entries prepared by editor)",
         "#\t::1             localhost",
         "",
-        f"# --- Active Hosts Entries (Cleaned & Sorted by Hosts File Editor v{APP_VERSION}) ---"
+        f"# --- Active Hosts Entries (Cleaned & Sorted by {APP_NAME} v{APP_VERSION}) ---"
     ]
     
     cleaned_lines = final_header + sorted(active_entries_to_keep)
@@ -1618,7 +1618,7 @@ class HostsFileEditor:
         ttk.Label(parent, text=text).grid(row=row, column=col, sticky='w', padx=(10, 2), pady=2)
         ttk.Label(parent, textvariable=var, foreground=color, font=("Segoe UI", 10, "bold")).grid(row=row, column=col+1, sticky='w', padx=(0, 10), pady=2)
 
-    def _refresh_mode_badges(self):
+    def _refresh_mode_badges(self, _lines=None, _current_hash=None):
         if not hasattr(self, "admin_badge_label"):
             return
 
@@ -1635,10 +1635,10 @@ class HostsFileEditor:
         editor_state_bg = PALETTE["surface1"]
         editor_state_fg = PALETTE["text"]
         if hasattr(self, "text_area"):
-            lines = self.get_lines()
+            lines = _lines if _lines is not None else self.get_lines()
             has_content = any(line.strip() for line in lines)
-            current_hash = self._hash_lines(lines)
-            if self._has_unsaved_changes():
+            current_hash = _current_hash if _current_hash is not None else self._hash_lines(lines)
+            if self._has_unsaved_changes(_lines=lines, _current_hash=current_hash):
                 editor_state_text = "Unsaved Editor Changes"
                 editor_state_bg = PALETTE["yellow"]
                 editor_state_fg = PALETTE["yellow_ink"]
@@ -1881,7 +1881,7 @@ class HostsFileEditor:
         help_menu = tk.Menu(menu_bar, tearoff=0, bg=PALETTE["mantle"], fg=PALETTE["text"],
                             activebackground=PALETTE["blue"], activeforeground="#0b1020")
         help_menu.add_command(label="About", command=self.show_about_dialog)
-        help_menu.add_command(label="Project on GitHub", command=lambda: webbrowser.open("https://github.com/SysAdminDoc/Hosts-File-Management-Tool"))
+        help_menu.add_command(label="Project on GitHub", command=lambda: webbrowser.open("https://github.com/SysAdminDoc/HostsFileGet"))
         menu_bar.add_cascade(label="Help", menu=help_menu)
 
     def _btn(self, parent, text, command, tooltip, style="TButton"):
@@ -2119,12 +2119,12 @@ class HostsFileEditor:
     def _hash_lines(self, lines):
         return hashlib.sha256('\n'.join(lines).encode('utf-8')).hexdigest()
 
-    def _has_unsaved_changes(self):
-        lines = self.get_lines()
+    def _has_unsaved_changes(self, _lines=None, _current_hash=None):
+        lines = _lines if _lines is not None else self.get_lines()
         if self._last_applied_raw_hash is None and self._last_applied_cleaned_hash is None:
             return any(line.strip() for line in lines)
 
-        current_hash = self._hash_lines(lines)
+        current_hash = _current_hash if _current_hash is not None else self._hash_lines(lines)
         return current_hash not in {self._last_applied_raw_hash, self._last_applied_cleaned_hash}
 
     def _on_whitelist_modified(self, event=None):
@@ -2149,9 +2149,9 @@ class HostsFileEditor:
         if self.text_area.edit_modified():
             self.text_area.edit_modified(False)
 
-        self._update_save_button_state()
-        
         lines = self.get_lines()
+        current_hash = self._hash_lines(lines)
+        self._update_save_button_state(_lines=lines, _current_hash=current_hash)
         self._update_diff_stats(lines)
         self._apply_inline_warnings(lines)
         
@@ -2160,9 +2160,10 @@ class HostsFileEditor:
             self._recompute_search_matches(query, preserve_index=True)
 
 
-    def _update_save_button_state(self):
-        current_hash = self._hash_lines(self.get_lines())
-        
+    def _update_save_button_state(self, _lines=None, _current_hash=None):
+        lines = _lines if _lines is not None else self.get_lines()
+        current_hash = _current_hash if _current_hash is not None else self._hash_lines(lines)
+
         if self._last_applied_raw_hash is not None and current_hash == self._last_applied_raw_hash:
             self.btn_save_raw.configure(style="Saved.TButton")
         else:
@@ -2172,7 +2173,7 @@ class HostsFileEditor:
             self.btn_save_cleaned.configure(style="Saved.TButton")
         else:
             self.btn_save_cleaned.configure(style="Action.TButton")
-        self._refresh_mode_badges()
+        self._refresh_mode_badges(_lines=lines, _current_hash=current_hash)
 
     def _update_custom_source_summary(self):
         if not hasattr(self, "custom_sources_summary_label"):
@@ -2252,16 +2253,17 @@ class HostsFileEditor:
     def save_raw_file(self):
         lines = self.get_lines()
         content = '\n'.join(lines)
-        
+
         if self.dry_run_mode.get():
             self.update_status(f"Dry-run: Reviewed Raw Save for {len(lines)} line(s). No file write performed.")
-            self.set_text(lines, update_hash=False, is_cleaned=False)
             return
 
         if not self._execute_save(content, source_description="Raw Save"):
             return
-        
-        self.set_text(lines, update_hash=True, is_cleaned=False)
+
+        self._last_applied_raw_hash = self._hash_lines(lines)
+        self._last_applied_cleaned_hash = None
+        self._update_save_button_state(_lines=lines, _current_hash=self._last_applied_raw_hash)
         self.update_status(f"Success: Saved Raw hosts file ({len(lines)} line(s)).")
 
 
@@ -2304,7 +2306,9 @@ class HostsFileEditor:
                  return
             if not self._execute_save(content, source_description="Cleaned Save (No Changes)"):
                 return
-            self.set_text(original_lines, update_hash=True, is_cleaned=True)
+            self._last_applied_cleaned_hash = self._hash_lines(original_lines)
+            self._last_applied_raw_hash = None
+            self._update_save_button_state(_lines=original_lines, _current_hash=self._last_applied_cleaned_hash)
             self.update_status("Success: Saved Cleaned hosts file. No normalization changes were needed.")
 
 
@@ -2702,6 +2706,7 @@ class HostsFileEditor:
         preserved_widgets = {
             getattr(self, 'btn_add_custom', None),
             getattr(self, 'custom_sources_help_label', None),
+            getattr(self, 'custom_sources_summary_label', None),
             getattr(self, 'custom_sources_empty_label', None),
         }
         widgets_to_destroy = [widget for widget in children if widget not in preserved_widgets]
@@ -2949,7 +2954,7 @@ set "TEMP_FILE=%TEMP%\hosts_clean.tmp"
 
 :: Create a clean hosts file
 echo # Copyright (c) 1993-2009 Microsoft Corp. > "%TEMP_FILE%"
-echo # > "%TEMP_FILE%"
+echo # >> "%TEMP_FILE%"
 echo # This is a sample HOSTS file used by Microsoft TCP/IP for Windows. >> "%TEMP_FILE%"
 echo 127.0.0.1       localhost >> "%TEMP_FILE%"
 echo ::1             localhost >> "%TEMP_FILE%"
@@ -2961,14 +2966,33 @@ echo ====================================================
 echo   Action: Force Kill Dnscache + Inject Blank File
 echo.
 
+set RETRIES=0
+
 :KILL_LOOP
 copy /Y "%TEMP_FILE%" "%TARGET_FILE%" >nul 2>&1
 if %errorlevel% EQU 0 goto :SUCCESS
+
+set /a RETRIES+=1
+if %RETRIES% GEQ 30 (
+    echo [FAIL] Could not replace hosts file after %RETRIES% attempts.
+    goto :FAIL
+)
 
 for /f "tokens=2" %%a in ('tasklist /svc /fi "services eq dnscache" /nh 2^>nul') do (
     taskkill /F /PID %%a >nul 2>&1
 )
 goto :KILL_LOOP
+
+:FAIL
+echo.
+echo ====================================================
+echo   RECOVERY FAILED
+echo ====================================================
+echo The hosts file could not be replaced after multiple attempts.
+echo Try running this script again or manually edit the hosts file.
+del "%TEMP_FILE%" >nul 2>&1
+pause
+exit /b 1
 
 :SUCCESS
 echo.
