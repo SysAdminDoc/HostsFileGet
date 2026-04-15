@@ -29,6 +29,14 @@ APP_SLUG = "HostsFileGet"
 APP_VERSION = "2.10.0"
 ELEVATION_ATTEMPT_FLAG = "--hostsfileget-elevation-attempted"
 
+# PyInstaller support: resolve bundled asset directory vs. script directory
+if getattr(sys, 'frozen', False):
+    _BUNDLE_DIR = sys._MEIPASS
+    _EXE_DIR = os.path.dirname(sys.executable)
+else:
+    _BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
+    _EXE_DIR = _BUNDLE_DIR
+
 # ----------------------------- Theme (Catppuccin Mocha) ----------------------
 PALETTE = {
     "base": "#1e1e2e",    # window background
@@ -1564,7 +1572,7 @@ class HostsFileEditor:
         self.root.geometry(f"{width}x{height}+{x_pos}+{y_pos}")
         self.root.minsize(min(width, 1040), min(height, 740))
 
-        assets_dir = os.path.dirname(os.path.abspath(__file__))
+        assets_dir = _BUNDLE_DIR
         icon_ico = os.path.join(assets_dir, "icon.ico")
         icon_png = os.path.join(assets_dir, "icon.png")
 
@@ -2001,11 +2009,16 @@ class HostsFileEditor:
             self.is_admin = False
             if os.name == 'nt' and ELEVATION_ATTEMPT_FLAG not in sys.argv:
                 try:
-                    script = os.path.abspath(sys.argv[0])
                     relaunch_args = sys.argv[1:] + [ELEVATION_ATTEMPT_FLAG]
-                    params = ' '.join(['"%s"' % arg for arg in relaunch_args])
+                    if getattr(sys, 'frozen', False):
+                        exe = sys.executable
+                        params = ' '.join(['"%s"' % arg for arg in relaunch_args])
+                    else:
+                        exe = sys.executable
+                        script = os.path.abspath(sys.argv[0])
+                        params = f'"{script}" ' + ' '.join(['"%s"' % arg for arg in relaunch_args])
                     launch_result = ctypes.windll.shell32.ShellExecuteW(
-                        None, "runas", sys.executable, f'"{script}" {params}', None, 1
+                        None, "runas", exe, params, None, 1
                     )
                     if launch_result > 32:
                         return False
@@ -2030,7 +2043,7 @@ class HostsFileEditor:
 
     # ------------------------- Config Persistence -----------------------------
     def _get_legacy_config_paths(self):
-        script_dir = os.path.dirname(os.path.abspath(__file__))
+        script_dir = _EXE_DIR
         candidates = []
         for base_dir in (os.getcwd(), script_dir):
             candidate = os.path.join(base_dir, self.CONFIG_FILENAME)
