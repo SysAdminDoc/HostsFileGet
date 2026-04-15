@@ -12,7 +12,7 @@
 
 $AppName = "Hosts File Get"
 $AppSlug = "HostsFileGet"
-$EditorUrl = "https://raw.githubusercontent.com/SysAdminDoc/Hosts-File-Management-Tool/refs/heads/main/hosts_editor.py"
+$EditorUrl = "https://raw.githubusercontent.com/SysAdminDoc/HostsFileGet/refs/heads/main/hosts_editor.py"
 $EditorCacheBase = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
 $EditorCacheRoot = Join-Path $EditorCacheBase $AppSlug
 $EditorPath = Join-Path $EditorCacheRoot "hosts_editor.py"

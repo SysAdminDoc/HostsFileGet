@@ -9,12 +9,15 @@ from unittest import mock
 import hosts_editor
 from hosts_editor import (
     HostsFileEditor,
+    IPV4_REGEX,
     _get_canonical_cleaned_output_and_stats,
+    _looks_like_ip_token,
     count_nonempty_lines,
     compute_clean_impact_stats,
     decode_text_bytes,
     decode_downloaded_lines,
     find_keyword_match_line_indices,
+    looks_like_domain,
     looks_like_html_document,
     normalize_line_to_hosts_entries,
     normalize_custom_source_url,
@@ -331,6 +334,33 @@ class HostsEditorLogicTests(unittest.TestCase):
             messages.append(editor.import_queue.get_nowait()[0])
 
         self.assertEqual(messages, ["progress", "cancelled"])
+
+    def test_ipv4_regex_matches_high_octet_addresses(self):
+        """Regression: IPV4_REGEX must match IPs with octets >= 200."""
+        self.assertTrue(IPV4_REGEX.match("255.255.255.0"))
+        self.assertTrue(IPV4_REGEX.match("255.255.255.255"))
+        self.assertTrue(IPV4_REGEX.match("200.200.200.200"))
+        self.assertTrue(IPV4_REGEX.match("0.0.0.0"))
+        self.assertTrue(IPV4_REGEX.match("127.0.0.1"))
+        self.assertTrue(IPV4_REGEX.match("192.168.1.1"))
+        self.assertTrue(IPV4_REGEX.match("10.0.0.1"))
+        self.assertIsNone(IPV4_REGEX.match("999.999.999.999"))
+        self.assertIsNone(IPV4_REGEX.match("256.0.0.1"))
+        self.assertIsNone(IPV4_REGEX.match("example.com"))
+
+    def test_high_octet_ip_recognized_as_ip_not_domain(self):
+        """Regression: 255.x.x.x must be detected as IP, not treated as a domain."""
+        self.assertTrue(_looks_like_ip_token("255.255.255.0"))
+        self.assertTrue(_looks_like_ip_token("200.1.2.3"))
+        self.assertFalse(_looks_like_ip_token("example.com"))
+        self.assertFalse(looks_like_domain("255.255.255.0"))
+        self.assertFalse(looks_like_domain("200.1.2.3"))
+
+    def test_hosts_line_with_high_octet_ip_parses_correctly(self):
+        """Regression: '255.255.255.0 gateway' should keep the custom IP, not rewrite to 0.0.0.0."""
+        entries, domains, transformed = normalize_line_to_hosts_entries("255.255.255.0 gateway")
+        self.assertEqual(entries, ["255.255.255.0 gateway"])
+        self.assertEqual(domains, ["gateway"])
 
     def test_on_closing_does_not_cancel_import_if_user_aborts_close(self):
         class FakeRoot:
