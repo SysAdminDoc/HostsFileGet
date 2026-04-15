@@ -26,7 +26,7 @@ import bz2
 
 APP_NAME = "Hosts File Get"
 APP_SLUG = "HostsFileGet"
-APP_VERSION = "2.9.0"
+APP_VERSION = "2.10.0"
 ELEVATION_ATTEMPT_FLAG = "--hostsfileget-elevation-attempted"
 
 # ----------------------------- Theme (Catppuccin Mocha) ----------------------
@@ -891,8 +891,6 @@ def normalize_custom_source_url(url: str) -> str:
         return candidate.rstrip('/').lower()
 
     normalized_path = parsed.path.rstrip('/')
-    if normalized_path == "/":
-        normalized_path = ""
 
     return urllib.parse.urlunsplit((
         parsed.scheme.lower(),
@@ -1161,8 +1159,11 @@ class HostsFileEditor:
         self._last_applied_cleaned_hash = None
         self._suppress_modified_handler = False
         self._update_ui_job = None
+        self._source_filter_job = None
         self._status_reset_job = None
         self._last_saved_whitelist_text = ""
+        self._cached_whitelist_text = None
+        self._cached_whitelist_set = frozenset()
         self.config_path = get_primary_config_path(self.CONFIG_FILENAME)
         self.last_open_dir = os.path.expanduser("~")
         
@@ -1170,7 +1171,7 @@ class HostsFileEditor:
         self.dry_run_mode = tk.BooleanVar(value=False)
         self.dry_run_mode.trace_add('write', lambda *args: self._check_dry_run_warning()) 
         self.source_filter_var = tk.StringVar()
-        self.source_filter_var.trace_add('write', lambda *args: self._populate_blocklist_source_buttons())
+        self.source_filter_var.trace_add('write', lambda *args: self._on_source_filter_changed())
 
         self._init_styles()
         self._init_menubar()
@@ -1678,7 +1679,13 @@ class HostsFileEditor:
         else:
             self.update_status("Import mode set to Normalized. Domains will be standardized into clean 0.0.0.0 entries.")
 
+    def _on_source_filter_changed(self):
+        if self._source_filter_job:
+            self.root.after_cancel(self._source_filter_job)
+        self._source_filter_job = self.root.after(200, self._populate_blocklist_source_buttons)
+
     def _populate_blocklist_source_buttons(self):
+        self._source_filter_job = None
         if not hasattr(self, "web_catalog_frame"):
             return
 
@@ -2059,7 +2066,11 @@ class HostsFileEditor:
         if not config_source_path:
             return
 
-        config = json.loads(read_text_file_content(config_source_path))
+        try:
+            config = json.loads(read_text_file_content(config_source_path))
+        except (json.JSONDecodeError, ValueError):
+            self.update_status("Config file is corrupt — using defaults.", is_error=True)
+            return
         sanitized_config = sanitize_config_snapshot(config, self.last_open_dir)
 
         self.whitelist_text_area.delete('1.0', tk.END)
@@ -2090,7 +2101,7 @@ class HostsFileEditor:
             self._last_saved_whitelist_text = config["whitelist"]
             self._update_whitelist_summary()
         except OSError as e:
-            print(f"Error saving config: {e}")
+            self.update_status(f"Config save failed: {e}", is_error=True)
 
     # ----------------------------- File Ops & State Tracking -----------------------------------
     def get_lines(self):
@@ -2849,25 +2860,38 @@ class HostsFileEditor:
         url = "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/Whitelist.txt"
         if not self._confirm_whitelist_replacement("the HOSTShield web feed"):
             return
-        self.update_status("Importing whitelist...")
-        try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=15) as response:
-                lines = decode_downloaded_lines(url, response.read(), response.headers.get("Content-Encoding", ""))
-                if looks_like_html_document(lines):
-                    raise ValueError("Received HTML instead of a whitelist.")
-                content = '\n'.join(lines)
-            self.whitelist_text_area.delete('1.0', tk.END)
-            self.whitelist_text_area.insert('1.0', content)
-            self._update_whitelist_summary()
-            self.update_status("Imported whitelist from HOSTShield.")
-            self._trigger_ui_update()
-        except Exception as e:
-            self.update_status(f"Could not fetch whitelist: {type(e).__name__}", is_error=True)
-            messagebox.showerror("Whitelist Import Error", f"Could not fetch whitelist:\n{e}", parent=self.root)
+        self.update_status("Importing whitelist from HOSTShield…")
+
+        def _fetch():
+            try:
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=15) as response:
+                    lines = decode_downloaded_lines(url, response.read(), response.headers.get("Content-Encoding", ""))
+                    if looks_like_html_document(lines):
+                        raise ValueError("Received HTML instead of a whitelist.")
+                    content = '\n'.join(lines)
+                self.root.after(0, lambda: self._apply_whitelist_web_result(content))
+            except Exception as e:
+                self.root.after(0, lambda: self._apply_whitelist_web_error(e))
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _apply_whitelist_web_result(self, content):
+        self.whitelist_text_area.delete('1.0', tk.END)
+        self.whitelist_text_area.insert('1.0', content)
+        self._update_whitelist_summary()
+        self.update_status("Imported whitelist from HOSTShield.")
+        self._trigger_ui_update()
+
+    def _apply_whitelist_web_error(self, error):
+        self.update_status(f"Could not fetch whitelist: {type(error).__name__}", is_error=True)
+        messagebox.showerror("Whitelist Import Error", f"Could not fetch whitelist:\n{error}", parent=self.root)
             
     def _get_whitelist_set(self):
         whitelist_content = self.whitelist_text_area.get('1.0', tk.END)
+        if whitelist_content == self._cached_whitelist_text:
+            return self._cached_whitelist_set
+
         whitelist = set()
         for line in whitelist_content.splitlines():
             stripped = line.strip()
@@ -2883,6 +2907,8 @@ class HostsFileEditor:
             if domain:
                 whitelist.add(domain.lstrip('.'))
 
+        self._cached_whitelist_text = whitelist_content
+        self._cached_whitelist_set = whitelist
         return whitelist
 
     # ------------------------------ Utilities & Clean Logic ---------------------------------
