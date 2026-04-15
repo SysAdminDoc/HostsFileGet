@@ -2,6 +2,15 @@
 
 All notable changes to HostsFileGet will be documented in this file.
 
+## [v2.10.0] - 2026-04-15
+
+- Threaded whitelist web import so the GUI no longer freezes for up to 15 seconds during download.
+- Debounced the source catalog filter input — UI no longer thrashes on every keystroke, now waits 200ms.
+- Cached the whitelist set computation so it parses once per keystroke cycle instead of 2x (from _update_diff_stats and _apply_inline_warnings).
+- Removed dead code branch in normalize_custom_source_url (unreachable `normalized_path == "/"` check after rstrip).
+- Added json.JSONDecodeError handling in load_config — corrupt config files now show a status message instead of crashing.
+- Replaced silent print() in save_config error path with a visible status bar error message.
+
 ## [v2.9.0] - 2026-04-15
 
 - Fixed critical IPV4 regex bug that failed to recognize IP addresses with octets >= 200 (e.g. 255.255.255.0), causing them to be misidentified as domains during parsing.
