@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-# hosts_editor_v2_8_5.py
-# Hosts File Management Tool — v2.8.5
-# Patches vs v2.8.4:
-# - **NEW FEATURE**: Added Bulk Selection Dialog for "Import All". Users can now choose specific lists via checkboxes.
-# - **UX**: Added Scrollable Frame for the Bulk Selection Dialog to handle large lists.
+# Hosts File Get
 
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, font, filedialog, simpledialog
@@ -31,6 +27,7 @@ import bz2
 APP_NAME = "Hosts File Get"
 APP_SLUG = "HostsFileGet"
 APP_VERSION = "2.8.5"
+ELEVATION_ATTEMPT_FLAG = "--hostsfileget-elevation-attempted"
 
 # ----------------------------- Theme (Catppuccin Mocha) ----------------------
 PALETTE = {
@@ -50,6 +47,8 @@ PALETTE = {
     "red": "#f38ba8",
     "red_hover": "#ff9fb5",
     "red_press": "#d9778f",
+    "yellow": "#f9e2af",
+    "yellow_ink": "#3b2f13",
     "accent": "#b4befe",
 }
 
@@ -60,10 +59,13 @@ class ToolTip:
         self.widget = widget
         self.text = text
         self.tooltip_window = None
-        self.widget.bind("<Enter>", self.show_tooltip)
-        self.widget.bind("<Leave>", self.hide_tooltip)
+        self.widget.bind("<Enter>", self.show_tooltip, add="+")
+        self.widget.bind("<Leave>", self.hide_tooltip, add="+")
+        self.widget.bind("<Destroy>", self.hide_tooltip, add="+")
 
     def show_tooltip(self, event=None):
+        if self.tooltip_window:
+            return
         try:
             x, y, _, _ = self.widget.bbox("insert")
         except Exception:
@@ -93,12 +95,25 @@ class ToolTip:
 
 # ------------------------------ Preview Window --------------------------------
 class PreviewWindow(tk.Toplevel):
-    def __init__(self, parent, original_lines, new_lines, title="Preview Changes", on_apply_callback=None, stats=None):
+    def __init__(
+        self,
+        parent,
+        original_lines,
+        new_lines,
+        title="Preview Changes",
+        on_apply_callback=None,
+        stats=None,
+        apply_label="Apply Changes",
+        cancel_label="Keep Current",
+    ):
         super().__init__(parent.root)
         self.parent_editor = parent
         self.new_lines = new_lines
         self.on_apply_callback = on_apply_callback
         self.stats = stats or {}
+        self._is_applying = False
+        self._added_lines = 0
+        self._removed_lines = 0
 
         self.title(title)
         self.geometry("900x650")
@@ -106,12 +121,23 @@ class PreviewWindow(tk.Toplevel):
         self.transient(parent.root)
         self.grab_set()
 
+        header_frame = ttk.Frame(self, padding=(14, 14, 14, 0))
+        header_frame.pack(fill='x', side=tk.TOP)
+        ttk.Label(header_frame, text=title, font=("Segoe UI Semibold", 14)).pack(anchor='w')
+        ttk.Label(
+            header_frame,
+            text="Review the exact before-and-after output before applying it to the editor or disk.",
+            foreground=PALETTE["subtext"]
+        ).pack(anchor='w', pady=(4, 0))
+
         # Top stats/warning frame
-        stats_frame = ttk.Frame(self, padding=(10, 10, 10, 0))
-        stats_frame.pack(fill='x', side=tk.TOP)
-        self._add_stat_banner(stats_frame)
+        if self.stats:
+            stats_frame = ttk.Frame(self, padding=(14, 12, 14, 0))
+            stats_frame.pack(fill='x', side=tk.TOP)
+            self._add_stat_banner(stats_frame)
         
-        text_frame = ttk.Frame(self, padding=(10, 0, 10, 0))
+        top_padding = 4 if self.stats else 12
+        text_frame = ttk.Frame(self, padding=(14, top_padding, 14, 0))
         text_frame.pack(expand=True, fill='both')
         self.preview_text = scrolledtext.ScrolledText(
             text_frame, wrap=tk.WORD, font=("Consolas", 11),
@@ -125,24 +151,45 @@ class PreviewWindow(tk.Toplevel):
 
         legend_frame = ttk.Frame(button_frame)
         legend_frame.pack(side=tk.LEFT)
-        tk.Label(legend_frame, text="■ Added", fg="#89D68D", bg=PALETTE["base"]).pack(side=tk.LEFT)
-        tk.Label(legend_frame, text="■ Removed", fg=PALETTE["red"], bg=PALETTE["base"]).pack(side=tk.LEFT, padx=10)
+        self.preview_summary_label = ttk.Label(legend_frame, text="", foreground=PALETTE["subtext"])
+        self.preview_summary_label.pack(anchor='w')
+        self.preview_legend_label = ttk.Label(legend_frame, text="", foreground=PALETTE["overlay1"])
+        self.preview_legend_label.pack(anchor='w', pady=(2, 0))
 
-        ttk.Button(button_frame, text="Apply Changes", command=self.apply_changes, style="Accent.TButton").pack(side=tk.RIGHT, padx=6)
-        ttk.Button(button_frame, text="Cancel", command=self.destroy).pack(side=tk.RIGHT, padx=6)
+        self.apply_button = ttk.Button(button_frame, text=apply_label, command=self.apply_changes, style="Accent.TButton")
+        self.apply_button.pack(side=tk.RIGHT, padx=6)
+        ttk.Button(button_frame, text=cancel_label, command=self.destroy, style="Secondary.TButton").pack(side=tk.RIGHT, padx=6)
 
         self.preview_text.tag_config('added', foreground="#89D68D")
         self.preview_text.tag_config('removed', foreground=PALETTE["red"])
         self.display_diff(original_lines, new_lines)
         self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.bind("<Escape>", lambda _event: self.destroy(), add="+")
 
     def _add_stat_banner(self, parent):
         total_discarded = self.stats.get('total_discarded', 0)
         transformed_count = self.stats.get('transformed', 0)
-        
-        warning_text = f"Remove {total_discarded} entries while normalizing {transformed_count} line(s)"
-        warn_label = ttk.Label(parent, text=warning_text, foreground=PALETTE["red"], font=("Segoe UI", 11, "bold"))
+
+        if total_discarded > 0 and transformed_count > 0:
+            warning_text = f"Cleaned Save will remove {total_discarded} entries and normalize {transformed_count} line(s)."
+            warning_color = PALETTE["red"]
+        elif total_discarded > 0:
+            warning_text = f"Cleaned Save will remove {total_discarded} entries."
+            warning_color = PALETTE["red"]
+        elif transformed_count > 0:
+            warning_text = f"Cleaned Save will normalize {transformed_count} line(s) without discarding any entries."
+            warning_color = PALETTE["yellow"]
+        else:
+            warning_text = "Cleaned Save will preserve every current entry."
+            warning_color = PALETTE["green"]
+
+        warn_label = ttk.Label(parent, text=warning_text, foreground=warning_color, font=("Segoe UI", 11, "bold"))
         warn_label.pack(fill='x', pady=(0, 5))
+        ttk.Label(
+            parent,
+            text="Review the categories below if you want to confirm why lines will change or be removed.",
+            foreground=PALETTE["subtext"]
+        ).pack(fill='x', pady=(0, 6))
 
         detail_frame = ttk.Frame(parent)
         detail_frame.pack(fill='x')
@@ -175,47 +222,95 @@ class PreviewWindow(tk.Toplevel):
         diff = difflib.ndiff(original, new)
         self.preview_text.config(state=tk.NORMAL)
         self.preview_text.delete('1.0', tk.END)
+        self._added_lines = 0
+        self._removed_lines = 0
         for line in diff:
             line_content = line[2:] + '\n'
             if line.startswith('+ '):
+                self._added_lines += 1
                 self.preview_text.insert(tk.END, line_content, 'added')
             elif line.startswith('- '):
+                self._removed_lines += 1
                 self.preview_text.insert(tk.END, line_content, 'removed')
             elif not line.startswith('? '):
                 self.preview_text.insert(tk.END, line_content)
         self.preview_text.config(state=tk.DISABLED)
+        self.preview_summary_label.config(
+            text=f"{self._added_lines} line(s) added, {self._removed_lines} removed"
+        )
+        self.preview_legend_label.config(text="Green lines are new. Red lines will be removed.")
 
     def apply_changes(self):
-        if self.on_apply_callback:
-            self.on_apply_callback(self.new_lines)
-        else:
-            self.parent_editor.set_text(self.new_lines)
-            self.parent_editor.update_status(f"Changes from '{self.title()}' applied.")
+        if self._is_applying:
+            return
+
+        self._is_applying = True
+        self.apply_button.configure(state="disabled")
+        try:
+            if self.on_apply_callback:
+                self.on_apply_callback(self.new_lines)
+            else:
+                self.parent_editor.set_text(self.new_lines)
+                self.parent_editor.update_status(f"Changes from '{self.title()}' applied.")
+        except Exception as e:
+            self._is_applying = False
+            self.apply_button.configure(state="normal")
+            messagebox.showerror("Apply Failed", f"Could not apply preview changes:\n{e}", parent=self)
+            return
+
         self.destroy()
 
 # -------------------------- Add Custom Source Dialog --------------------------
 class AddSourceDialog(simpledialog.Dialog):
+    def __init__(self, parent, initial_name="", initial_url=""):
+        self.initial_name = initial_name
+        self.initial_url = initial_url
+        super().__init__(parent)
+
     def body(self, master):
         self.title("Add Custom Blocklist Source")
-        ttk.Label(master, text="Button Name:").grid(row=0, sticky='w', pady=5)
-        ttk.Label(master, text="Source URL:").grid(row=1, sticky='w', pady=5)
+        master.columnconfigure(1, weight=1)
+        ttk.Label(
+            master,
+            text="Save a reusable feed so it appears in Custom Sources for one-click imports.",
+            foreground=PALETTE["subtext"],
+            wraplength=360,
+            justify="left"
+        ).grid(row=0, column=0, columnspan=2, sticky='w', pady=(0, 10))
+        ttk.Label(master, text="Display Name:").grid(row=1, sticky='w', pady=5)
+        ttk.Label(master, text="Source URL:").grid(row=2, sticky='w', pady=5)
         self.name_entry = ttk.Entry(master, width=40)
         self.url_entry = ttk.Entry(master, width=40)
-        self.name_entry.grid(row=0, column=1, padx=5)
-        self.url_entry.grid(row=1, column=1, padx=5)
+        self.name_entry.grid(row=1, column=1, padx=5, sticky="ew")
+        self.url_entry.grid(row=2, column=1, padx=5, sticky="ew")
+        if self.initial_name:
+            self.name_entry.insert(0, self.initial_name)
+        if self.initial_url:
+            self.url_entry.insert(0, self.initial_url)
         return self.name_entry
+
+    def validate(self):
+        name, url = self.name_entry.get().strip(), self.url_entry.get().strip()
+        if not name or not url:
+            messagebox.showwarning("Input Required", "Both name and URL are required.", parent=self)
+            if not name:
+                self.name_entry.focus_set()
+            else:
+                self.url_entry.focus_set()
+            return False
+
+        if not url.lower().startswith(('http://', 'https://')):
+            messagebox.showerror("Invalid URL", "URL must start with http:// or https://", parent=self)
+            self.url_entry.focus_set()
+            self.url_entry.selection_range(0, tk.END)
+            return False
+
+        self.result = (name, url)
+        return True
 
     def apply(self):
         name, url = self.name_entry.get().strip(), self.url_entry.get().strip()
-        if name and url:
-            if not url.lower().startswith(('http://', 'https://')):
-                messagebox.showerror("Invalid URL", "URL must start with http:// or https://", parent=self)
-                self.result = None
-            else:
-                self.result = (name, url)
-        else:
-            messagebox.showwarning("Input Required", "Both name and URL are required.", parent=self)
-            self.result = None
+        self.result = (name, url)
 
 # -------------------------- Bulk Selection Dialog (New in v2.8.5) ----------------
 class BulkSelectionDialog(tk.Toplevel):
@@ -226,14 +321,24 @@ class BulkSelectionDialog(tk.Toplevel):
         self.configure(bg=PALETTE["base"])
         self.transient(parent)
         self.grab_set()
+        self.bind("<Escape>", lambda _event: self.destroy(), add="+")
         
         self.result = None
         self.checkbox_vars = [] # List of tuples: (name, url, tk.BooleanVar)
         
         # --- Header ---
-        header_frame = ttk.Frame(self, padding=10)
+        header_frame = ttk.Frame(self, padding=(14, 14, 14, 0))
         header_frame.pack(fill='x')
-        ttk.Label(header_frame, text="Select the blocklists you wish to import:", font=("Segoe UI", 11)).pack(anchor='w')
+        ttk.Label(header_frame, text="Choose the sources you want to import in this batch.", font=("Segoe UI Semibold", 12)).pack(anchor='w')
+        ttk.Label(
+            header_frame,
+            text="Selections are downloaded one at a time so progress, failures, and cancellation stay predictable.",
+            foreground=PALETTE["subtext"],
+            wraplength=540,
+            justify="left"
+        ).pack(anchor='w', pady=(4, 0))
+        self.selection_summary_label = ttk.Label(header_frame, foreground=PALETTE["overlay1"])
+        self.selection_summary_label.pack(anchor='w', pady=(6, 0))
         
         # --- Scrollable Area ---
         container = ttk.Frame(self)
@@ -286,7 +391,8 @@ class BulkSelectionDialog(tk.Toplevel):
         right_btns = ttk.Frame(btn_frame)
         right_btns.pack(side='right')
         ttk.Button(right_btns, text="Import Selected", command=self.confirm, style="Accent.TButton").pack(side='left', padx=5)
-        ttk.Button(right_btns, text="Cancel", command=self.destroy).pack(side='left')
+        ttk.Button(right_btns, text="Keep Current", command=self.destroy, style="Secondary.TButton").pack(side='left')
+        self._update_selection_summary()
 
     def _add_category_header(self, text):
         f = ttk.Frame(self.scrollable_frame, padding=(5, 10, 5, 2))
@@ -299,8 +405,10 @@ class BulkSelectionDialog(tk.Toplevel):
         frame = ttk.Frame(self.scrollable_frame, padding=(15, 2, 5, 2))
         frame.pack(fill='x')
         
-        cb = ttk.Checkbutton(frame, text=name, variable=var)
-        cb.pack(side='left')
+        cb = ttk.Checkbutton(frame, text=name, variable=var, command=self._update_selection_summary)
+        cb.pack(side='left', fill='x', expand=True)
+        source_host = urllib.parse.urlparse(url).netloc or url
+        ttk.Label(frame, text=source_host, foreground=PALETTE["subtext"]).pack(side='right', padx=(8, 0))
         
         # Determine tooltip text
         url_short = (url[:50] + '..') if len(url) > 50 else url
@@ -309,13 +417,20 @@ class BulkSelectionDialog(tk.Toplevel):
         
         self.checkbox_vars.append((name, url, var))
 
+    def _update_selection_summary(self):
+        total = len(self.checkbox_vars)
+        selected_count = sum(1 for _, _, var in self.checkbox_vars if var.get())
+        self.selection_summary_label.config(text=f"{selected_count} of {total} source(s) selected")
+
     def select_all(self):
         for _, _, var in self.checkbox_vars:
             var.set(True)
+        self._update_selection_summary()
 
     def select_none(self):
         for _, _, var in self.checkbox_vars:
             var.set(False)
+        self._update_selection_summary()
 
     def confirm(self):
         selected = []
@@ -330,6 +445,117 @@ class BulkSelectionDialog(tk.Toplevel):
         self.result = selected
         self.destroy()
 
+class MatchRemovalDialog(tk.Toplevel):
+    def __init__(self, parent, query: str, matching_lines: list[tuple[int, str]]):
+        super().__init__(parent)
+        self.title(f"Remove Matches for '{query}'")
+        self.geometry("760x620")
+        self.configure(bg=PALETTE["base"])
+        self.transient(parent)
+        self.grab_set()
+        self.bind("<Escape>", lambda _event: self.destroy(), add="+")
+
+        self.result = None
+        self.checkbox_vars = []
+
+        header_frame = ttk.Frame(self, padding=(14, 14, 14, 0))
+        header_frame.pack(fill="x")
+        ttk.Label(
+            header_frame,
+            text=f"Review which matches to remove for '{query}'.",
+            font=("Segoe UI Semibold", 12)
+        ).pack(anchor="w")
+        self.selection_summary_label = ttk.Label(
+            header_frame,
+            text="",
+            foreground=PALETTE["subtext"]
+        )
+        self.selection_summary_label.pack(anchor="w", pady=(4, 0))
+        ttk.Label(
+            header_frame,
+            text="Unchecked lines stay in the editor.",
+            foreground=PALETTE["overlay1"]
+        ).pack(anchor="w", pady=(4, 0))
+
+        container = ttk.Frame(self)
+        container.pack(fill="both", expand=True, padx=10, pady=5)
+
+        canvas = tk.Canvas(container, bg=PALETTE["mantle"], highlightthickness=0)
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        self.scrollable_frame = ttk.Frame(canvas)
+
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        canvas.bind("<Enter>", lambda _event: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda _event: canvas.unbind_all("<MouseWheel>"))
+        self.bind("<Destroy>", lambda _event: canvas.unbind_all("<MouseWheel>"), add="+")
+
+        canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        for line_index, line in matching_lines:
+            var = tk.BooleanVar(value=True)
+            frame = ttk.Frame(self.scrollable_frame, padding=(10, 4))
+            frame.pack(fill="x")
+
+            cb = ttk.Checkbutton(
+                frame,
+                text=f"Line {line_index + 1}: {line}",
+                variable=var,
+                command=self._update_selection_summary,
+                wraplength=690,
+                justify="left"
+            )
+            cb.pack(side="left", fill="x", expand=True)
+            self.checkbox_vars.append((line_index, var))
+
+        btn_frame = ttk.Frame(self, padding=10)
+        btn_frame.pack(fill="x", side="bottom")
+
+        left_btns = ttk.Frame(btn_frame)
+        left_btns.pack(side="left")
+        ttk.Button(left_btns, text="Select All", command=self.select_all).pack(side="left", padx=2)
+        ttk.Button(left_btns, text="Select None", command=self.select_none).pack(side="left", padx=2)
+
+        right_btns = ttk.Frame(btn_frame)
+        right_btns.pack(side="right")
+        ttk.Button(right_btns, text="Remove Selected", command=self.confirm, style="Danger.TButton").pack(side="left", padx=5)
+        ttk.Button(right_btns, text="Keep Remaining", command=self.destroy, style="Secondary.TButton").pack(side="left")
+        self._update_selection_summary()
+
+    def _update_selection_summary(self):
+        total = len(self.checkbox_vars)
+        selected_count = sum(1 for _, var in self.checkbox_vars if var.get())
+        self.selection_summary_label.config(text=f"{selected_count} of {total} removable line(s) currently selected")
+
+    def select_all(self):
+        for _, var in self.checkbox_vars:
+            var.set(True)
+        self._update_selection_summary()
+
+    def select_none(self):
+        for _, var in self.checkbox_vars:
+            var.set(False)
+        self._update_selection_summary()
+
+    def confirm(self):
+        selected_indices = {line_index for line_index, var in self.checkbox_vars if var.get()}
+        if not selected_indices:
+            messagebox.showwarning("Selection Empty", "Select at least one matching line to remove.", parent=self)
+            return
+
+        self.result = selected_indices
+        self.destroy()
+
 # -------------------------------- Domain & Hosts Helpers -----------------------------------
 
 DOMAIN_REGEX = re.compile(r'^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$')
@@ -340,11 +566,15 @@ TOKEN_SPLITTER = re.compile(r'[\s,;]+')
 DNSMASQ_RULE_REGEX = re.compile(r'^(?:address|local)=/([^/]+)/?', re.IGNORECASE)
 COMMENT_PREFIXES = ('#', '!', '[')
 LOCAL_DOMAINS = {'localhost', 'localhost.localdomain', '::1'}
+HOST_LABEL_REGEX = re.compile(r'^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$')
+STANDARD_BLOCKING_IPS = {"0.0.0.0", "127.0.0.1", "::1"}
 
-def looks_like_domain(token: str) -> bool:
+def looks_like_domain(token: str, allow_single_label: bool = False) -> bool:
     if len(token) > 253: return False
     if token.startswith(('-', '.')) or token.endswith(('-', '.')): return False
     if IPV4_REGEX.match(token) or (IPV6_REGEX.match(token) and ':' in token): return False
+    if allow_single_label and '.' not in token:
+        return bool(HOST_LABEL_REGEX.match(token)) and any(character.isalpha() for character in token)
     return bool(DOMAIN_REGEX.match(token))
 
 def _looks_like_ip_token(token: str) -> bool:
@@ -353,7 +583,14 @@ def _looks_like_ip_token(token: str) -> bool:
 def _is_comment_line(stripped: str) -> bool:
     return stripped.startswith(COMMENT_PREFIXES)
 
-def _extract_domain_from_token(token: str) -> tuple[str | None, bool]:
+def _normalize_mapping_ip(token: str) -> tuple[str, bool, bool]:
+    candidate = token.strip()
+    normalized = candidate.lower() if ':' in candidate else candidate
+    if normalized in STANDARD_BLOCKING_IPS:
+        return "0.0.0.0", normalized != "0.0.0.0", True
+    return normalized, normalized != candidate, False
+
+def _extract_domain_from_token(token: str, allow_single_label: bool = False) -> tuple[str | None, bool]:
     candidate = token.strip().strip('\'"()[]{}<>')
     transformed = candidate != token.strip()
     if not candidate:
@@ -404,51 +641,58 @@ def _extract_domain_from_token(token: str) -> tuple[str | None, bool]:
         transformed = True
 
     domain = candidate.lower()
-    if domain in LOCAL_DOMAINS or not looks_like_domain(domain):
+    if domain in LOCAL_DOMAINS or not looks_like_domain(domain, allow_single_label=allow_single_label):
         return None, transformed
 
     return domain, transformed
 
-def normalize_line_to_hosts_entries(line: str) -> tuple[list[str], list[str], bool]:
+def parse_hosts_line_entries(line: str) -> tuple[list[tuple[str, str, bool]], bool]:
     stripped = line.strip()
     if not stripped or _is_comment_line(stripped):
-        return [], [], False
+        return [], False
 
     processed = stripped.split('#', 1)[0].strip()
     if not processed:
-        return [], [], False
+        return [], False
 
     tokens = [token for token in TOKEN_SPLITTER.split(processed) if token]
     if not tokens:
-        return [], [], False
+        return [], False
 
     if _looks_like_ip_token(tokens[0]):
+        mapping_ip, ip_transformed, is_block_entry = _normalize_mapping_ip(tokens[0])
         candidate_tokens = tokens[1:]
-        transformed = tokens[0] != "0.0.0.0" or len(candidate_tokens) != 1
+        transformed = ip_transformed or len(candidate_tokens) != 1
+        allow_single_label = True
     else:
+        mapping_ip = "0.0.0.0"
+        is_block_entry = True
         candidate_tokens = tokens
         transformed = True
+        allow_single_label = False
 
-    normalized_entries = []
-    domains = []
+    parsed_entries = []
     seen_in_line = set()
 
     for token in candidate_tokens:
-        domain, token_transformed = _extract_domain_from_token(token)
+        domain, token_transformed = _extract_domain_from_token(token, allow_single_label=allow_single_label)
         transformed = transformed or token_transformed
         if not domain:
             continue
 
-        normalized = f"0.0.0.0 {domain}"
+        normalized = f"{mapping_ip} {domain}"
         if normalized in seen_in_line:
             transformed = True
             continue
 
         seen_in_line.add(normalized)
-        normalized_entries.append(normalized)
-        domains.append(domain)
+        parsed_entries.append((normalized, domain, is_block_entry))
 
-    return normalized_entries, domains, transformed
+    return parsed_entries, transformed
+
+def normalize_line_to_hosts_entries(line: str) -> tuple[list[str], list[str], bool]:
+    parsed_entries, transformed = parse_hosts_line_entries(line)
+    return [entry[0] for entry in parsed_entries], [entry[1] for entry in parsed_entries], transformed
 
 def normalize_line_to_hosts_entry(line: str) -> tuple[str | None, str | None, bool]:
     normalized_entries, domains, transformed = normalize_line_to_hosts_entries(line)
@@ -501,14 +745,14 @@ def _get_canonical_cleaned_output_and_stats(original_lines: list[str], whitelist
             stats["removed_comments"] += 1
             continue
 
-        normalized_entries, domains, transformed = normalize_line_to_hosts_entries(line)
-        if not normalized_entries:
+        parsed_entries, transformed = parse_hosts_line_entries(line)
+        if not parsed_entries:
             stats["removed_invalid"] += 1
             continue
 
         kept_from_line = 0
-        for normalized, domain in zip(normalized_entries, domains):
-            if domain in whitelist_set or domain.lstrip('.') in whitelist_set:
+        for normalized, domain, is_block_entry in parsed_entries:
+            if is_block_entry and (domain in whitelist_set or domain.lstrip('.') in whitelist_set):
                 stats["removed_whitelist"] += 1
                 continue
 
@@ -527,7 +771,7 @@ def _get_canonical_cleaned_output_and_stats(original_lines: list[str], whitelist
         f"#\t127.0.0.1       localhost ({len(active_entries_to_keep)} active entries prepared by editor)",
         "#\t::1             localhost",
         "",
-        f"# --- Active Blocklist Entries (Cleaned & Sorted by Hosts File Editor v{APP_VERSION}) ---"
+        f"# --- Active Hosts Entries (Cleaned & Sorted by Hosts File Editor v{APP_VERSION}) ---"
     ]
     
     cleaned_lines = final_header + sorted(active_entries_to_keep)
@@ -588,6 +832,8 @@ def write_text_file_atomic(path: str, content: str):
     try:
         with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as f:
             f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(temp_path, path)
     except Exception:
         if os.path.exists(temp_path):
@@ -609,6 +855,19 @@ def decode_downloaded_lines(url: str, raw_bytes: bytes, content_encoding: str = 
 
     return decode_text_bytes(raw_bytes).splitlines()
 
+def looks_like_html_document(lines: list[str]) -> bool:
+    significant_lines = [line.strip().lower() for line in lines if line.strip()][:20]
+    if not significant_lines:
+        return False
+
+    combined = '\n'.join(significant_lines[:10])
+    html_markers = ("<!doctype html", "<html", "<head", "<body", "</html>", "<title", "<meta ")
+    if significant_lines[0].startswith(("<!doctype html", "<html")):
+        return True
+
+    marker_hits = sum(1 for marker in html_markers if marker in combined)
+    return marker_hits >= 2
+
 def get_app_config_dir() -> str:
     if os.name == 'nt':
         base_dir = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or os.path.expanduser("~")
@@ -617,6 +876,135 @@ def get_app_config_dir() -> str:
 
 def get_primary_config_path(config_filename: str) -> str:
     return os.path.join(get_app_config_dir(), config_filename)
+
+def normalize_custom_source_url(url: str) -> str:
+    candidate = url.strip()
+    if not candidate:
+        return ""
+
+    try:
+        parsed = urllib.parse.urlsplit(candidate)
+    except ValueError:
+        return candidate.rstrip('/').lower()
+
+    if not parsed.scheme or not parsed.netloc:
+        return candidate.rstrip('/').lower()
+
+    normalized_path = parsed.path.rstrip('/')
+    if normalized_path == "/":
+        normalized_path = ""
+
+    return urllib.parse.urlunsplit((
+        parsed.scheme.lower(),
+        parsed.netloc.lower(),
+        normalized_path,
+        parsed.query,
+        "",
+    ))
+
+def sanitize_custom_sources(custom_sources) -> list[dict[str, str]]:
+    if not isinstance(custom_sources, list):
+        return []
+
+    sanitized_sources = []
+    seen_names = set()
+    seen_urls = set()
+
+    for source in custom_sources:
+        if not isinstance(source, dict):
+            continue
+
+        name = str(source.get("name", "")).strip()
+        url = str(source.get("url", "")).strip()
+        if not name or not url or not url.lower().startswith(("http://", "https://")):
+            continue
+
+        normalized_name = name.lower()
+        normalized_url = normalize_custom_source_url(url)
+        if normalized_name in seen_names or normalized_url in seen_urls:
+            continue
+
+        seen_names.add(normalized_name)
+        seen_urls.add(normalized_url)
+        sanitized_sources.append({"name": name, "url": url})
+
+    return sanitized_sources
+
+def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
+    if not isinstance(config, dict):
+        config = {}
+
+    fallback_last_open_dir = default_last_open_dir if isinstance(default_last_open_dir, str) and os.path.isdir(default_last_open_dir) else os.path.expanduser("~")
+    if not os.path.isdir(fallback_last_open_dir):
+        fallback_last_open_dir = os.getcwd()
+
+    whitelist_value = config.get("whitelist", "")
+    if isinstance(whitelist_value, str):
+        whitelist_text = whitelist_value
+    elif isinstance(whitelist_value, (list, tuple, set)):
+        whitelist_text = '\n'.join(
+            item.strip()
+            for item in (str(entry) for entry in whitelist_value)
+            if item.strip()
+        )
+    else:
+        whitelist_text = ""
+
+    def _normalize_hash(value):
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
+        return None
+
+    last_open_dir = config.get("last_open_dir", fallback_last_open_dir)
+    if not isinstance(last_open_dir, str) or not os.path.isdir(last_open_dir):
+        last_open_dir = fallback_last_open_dir
+
+    return {
+        "whitelist": whitelist_text,
+        "custom_sources": sanitize_custom_sources(config.get("custom_sources", [])),
+        "last_applied_raw_hash": _normalize_hash(config.get("last_applied_raw_hash")),
+        "last_applied_cleaned_hash": _normalize_hash(config.get("last_applied_cleaned_hash")),
+        "last_open_dir": last_open_dir,
+    }
+
+def resolve_saved_state_hashes(current_hash: str, saved_raw_hash, saved_cleaned_hash) -> tuple[str | None, str | None]:
+    normalized_raw_hash = saved_raw_hash if isinstance(saved_raw_hash, str) and saved_raw_hash else None
+    normalized_cleaned_hash = saved_cleaned_hash if isinstance(saved_cleaned_hash, str) and saved_cleaned_hash else None
+
+    if normalized_cleaned_hash and current_hash == normalized_cleaned_hash:
+        return None, normalized_cleaned_hash
+
+    if normalized_raw_hash and current_hash == normalized_raw_hash:
+        return normalized_raw_hash, None
+
+    return current_hash, None
+
+def find_keyword_match_line_indices(lines: list[str], query: str) -> list[int]:
+    normalized_query = query.strip().lower()
+    if not normalized_query:
+        return []
+
+    return [
+        index
+        for index, line in enumerate(lines)
+        if line.strip() and not _is_comment_line(line.strip()) and normalized_query in line.lower()
+    ]
+
+def remove_lines_by_indices(lines: list[str], line_indices: set[int]) -> list[str]:
+    return [line for index, line in enumerate(lines) if index not in line_indices]
+
+def summarize_clean_changes(total_discarded: int, transformed: int) -> str:
+    if total_discarded > 0 and transformed > 0:
+        return f"Removed {total_discarded} entries and normalized {transformed} line(s)."
+    if total_discarded > 0:
+        return f"Removed {total_discarded} entries."
+    if transformed > 0:
+        return f"Normalized {transformed} line(s)."
+    return "No normalization changes were needed."
+
+def count_nonempty_lines(text: str) -> int:
+    return sum(1 for line in text.splitlines() if line.strip())
 
 # -------------------------------- Main App -----------------------------------
 class HostsFileEditor:
@@ -750,9 +1138,10 @@ class HostsFileEditor:
     def __init__(self, root):
         self.root = root
         self.root.title(f"{APP_NAME} v{APP_VERSION}")
-        self.root.geometry("1360x900")
         self.root.configure(bg=PALETTE["base"])
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        self._icon_image = None
+        self._apply_window_branding()
 
         self.default_font = font.Font(family="Segoe UI", size=10)
         self.title_font = font.Font(family="Segoe UI", size=11, weight="bold")
@@ -773,6 +1162,7 @@ class HostsFileEditor:
         self._suppress_modified_handler = False
         self._update_ui_job = None
         self._status_reset_job = None
+        self._last_saved_whitelist_text = ""
         self.config_path = get_primary_config_path(self.CONFIG_FILENAME)
         self.last_open_dir = os.path.expanduser("~")
         
@@ -786,10 +1176,17 @@ class HostsFileEditor:
         self._init_menubar()
         
         # 1. Initialize Status Bar FIRST
+        self.default_status_hint = "Ctrl+S Save Cleaned   Ctrl+Shift+S Save Raw   F5 Reload"
         status_frame = ttk.Frame(root, padding=(10, 6, 10, 10))
         status_frame.pack(side=tk.BOTTOM, fill=tk.X)
         self.status_label = ttk.Label(status_frame, text="Loading...", font=self.default_font, foreground=PALETTE["subtext"])
         self.status_label.pack(side=tk.LEFT)
+        self.status_hint_label = ttk.Label(
+            status_frame,
+            text=self.default_status_hint,
+            style="StatusMeta.TLabel"
+        )
+        self.status_hint_label.pack(side=tk.LEFT, padx=(18, 0))
         
         # Progress Bar
         self.progress_bar = ttk.Progressbar(status_frame, orient="horizontal", mode="determinate", length=300)
@@ -858,6 +1255,8 @@ class HostsFileEditor:
         hero_badges.pack(side="right", anchor='n', padx=(20, 0))
         self.admin_badge_label = tk.Label(hero_badges, font=("Segoe UI", 9, "bold"), padx=10, pady=5, bd=0)
         self.admin_badge_label.pack(anchor='e', pady=(0, 6))
+        self.editor_state_badge_label = tk.Label(hero_badges, font=("Segoe UI", 9, "bold"), padx=10, pady=5, bd=0)
+        self.editor_state_badge_label.pack(anchor='e', pady=(0, 6))
         self.mode_badge_label = tk.Label(hero_badges, font=("Segoe UI", 9, "bold"), padx=10, pady=5, bd=0)
         self.mode_badge_label.pack(anchor='e', pady=(0, 6))
         self.dry_run_badge_label = tk.Label(hero_badges, font=("Segoe UI", 9, "bold"), padx=10, pady=5, bd=0)
@@ -881,12 +1280,19 @@ class HostsFileEditor:
         save_btns_frame.pack(fill="x", pady=4)
 
         self.btn_save_raw = self._btn(save_btns_frame, "Save Raw", self.save_raw_file, 
-                                      "Saves editor content exactly as-is. No cleaning, no filtering.", style="Action.TButton")
+                                      "Saves editor content exactly as-is. No cleaning, no filtering.", style="Secondary.TButton")
         self.btn_save_raw.pack(side=tk.LEFT, fill="x", expand=True, padx=(0, 4))
 
         self.btn_save_cleaned = self._btn(save_btns_frame, "Save Cleaned", self.save_cleaned_file, 
                                           "Applies Whitelist, Normalization, Cleaning, and Deduplication before saving.", style="Action.TButton")
         self.btn_save_cleaned.pack(side=tk.LEFT, fill="x", expand=True, padx=(4, 0))
+        ttk.Label(
+            file_ops,
+            text="Cleaned Save is the safer default. Raw Save writes the editor exactly as shown.",
+            style="Hint.TLabel",
+            wraplength=360,
+            justify="left"
+        ).pack(fill="x", padx=8, pady=(0, 8))
 
         self._btn(file_ops, "Refresh", self.load_file, "Reload hosts file from disk.").pack(fill="x", pady=4)
         self._btn(file_ops, "Revert to Backup", self.revert_to_backup, "Preview and restore from .bak if available.", style="Danger.TButton").pack(fill="x", pady=4)
@@ -920,15 +1326,28 @@ class HostsFileEditor:
         self.search_var = tk.StringVar()
         self.search_entry = ttk.Entry(search_frame, textvariable=self.search_var)
         self.search_entry.pack(fill="x", padx=8, pady=(8, 4))
+        ttk.Label(
+            search_frame,
+            text="Find a term, step through every hit, or review matched active entries before removing them.",
+            style="Hint.TLabel",
+            wraplength=360,
+            justify="left"
+        ).pack(fill="x", padx=8, pady=(0, 6))
         self.search_entry.bind("<Return>", lambda event: self.search_find())
         btns = ttk.Frame(search_frame)
         btns.pack(fill="x", padx=8, pady=(0, 8))
         self._btn(btns, "Find", self.search_find, "Find first match (case-insensitive).").pack(side="left", expand=True, fill="x", padx=(0, 4))
         self._btn(btns, "Prev", self.search_prev, "Find previous match.").pack(side="left", expand=True, fill="x", padx=4)
         self._btn(btns, "Next", self.search_next, "Find next match.").pack(side="left", expand=True, fill="x", padx=4)
+        self._btn(btns, "Remove", self.remove_matching_lines, "Remove matching non-comment entries with a selection preview.", style="Danger.TButton").pack(side="left", expand=True, fill="x", padx=4)
         self._btn(btns, "Clear", self.search_clear, "Clear highlights.").pack(side="left", expand=True, fill="x", padx=(4, 0))
         
-        self.warning_status_label = ttk.Label(search_frame, text="Warnings: 0 entries affected by Cleaned Save", foreground=PALETTE["green"])
+        self.warning_status_label = ttk.Label(
+            search_frame,
+            text="Cleaned Save is already aligned. No removals or normalization are pending.",
+            style="Hint.TLabel",
+            foreground=PALETTE["green"]
+        )
         self.warning_status_label.pack(fill="x", padx=8, pady=(4, 8))
         self._btn(search_frame, "Re-scan Warnings", self._trigger_ui_update, "Recompute which lines will be discarded or transformed by Cleaned Save.").pack(fill="x", padx=8, pady=(0, 8))
 
@@ -936,6 +1355,13 @@ class HostsFileEditor:
         # Import Blacklists
         import_frame = ttk.LabelFrame(self.sidebar_inner, text="Import Blacklists")
         import_frame.pack(fill="x", padx=8, pady=4)
+        ttk.Label(
+            import_frame,
+            text="Bring in curated feeds, local logs, or pasted content without leaving the editor.",
+            style="Hint.TLabel",
+            wraplength=360,
+            justify="left"
+        ).pack(fill="x", padx=8, pady=(8, 0))
         
         # Import Mode Selector
         mode_frame = ttk.LabelFrame(import_frame, text="Import Mode")
@@ -951,6 +1377,13 @@ class HostsFileEditor:
                         command=lambda: self._set_import_mode_status("Normalized"))
         self.radio_normalized.pack(side=tk.LEFT, padx=15)
         self._register_import_widget(self.radio_normalized)
+        ttk.Label(
+            mode_frame,
+            text="Normalized converts domains into standard 0.0.0.0 entries. Raw keeps the original formatting and comments.",
+            style="Hint.TLabel",
+            wraplength=340,
+            justify="left"
+        ).pack(fill="x", padx=8, pady=(0, 8))
         
         # --- Import All Lists Button ---
         self.btn_import_all = self._btn(import_frame, "Batch Import from Sources", self.start_import_all, 
@@ -970,11 +1403,11 @@ class HostsFileEditor:
 
         source_catalog = ttk.LabelFrame(import_frame, text="Source Catalog")
         source_catalog.pack(fill="x", padx=8, pady=4)
-        ttk.Label(source_catalog, text="Filter by name, category, or feed URL", foreground=PALETTE["subtext"]).pack(anchor='w', padx=8, pady=(8, 4))
+        ttk.Label(source_catalog, text="Filter by name, category, or feed URL", style="Hint.TLabel").pack(anchor='w', padx=8, pady=(8, 4))
         self.source_filter_entry = ttk.Entry(source_catalog, textvariable=self.source_filter_var)
         self.source_filter_entry.pack(fill="x", padx=8, pady=(0, 6))
         self._register_import_widget(self.source_filter_entry)
-        self.catalog_summary_label = ttk.Label(source_catalog, text="", foreground=PALETTE["overlay1"])
+        self.catalog_summary_label = ttk.Label(source_catalog, text="", style="Hint.TLabel")
         self.catalog_summary_label.pack(anchor='w', padx=8, pady=(0, 6))
         self.web_catalog_frame = ttk.Frame(source_catalog)
         self.web_catalog_frame.pack(fill="x", padx=8, pady=(0, 8))
@@ -983,31 +1416,87 @@ class HostsFileEditor:
         # Custom Sources
         self.custom_sources_frame = ttk.LabelFrame(self.sidebar_inner, text="Custom Blacklists (Persistent)")
         self.custom_sources_frame.pack(fill="x", padx=8, pady=4)
+        self.custom_sources_help_label = ttk.Label(
+            self.custom_sources_frame,
+            text="Save your own feeds here for one-click imports later.",
+            style="Hint.TLabel",
+            wraplength=340,
+            justify="left"
+        )
+        self.custom_sources_help_label.pack(fill="x", padx=8, pady=(8, 2))
+        self.custom_sources_summary_label = ttk.Label(
+            self.custom_sources_frame,
+            text="0 saved sources ready for import.",
+            style="Hint.TLabel",
+        )
+        self.custom_sources_summary_label.pack(fill="x", padx=8, pady=(0, 2))
+        self.custom_sources_empty_label = ttk.Label(
+            self.custom_sources_frame,
+            text="No custom sources saved yet. Add a trusted blocklist URL to keep it ready for future sessions.",
+            style="Hint.TLabel",
+            wraplength=340,
+            justify="left"
+        )
+        self.custom_sources_empty_label.pack(fill="x", padx=8, pady=(0, 6))
         
         self.btn_add_custom = self._btn(self.custom_sources_frame, "+ Add Custom Source", self.show_add_source_dialog, "Add a new custom URL source.", style="Accent.TButton")
         self.btn_add_custom.pack(fill=tk.X, pady=2, side=tk.BOTTOM)
+        self._register_import_widget(self.btn_add_custom)
 
         # Manual Input
         manual_frame = ttk.LabelFrame(self.sidebar_inner, text="Manual List Input (Paste Hosts)")
         manual_frame.pack(fill="x", padx=8, pady=4)
+        ttk.Label(
+            manual_frame,
+            text="Paste hosts lines, domains, or feed fragments. They will follow the currently selected import mode when appended.",
+            style="Hint.TLabel",
+            wraplength=360,
+            justify="left"
+        ).pack(fill="x", padx=8, pady=(8, 0))
         self.manual_text_area = scrolledtext.ScrolledText(
             manual_frame, wrap=tk.WORD, height=10, font=("Consolas", 10),
             bg=PALETTE["crust"], fg=PALETTE["text"], insertbackground=PALETTE["text"],
             selectbackground=PALETTE["blue"], relief="flat"
         )
         self.manual_text_area.pack(fill="x", padx=8, pady=(8, 4))
-        self._btn(manual_frame, "Append Manual List to Editor", self.append_manual_list, 
-                  "Append the content from the text area to the main hosts file.", style="Action.TButton").pack(fill="x", padx=8, pady=(0, 8))
+        self.manual_summary_label = ttk.Label(
+            manual_frame,
+            text="0 non-empty lines ready to append.",
+            style="Hint.TLabel",
+            wraplength=360,
+            justify="left"
+        )
+        self.manual_summary_label.pack(fill="x", padx=8, pady=(0, 6))
+        self._register_import_widget(self.manual_text_area)
+        self._register_import_widget(
+            self._btn(manual_frame, "Append Manual List to Editor", self.append_manual_list, 
+                      "Append the content from the text area to the main hosts file.", style="Action.TButton")
+        ).pack(fill="x", padx=8, pady=(0, 8))
 
         # Whitelist
         whitelist_frame = ttk.LabelFrame(self.sidebar_inner, text="Persistent Whitelist (Auto-Applied)")
         whitelist_frame.pack(fill="both", padx=8, pady=(4, 8))
+        ttk.Label(
+            whitelist_frame,
+            text="One entry per line. Cleaned Save removes matching blocking entries and previews the result before writing.",
+            style="Hint.TLabel",
+            wraplength=360,
+            justify="left"
+        ).pack(fill="x", padx=8, pady=(8, 0))
         self.whitelist_text_area = scrolledtext.ScrolledText(
             whitelist_frame, wrap=tk.WORD, height=10, font=("Consolas", 10),
             bg=PALETTE["crust"], fg=PALETTE["text"], insertbackground=PALETTE["text"],
             selectbackground=PALETTE["blue"], relief="flat"
         )
         self.whitelist_text_area.pack(fill="both", expand=True, padx=8, pady=(8, 4))
+        self.whitelist_summary_label = ttk.Label(
+            whitelist_frame,
+            text="0 whitelist entries. Saved copy matches the editor.",
+            style="Hint.TLabel",
+            wraplength=360,
+            justify="left"
+        )
+        self.whitelist_summary_label.pack(fill="x", padx=8, pady=(0, 6))
         w_btns = ttk.Frame(whitelist_frame)
         w_btns.pack(fill="x", padx=8, pady=(0, 8))
         self._btn(w_btns, "Load from File", self.load_whitelist_from_file, "Load whitelist from a text file.").pack(side="left", expand=True, fill="x", padx=(0, 6))
@@ -1041,6 +1530,7 @@ class HostsFileEditor:
 
         # Listen to editor modifications
         self.text_area.bind("<<Modified>>", self._on_text_modified_debounced)
+        self.manual_text_area.bind("<<Modified>>", self._on_manual_modified)
         self.whitelist_text_area.bind("<<Modified>>", self._on_whitelist_modified)
         self.root.bind("<Control-f>", self._focus_search_shortcut)
         self.root.bind("<Control-s>", self._save_cleaned_shortcut)
@@ -1052,14 +1542,41 @@ class HostsFileEditor:
         try:
             self.load_config()
         except Exception as e:
-            messagebox.showerror("Configuration Error", f"Failed to load or initialize configuration. Application will launch without custom settings.\nError: {e}")
+            messagebox.showerror("Configuration Error", f"Failed to load or initialize configuration. Application will launch without custom settings.\nError: {e}", parent=self.root)
             self.custom_sources = []
             self.whitelist_text_area.delete('1.0', tk.END)
         
         self.load_file(is_initial_load=True)
+        self._update_custom_source_summary()
+        self._update_manual_summary()
+        self._update_whitelist_summary()
         self._refresh_mode_badges()
 
     # ----------------------------- UI Helpers & Panels ---------------------------------
+    def _apply_window_branding(self):
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        width = min(1360, max(screen_width - 80, min(screen_width, 900)))
+        height = min(900, max(screen_height - 120, min(screen_height, 680)))
+        x_pos = max((screen_width - width) // 2, 0)
+        y_pos = max((screen_height - height) // 2, 0)
+        self.root.geometry(f"{width}x{height}+{x_pos}+{y_pos}")
+        self.root.minsize(min(width, 1040), min(height, 740))
+
+        assets_dir = os.path.dirname(os.path.abspath(__file__))
+        icon_ico = os.path.join(assets_dir, "icon.ico")
+        icon_png = os.path.join(assets_dir, "icon.png")
+
+        try:
+            if os.name == 'nt' and os.path.exists(icon_ico):
+                self.root.iconbitmap(icon_ico)
+            elif os.path.exists(icon_png):
+                self._icon_image = tk.PhotoImage(file=icon_png)
+                self.root.iconphoto(True, self._icon_image)
+        except Exception:
+            # Branding assets should never block the editor from launching.
+            self._icon_image = None
+
     def _init_stats_panel(self, parent):
         self.stat_vars = {
             "total": tk.IntVar(value=0),
@@ -1070,6 +1587,12 @@ class HostsFileEditor:
             "transformed": tk.IntVar(value=0),
             "removed_whitelist": tk.IntVar(value=0)
         }
+
+        ttk.Label(
+            parent,
+            text="Live preview of what Cleaned Save will keep, normalize, or remove.",
+            style="Hint.TLabel"
+        ).pack(anchor='w', padx=8, pady=(8, 0))
         
         grid_frame = ttk.Frame(parent, padding=5)
         grid_frame.pack(fill='x')
@@ -1108,6 +1631,34 @@ class HostsFileEditor:
             bg=PALETTE["green"] if admin_ready else PALETTE["red"],
             fg="#0b1020" if admin_ready else "#1b0e13"
         )
+        editor_state_text = "Session Ready"
+        editor_state_bg = PALETTE["surface1"]
+        editor_state_fg = PALETTE["text"]
+        if hasattr(self, "text_area"):
+            lines = self.get_lines()
+            has_content = any(line.strip() for line in lines)
+            current_hash = self._hash_lines(lines)
+            if self._has_unsaved_changes():
+                editor_state_text = "Unsaved Editor Changes"
+                editor_state_bg = PALETTE["yellow"]
+                editor_state_fg = PALETTE["yellow_ink"]
+            elif self._last_applied_cleaned_hash is not None and current_hash == self._last_applied_cleaned_hash:
+                editor_state_text = "Saved Cleaned Snapshot"
+                editor_state_bg = PALETTE["green"]
+                editor_state_fg = "#0b1020"
+            elif self._last_applied_raw_hash is not None and current_hash == self._last_applied_raw_hash:
+                editor_state_text = "Matches Disk Copy"
+                editor_state_bg = PALETTE["surface1"]
+                editor_state_fg = PALETTE["text"]
+            elif not has_content:
+                editor_state_text = "Empty Editor"
+                editor_state_bg = PALETTE["surface0"]
+                editor_state_fg = PALETTE["text"]
+        self.editor_state_badge_label.config(
+            text=editor_state_text,
+            bg=editor_state_bg,
+            fg=editor_state_fg
+        )
         self.mode_badge_label.config(
             text=f"Import Mode: {import_mode}",
             bg=PALETTE["blue"],
@@ -1121,10 +1672,11 @@ class HostsFileEditor:
 
     def _set_import_mode_status(self, mode):
         self._refresh_mode_badges()
+        self._update_manual_summary()
         if mode == "Raw":
-            self.update_status("Import mode set to Raw. Original formatting and comments will be preserved.")
+            self.update_status("Import mode set to Raw. Original formatting, comments, and markers will be preserved.")
         else:
-            self.update_status("Import mode set to Normalized. Domains will be converted to 0.0.0.0 entries.")
+            self.update_status("Import mode set to Normalized. Domains will be standardized into clean 0.0.0.0 entries.")
 
     def _populate_blocklist_source_buttons(self):
         if not hasattr(self, "web_catalog_frame"):
@@ -1132,6 +1684,7 @@ class HostsFileEditor:
 
         for child in self.web_catalog_frame.winfo_children():
             child.destroy()
+        self.import_action_widgets = [item for item in self.import_action_widgets if item and item.winfo_exists()]
 
         query = self.source_filter_var.get().strip().lower()
         matched_categories = 0
@@ -1160,12 +1713,12 @@ class HostsFileEditor:
             ttk.Label(
                 self.web_catalog_frame,
                 text="No sources matched the current filter. Try a broader keyword like ads, malware, or TikTok.",
-                foreground=PALETTE["subtext"],
+                style="Hint.TLabel",
                 wraplength=340
             ).pack(anchor='w', pady=4)
-            self.catalog_summary_label.config(text="0 sources shown")
+            self.catalog_summary_label.config(text="0 sources shown. Clear or broaden the filter to browse everything.")
         else:
-            self.catalog_summary_label.config(text=f"{matched_sources} sources across {matched_categories} categories")
+            self.catalog_summary_label.config(text=f"Showing {matched_sources} sources across {matched_categories} categories")
 
     def _focus_search_shortcut(self, event=None):
         self.search_entry.focus_set()
@@ -1198,14 +1751,19 @@ class HostsFileEditor:
         discard_count = stats["removed_invalid"] + stats["removed_duplicates"] + stats["removed_whitelist"]
         total_warned = discard_count + stats["transformed"]
         
-        if total_warned > 0:
+        if discard_count > 0:
             self.warning_status_label.config(
-                text=f"Warnings: {total_warned} entries affected (Removed: {discard_count} / Normalized: {stats['transformed']})",
+                text=f"Cleaned Save will remove {discard_count} entries and normalize {stats['transformed']} line(s).",
                 foreground=PALETTE["red"]
+            )
+        elif stats["transformed"] > 0:
+            self.warning_status_label.config(
+                text=f"Cleaned Save will normalize {stats['transformed']} line(s). No entries will be removed.",
+                foreground=PALETTE["yellow"]
             )
         else:
             self.warning_status_label.config(
-                text="Warnings: 0 entries affected by Cleaned Save",
+                text="Cleaned Save is already aligned. No removals or normalization are pending.",
                 foreground=PALETTE["green"]
             )
 
@@ -1223,6 +1781,8 @@ class HostsFileEditor:
         style.configure("Panel.TLabel", background=PALETTE["mantle"], foreground=PALETTE["text"])
         style.configure("PanelMuted.TLabel", background=PALETTE["mantle"], foreground=PALETTE["subtext"])
         style.configure("PanelSubtle.TLabel", background=PALETTE["mantle"], foreground=PALETTE["overlay1"])
+        style.configure("Hint.TLabel", background=PALETTE["mantle"], foreground=PALETTE["subtext"])
+        style.configure("StatusMeta.TLabel", background=PALETTE["base"], foreground=PALETTE["overlay1"])
         style.configure("TSeparator", background=PALETTE["surface0"])
         style.configure("TLabelFrame", background=PALETTE["mantle"], foreground=PALETTE["text"], borderwidth=0, relief="flat")
         style.configure("TLabelframe.Label", background=PALETTE["mantle"], foreground=PALETTE["text"], font=self.title_font)
@@ -1237,6 +1797,13 @@ class HostsFileEditor:
                         padding=(10, 6), relief="flat", borderwidth=0, focusthickness=1, focuscolor=PALETTE["blue"])
         style.map("TButton",
                   background=[("active", PALETTE["surface1"])],
+                  relief=[("pressed", "sunken")])
+
+        style.configure("Secondary.TButton",
+                        background=PALETTE["surface1"], foreground=PALETTE["text"],
+                        padding=(10, 6), relief="flat", borderwidth=0)
+        style.map("Secondary.TButton",
+                  background=[("active", PALETTE["overlay0"])],
                   relief=[("pressed", "sunken")])
         
         # Remove Button (Small)
@@ -1262,12 +1829,12 @@ class HostsFileEditor:
                   background=[("active", PALETTE["green_hover"])],
                   relief=[("pressed", "sunken")])
 
-        # Action Applied Button (red persistent + sunken look)
-        style.configure("ActionApplied.TButton",
-                        background=PALETTE["red"], foreground="#1b0e13",
-                        padding=(10, 6), relief="sunken", borderwidth=1)
-        style.map("ActionApplied.TButton",
-                  background=[("active", PALETTE["red_hover"])])
+        style.configure("Saved.TButton",
+                        background=PALETTE["yellow"], foreground=PALETTE["yellow_ink"],
+                        padding=(10, 6), relief="flat", borderwidth=0)
+        style.map("Saved.TButton",
+                  background=[("active", "#f5d58b")],
+                  relief=[("pressed", "sunken")])
 
         # Danger Button (revert, destructive-ish)
         style.configure("Danger.TButton",
@@ -1299,7 +1866,7 @@ class HostsFileEditor:
         file_menu.add_command(label="Refresh", command=self.load_file)
         file_menu.add_command(label="Revert to Backup", command=self.revert_to_backup)
         file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.root.destroy)
+        file_menu.add_command(label="Exit", command=self.on_closing)
         menu_bar.add_cascade(label="File", menu=file_menu)
 
         tools_menu = tk.Menu(menu_bar, tearoff=0, bg=PALETTE["mantle"], fg=PALETTE["text"],
@@ -1313,10 +1880,8 @@ class HostsFileEditor:
 
         help_menu = tk.Menu(menu_bar, tearoff=0, bg=PALETTE["mantle"], fg=PALETTE["text"],
                             activebackground=PALETTE["blue"], activeforeground="#0b1020")
-        help_menu.add_command(label="About", command=lambda: self.update_status(
-            f"{APP_NAME} v{APP_VERSION}. Premium hosts-file editing with previewed cleaning, recovery tools, and curated source imports.", is_error=False
-        ))
-        help_menu.add_command(label="GitHub (Hosts File Management Tool)", command=lambda: webbrowser.open("https://github.com/SysAdminDoc/Hosts-File-Management-Tool"))
+        help_menu.add_command(label="About", command=self.show_about_dialog)
+        help_menu.add_command(label="Project on GitHub", command=lambda: webbrowser.open("https://github.com/SysAdminDoc/Hosts-File-Management-Tool"))
         menu_bar.add_cascade(label="Help", menu=help_menu)
 
     def _btn(self, parent, text, command, tooltip, style="TButton"):
@@ -1325,6 +1890,7 @@ class HostsFileEditor:
         return btn
 
     def _register_import_widget(self, widget):
+        self.import_action_widgets = [item for item in self.import_action_widgets if item and item.winfo_exists()]
         if widget not in self.import_action_widgets:
             self.import_action_widgets.append(widget)
         return widget
@@ -1346,25 +1912,67 @@ class HostsFileEditor:
             except tk.TclError:
                 continue
 
+        self.import_action_widgets = [item for item in self.import_action_widgets if item and item.winfo_exists()]
+
+    def _reset_status_color(self):
+        if self.status_label.winfo_exists():
+            self.status_label.config(foreground=PALETTE["subtext"])
+
+    def _set_status_hint(self, text=None):
+        if hasattr(self, "status_hint_label") and self.status_hint_label.winfo_exists():
+            self.status_hint_label.config(text=text or self.default_status_hint)
+
     def update_status(self, message, is_error=False):
         if self._status_reset_job:
             self.root.after_cancel(self._status_reset_job)
             self._status_reset_job = None
-        color = PALETTE["red"] if is_error else PALETTE["green"] if message.lower().startswith(("success", "imported", "loaded", "restored", "saved")) else PALETTE["subtext"]
+        message_lower = message.lower()
+        if is_error:
+            color = PALETTE["red"]
+        elif message_lower.startswith(("success", "imported", "loaded", "restored", "saved")):
+            color = PALETTE["green"]
+        elif message_lower.startswith("warning") or "dry-run" in message_lower:
+            color = PALETTE["yellow"]
+        else:
+            color = PALETTE["subtext"]
         self.status_label.config(text=message, foreground=color)
         if not self.is_importing:
-             self._status_reset_job = self.root.after(4000, lambda: self.status_label.config(foreground=PALETTE["subtext"]))
+             self._status_reset_job = self.root.after(4000, self._reset_status_color)
+
+    def show_about_dialog(self):
+        messagebox.showinfo(
+            f"About {APP_NAME}",
+            (
+                f"{APP_NAME} v{APP_VERSION}\n\n"
+                "Windows-first hosts file editing with curated imports, previewed cleaning, safer save flows, and recovery tools.\n\n"
+                "Highlights\n"
+                "- Save Cleaned previews normalization and whitelist filtering before write\n"
+                "- Save Raw preserves the editor exactly as shown\n"
+                "- Batch imports stay sequential so progress and failures are easier to trust\n"
+                "- Dry-run mode lets you validate changes without touching disk\n\n"
+                "Shortcuts\n"
+                "Ctrl+F   Focus search\n"
+                "Ctrl+S   Save Cleaned\n"
+                "Ctrl+Shift+S   Save Raw\n"
+                "F5   Reload from disk"
+            ),
+            parent=self.root,
+        )
 
     def on_closing(self):
+        should_cancel_import = False
         if self.is_importing:
-            if not messagebox.askyesno("Confirm Exit", "An import is currently in progress. Exit anyway?"):
+            if not messagebox.askyesno("Close During Import", "A batch import is still running. Close the app and stop that import?", parent=self.root):
                 return
-            self.stop_import_flag.set()
+            should_cancel_import = True
 
         if self._has_unsaved_changes():
-            if not messagebox.askyesno("Discard Unsaved Changes", "You have unsaved editor changes. Close the app anyway?"):
+            if not messagebox.askyesno("Discard Unsaved Changes", "You have unsaved editor changes. Close without saving them?", parent=self.root):
                 return
-        
+
+        if should_cancel_import:
+            self.stop_import_flag.set()
+
         self.save_config()
         self.root.destroy()
 
@@ -1384,18 +1992,21 @@ class HostsFileEditor:
             return True
         else:
             self.is_admin = False
-            if os.name == 'nt':
+            if os.name == 'nt' and ELEVATION_ATTEMPT_FLAG not in sys.argv:
                 try:
                     script = os.path.abspath(sys.argv[0])
-                    params = ' '.join(['"%s"' % arg for arg in sys.argv[1:]])
-                    ctypes.windll.shell32.ShellExecuteW(
+                    relaunch_args = sys.argv[1:] + [ELEVATION_ATTEMPT_FLAG]
+                    params = ' '.join(['"%s"' % arg for arg in relaunch_args])
+                    launch_result = ctypes.windll.shell32.ShellExecuteW(
                         None, "runas", sys.executable, f'"{script}" {params}', None, 1
                     )
-                    return False 
+                    if launch_result > 32:
+                        return False
                 except Exception as e:
                     messagebox.showerror(
                         "Relaunch Failed", 
-                        f"Could not relaunch as administrator. Saving the hosts file will fail due to permission error.\nError: {e}"
+                        f"Could not relaunch as administrator. Saving the hosts file will fail due to permission error.\nError: {e}",
+                        parent=self.root,
                     )
             
             self.root.after(100, lambda: self.update_status("Warning: Not running as Administrator. Saving will fail unless Dry-run is enabled.", is_error=True))
@@ -1436,45 +2047,48 @@ class HostsFileEditor:
         return selected_path
 
     def load_config(self):
-        try:
-            config_source_path = None
-            if os.path.exists(self.config_path):
-                config_source_path = self.config_path
-            else:
-                for legacy_path in self._get_legacy_config_paths():
-                    if os.path.exists(legacy_path):
-                        config_source_path = legacy_path
-                        break
+        config_source_path = None
+        if os.path.exists(self.config_path):
+            config_source_path = self.config_path
+        else:
+            for legacy_path in self._get_legacy_config_paths():
+                if os.path.exists(legacy_path):
+                    config_source_path = legacy_path
+                    break
 
-            if config_source_path:
-                with open(config_source_path, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                self.whitelist_text_area.delete('1.0', tk.END)
-                self.whitelist_text_area.insert('1.0', config.get("whitelist", ""))
-                self.custom_sources = config.get("custom_sources", [])
-                self._last_applied_raw_hash = config.get("last_applied_raw_hash")
-                self._last_applied_cleaned_hash = config.get("last_applied_cleaned_hash")
-                self.last_open_dir = config.get("last_open_dir", self.last_open_dir)
-                
-                self.update_status("Configuration loaded.")
-                self._rebuild_custom_source_buttons()
+        if not config_source_path:
+            return
 
-                if config_source_path != self.config_path:
-                    self._write_config_payload(config)
-                
-        except Exception as e:
-            raise e
+        config = json.loads(read_text_file_content(config_source_path))
+        sanitized_config = sanitize_config_snapshot(config, self.last_open_dir)
+
+        self.whitelist_text_area.delete('1.0', tk.END)
+        self.whitelist_text_area.insert('1.0', sanitized_config["whitelist"])
+        self.custom_sources = sanitized_config["custom_sources"]
+        self._last_applied_raw_hash = sanitized_config["last_applied_raw_hash"]
+        self._last_applied_cleaned_hash = sanitized_config["last_applied_cleaned_hash"]
+        self._last_saved_whitelist_text = sanitized_config["whitelist"]
+        self.last_open_dir = sanitized_config["last_open_dir"]
+
+        self.update_status("Configuration loaded.")
+        self._rebuild_custom_source_buttons()
+        self._update_whitelist_summary()
+
+        if config_source_path != self.config_path:
+            self._write_config_payload(sanitized_config)
 
     def save_config(self):
-        config = {
+        config = sanitize_config_snapshot({
             "whitelist": self.whitelist_text_area.get('1.0', tk.END).strip(),
             "custom_sources": self.custom_sources,
             "last_applied_raw_hash": self._last_applied_raw_hash,
             "last_applied_cleaned_hash": self._last_applied_cleaned_hash,
             "last_open_dir": self.last_open_dir,
-        }
+        }, self.last_open_dir)
         try:
             self._write_config_payload(config)
+            self._last_saved_whitelist_text = config["whitelist"]
+            self._update_whitelist_summary()
         except OSError as e:
             print(f"Error saving config: {e}")
 
@@ -1516,6 +2130,7 @@ class HostsFileEditor:
     def _on_whitelist_modified(self, event=None):
         if self.whitelist_text_area.edit_modified():
             self.whitelist_text_area.edit_modified(False)
+            self._update_whitelist_summary()
             self._trigger_ui_update()
 
     def _trigger_ui_update(self):
@@ -1530,6 +2145,7 @@ class HostsFileEditor:
         self._trigger_ui_update()
 
     def _on_text_modified_handler(self):
+        self._update_ui_job = None
         if self.text_area.edit_modified():
             self.text_area.edit_modified(False)
 
@@ -1548,39 +2164,88 @@ class HostsFileEditor:
         current_hash = self._hash_lines(self.get_lines())
         
         if self._last_applied_raw_hash is not None and current_hash == self._last_applied_raw_hash:
-            self.btn_save_raw.configure(style="ActionApplied.TButton")
+            self.btn_save_raw.configure(style="Saved.TButton")
         else:
-            self.btn_save_raw.configure(style="Action.TButton")
+            self.btn_save_raw.configure(style="Secondary.TButton")
 
         if self._last_applied_cleaned_hash is not None and current_hash == self._last_applied_cleaned_hash:
-            self.btn_save_cleaned.configure(style="ActionApplied.TButton")
+            self.btn_save_cleaned.configure(style="Saved.TButton")
         else:
             self.btn_save_cleaned.configure(style="Action.TButton")
+        self._refresh_mode_badges()
+
+    def _update_custom_source_summary(self):
+        if not hasattr(self, "custom_sources_summary_label"):
+            return
+
+        count = len(self.custom_sources)
+        if count == 0:
+            text = "0 saved sources ready for import."
+        elif count == 1:
+            text = "1 saved source ready for import."
+        else:
+            text = f"{count} saved sources ready for import."
+        self.custom_sources_summary_label.config(text=text)
+
+    def _update_manual_summary(self):
+        if not hasattr(self, "manual_summary_label"):
+            return
+
+        count = count_nonempty_lines(self.manual_text_area.get('1.0', tk.END))
+        mode = self.import_mode.get()
+        if count == 0:
+            text = "0 non-empty lines ready to append."
+        elif count == 1:
+            text = f"1 non-empty line ready to append in {mode} mode."
+        else:
+            text = f"{count} non-empty lines ready to append in {mode} mode."
+        self.manual_summary_label.config(text=text)
+
+    def _update_whitelist_summary(self):
+        if not hasattr(self, "whitelist_summary_label"):
+            return
+
+        count = len(self._get_whitelist_set())
+        dirty_suffix = " Unsaved changes are pending." if self._has_unsaved_whitelist_changes() else " Saved copy matches the editor."
+        if count == 1:
+            text = "1 whitelist entry." + dirty_suffix
+        else:
+            text = f"{count} whitelist entries." + dirty_suffix
+        self.whitelist_summary_label.config(text=text)
+
+    def _on_manual_modified(self, event=None):
+        if self.manual_text_area.edit_modified():
+            self.manual_text_area.edit_modified(False)
+            self._update_manual_summary()
 
 
     def load_file(self, is_initial_load=False):
         try:
             if os.path.exists(self.HOSTS_FILE_PATH):
                 if not is_initial_load and self._has_unsaved_changes():
-                    if not messagebox.askyesno("Reload Hosts File", "Discard unsaved editor changes and reload from disk?"):
+                    if not messagebox.askyesno("Reload From Disk", "Reload from disk and discard the current unsaved editor changes?", parent=self.root):
                         return
 
                 lines = read_text_file_lines(self.HOSTS_FILE_PATH)
-                
+
+                file_hash = self._hash_lines(lines)
+                self._last_applied_raw_hash, self._last_applied_cleaned_hash = resolve_saved_state_hashes(
+                    file_hash,
+                    self._last_applied_raw_hash,
+                    self._last_applied_cleaned_hash,
+                )
                 self.set_text(lines)
-                
-                if is_initial_load:
-                    file_hash = self._hash_lines(lines)
-                    self._last_applied_raw_hash = file_hash
-                    self._last_applied_cleaned_hash = None
-                    self._update_save_button_state()
-                    
+
                 self.update_status(f"Loaded hosts file: '{self.HOSTS_FILE_PATH}'")
             else:
+                if is_initial_load:
+                    self._last_applied_raw_hash = None
+                    self._last_applied_cleaned_hash = None
+                    self._update_save_button_state()
                 self.update_status("Hosts file not found.", is_error=True)
         except Exception as e:
             self.update_status(f"Error loading file: {e}", is_error=True)
-            messagebox.showerror("Error", f"Error loading file:\n{e}")
+            messagebox.showerror("Error", f"Error loading file:\n{e}", parent=self.root)
 
     # ----------------------------- Save Logic (Split) -----------------------------------
     
@@ -1589,7 +2254,7 @@ class HostsFileEditor:
         content = '\n'.join(lines)
         
         if self.dry_run_mode.get():
-            self.update_status(f"Dry-run: Would have saved Raw hosts file ({len(lines)} lines).")
+            self.update_status(f"Dry-run: Reviewed Raw Save for {len(lines)} line(s). No file write performed.")
             self.set_text(lines, update_hash=False, is_cleaned=False)
             return
 
@@ -1597,7 +2262,7 @@ class HostsFileEditor:
             return
         
         self.set_text(lines, update_hash=True, is_cleaned=False)
-        self.update_status(f"Saved Raw hosts file successfully ({len(lines)} lines).")
+        self.update_status(f"Success: Saved Raw hosts file ({len(lines)} line(s)).")
 
 
     def save_cleaned_file(self):
@@ -1606,12 +2271,13 @@ class HostsFileEditor:
         
         final_lines, stats = _get_canonical_cleaned_output_and_stats(original_lines, whitelist_set)
         total_discarded = stats["total_discarded"]
+        change_summary = summarize_clean_changes(total_discarded, stats["transformed"])
 
         def proceed_with_save(approved_lines):
             content = '\n'.join(approved_lines)
             
             if self.dry_run_mode.get():
-                self.update_status(f"Dry-run: Preview Applied to Editor. No disk write performed. Discarded: {total_discarded}, Transformed: {stats['transformed']}.")
+                self.update_status(f"Dry-run: Applied the cleaned preview to the editor only. No file write performed. {change_summary}")
                 self.set_text(approved_lines, update_hash=False, is_cleaned=True)
                 return
             
@@ -1619,10 +2285,18 @@ class HostsFileEditor:
                 return
             
             self.set_text(approved_lines, update_hash=True, is_cleaned=True)
-            self.update_status(f"Saved Cleaned hosts file successfully. Discarded: {total_discarded}, Transformed: {stats['transformed']}.")
+            self.update_status(f"Success: Saved Cleaned hosts file. {change_summary}")
             
         if original_lines != final_lines:
-            PreviewWindow(self, original_lines, final_lines, title="Preview: Final Changes (Cleaned, Normalized & Whitelisted)", on_apply_callback=proceed_with_save, stats=stats)
+            PreviewWindow(
+                self,
+                original_lines,
+                final_lines,
+                title="Preview: Final Changes (Cleaned, Normalized & Whitelisted)",
+                on_apply_callback=proceed_with_save,
+                stats=stats,
+                apply_label="Save Cleaned",
+            )
         else:
             content = '\n'.join(original_lines)
             if self.dry_run_mode.get():
@@ -1631,17 +2305,17 @@ class HostsFileEditor:
             if not self._execute_save(content, source_description="Cleaned Save (No Changes)"):
                 return
             self.set_text(original_lines, update_hash=True, is_cleaned=True)
-            self.update_status("Saved Cleaned successfully (No changes detected).")
+            self.update_status("Success: Saved Cleaned hosts file. No normalization changes were needed.")
 
 
     def _execute_save(self, content_to_save, source_description):
         if not self.is_admin:
-            messagebox.showerror("Error", f"{source_description} failed: Permission denied. Run as Administrator.")
+            messagebox.showerror("Error", f"{source_description} failed: Permission denied. Run as Administrator.", parent=self.root)
             self.update_status(f"{source_description} failed: Permission denied.", is_error=True)
             return False
 
         if not content_to_save.strip():
-            if not messagebox.askyesno("Confirm Empty Save", "Content is empty. Clear hosts file?"):
+            if not messagebox.askyesno("Save Empty Hosts File", "The editor is empty. Replace the current hosts file with an empty one?", parent=self.root):
                 return False
 
         backup_path = self.HOSTS_FILE_PATH + ".bak"
@@ -1649,7 +2323,7 @@ class HostsFileEditor:
             if os.path.exists(self.HOSTS_FILE_PATH):
                 shutil.copy2(self.HOSTS_FILE_PATH, backup_path)
         except Exception as e:
-            if not messagebox.askyesno("Backup Failed", f"Could not create backup.\nError: {e}\n\nSave anyway?"):
+            if not messagebox.askyesno("Backup Could Not Be Created", f"Could not create a backup before saving.\nError: {e}\n\nContinue anyway?", parent=self.root):
                 return False
 
         try:
@@ -1657,32 +2331,40 @@ class HostsFileEditor:
             return True
         except Exception as e:
             self.update_status(f"{source_description} error: {e}", is_error=True)
-            messagebox.showerror("Error", f"{source_description} error: {e}")
+            messagebox.showerror("Error", f"{source_description} error: {e}", parent=self.root)
             return False
 
     # ----------------------- Revert to Backup (Preview + Apply) ----------------
     def revert_to_backup(self):
         backup_path = self.HOSTS_FILE_PATH + ".bak"
         if not os.path.exists(backup_path):
-            self.update_status("No backup file found. Save once to create a backup.", is_error=True)
+            self.update_status("No backup is available yet. Save once to create one.", is_error=True)
             return
 
         try:
             current_lines = read_text_file_lines(self.HOSTS_FILE_PATH)
         except Exception as e:
             self.update_status(f"Error reading current hosts: {e}", is_error=True)
-            messagebox.showerror("Error", f"Error reading current hosts:\n{e}")
+            messagebox.showerror("Error", f"Error reading current hosts:\n{e}", parent=self.root)
             return
 
         try:
             backup_lines = read_text_file_lines(backup_path)
         except Exception as e:
             self.update_status(f"Error reading backup: {e}", is_error=True)
-            messagebox.showerror("Error", f"Error reading backup:\n{e}")
+            messagebox.showerror("Error", f"Error reading backup:\n{e}", parent=self.root)
             return
 
         def do_restore(approved_lines):
             try:
+                if self._has_unsaved_changes():
+                    if not messagebox.askyesno(
+                        "Discard Unsaved Changes",
+                        "Restoring from backup will replace your current unsaved editor content. Continue?",
+                        parent=self.root,
+                    ):
+                        return
+
                 if self.dry_run_mode.get():
                     self.update_status("Dry-run: Would have restored from backup.")
                     self.set_text(approved_lines, update_hash=False, is_cleaned=False)
@@ -1691,12 +2373,19 @@ class HostsFileEditor:
                 if not self._execute_save('\n'.join(approved_lines), source_description="Restore from Backup"):
                     return
                 self.set_text(approved_lines, update_hash=True, is_cleaned=False) 
-                self.update_status("Restored successfully from backup.")
+                self.update_status("Success: Restored the hosts file from backup.")
             except Exception as e:
                 self.update_status(f"Restore error: {e}", is_error=True)
-                messagebox.showerror("Error", f"Restore error: {e}")
+                messagebox.showerror("Error", f"Restore error: {e}", parent=self.root)
 
-        PreviewWindow(self, current_lines, backup_lines, title="Preview: Restore from Backup", on_apply_callback=do_restore)
+        PreviewWindow(
+            self,
+            current_lines,
+            backup_lines,
+            title="Preview: Restore from Backup",
+            on_apply_callback=do_restore,
+            apply_label="Restore Backup",
+        )
 
     # ----------------------------- Threaded Imports -----------------------------
     
@@ -1737,12 +2426,19 @@ class HostsFileEditor:
             self.start_import_worker(dialog.result)
 
     def start_import_worker(self, sources):
+        if not sources:
+             self.update_status("No import sources were selected.", is_error=True)
+             return
+
         if self.is_importing:
+             self.update_status("An import is already in progress.", is_error=True)
              return
              
         self.is_importing = True
         self.stop_import_flag.clear()
         self._set_import_controls_enabled(False)
+        self.stop_btn.configure(state="normal")
+        self._set_status_hint("Batch imports run sequentially. Stop waits for the current download step.")
         
         # UI Prep
         self.progress_bar.pack(side=tk.RIGHT, padx=10)
@@ -1751,14 +2447,36 @@ class HostsFileEditor:
         self.progress_bar['maximum'] = len(sources)
         
         mode = self.import_mode.get()
+        self.update_status(f"Preparing {len(sources)} source(s) for import in {mode} mode.")
         self.current_import_thread = threading.Thread(target=self._import_worker_thread, args=(sources, mode), daemon=True)
         self.current_import_thread.start()
         
         self.root.after(100, self._check_import_queue)
 
+    def _summarize_failure_messages(self, failure_messages, limit=6):
+        preview_lines = failure_messages[:limit]
+        summary = "\n".join(f"- {line}" for line in preview_lines)
+        remaining = len(failure_messages) - len(preview_lines)
+        if remaining > 0:
+            summary += f"\n- ...and {remaining} more"
+        return summary
+
+    def _finish_import_ui(self):
+        self.is_importing = False
+        self.current_import_thread = None
+        self.progress_bar.pack_forget()
+        self.stop_btn.pack_forget()
+        self.stop_btn.configure(state="normal")
+        self._set_import_controls_enabled(True)
+        self._set_status_hint()
+
     def cancel_import(self):
+        if not self.is_importing or self.stop_import_flag.is_set():
+            return
+
         self.stop_import_flag.set()
-        self.update_status("Stopping import...", is_error=True)
+        self.stop_btn.configure(state="disabled")
+        self.update_status("Warning: Stopping import after the current download step.", is_error=False)
 
     def _import_worker_thread(self, sources, mode):
         accumulated_lines = []
@@ -1784,8 +2502,16 @@ class HostsFileEditor:
                         response.read(),
                         response.headers.get("Content-Encoding", "")
                     )
-                
+                    if looks_like_html_document(raw_lines):
+                        raise ValueError("Received HTML instead of a hosts list.")
+                    if self.stop_import_flag.is_set():
+                        self.import_queue.put(("cancelled",))
+                        return
+                 
                 processed = self._apply_import_mode_filter(name, raw_lines, mode)
+                if self.stop_import_flag.is_set():
+                    self.import_queue.put(("cancelled",))
+                    return
                 accumulated_lines.extend(processed)
                 success_count += 1
                 
@@ -1805,7 +2531,7 @@ class HostsFileEditor:
                 if msg_type == "progress":
                     i, total, name = msg[1], msg[2], msg[3]
                     self.progress_bar['value'] = i + 1
-                    self.update_status(f"Importing {i+1}/{total}: {name}...")
+                    self.update_status(f"Importing source {i+1} of {total}: {name}...")
                 
                 elif msg_type == "log":
                     text, is_err = msg[1], msg[2]
@@ -1813,23 +2539,23 @@ class HostsFileEditor:
                     if is_err: self.update_status(text, is_error=True)
                 
                 elif msg_type == "cancelled":
-                    self.is_importing = False
-                    self.progress_bar.pack_forget()
-                    self.stop_btn.pack_forget()
-                    self._set_import_controls_enabled(True)
-                    self.update_status("Batch import cancelled by user.", is_error=True)
+                    self._finish_import_ui()
+                    self.update_status("Warning: Batch import cancelled.")
                     return # Stop checking
-                
+                 
                 elif msg_type == "done":
                     new_lines, total, success_count, failure_messages = msg[1], msg[2], msg[3], msg[4]
-                    self.is_importing = False
-                    self.progress_bar.pack_forget()
-                    self.stop_btn.pack_forget()
-                    self._set_import_controls_enabled(True)
-                    
+                    self._finish_import_ui()
+                     
                     if not new_lines:
                         if failure_messages:
                             self.update_status(f"Import finished with {len(failure_messages)} failed source(s) and no usable entries.", is_error=True)
+                            messagebox.showerror(
+                                "Import Failed",
+                                "No usable entries were imported.\n\nFailed sources:\n"
+                                f"{self._summarize_failure_messages(failure_messages)}",
+                                parent=self.root,
+                            )
                         else:
                             self.update_status("Import finished, but no usable data was retrieved.", is_error=True)
                     else:
@@ -1846,7 +2572,14 @@ class HostsFileEditor:
                         # This triggers the heavy lifting (stats calc) only once at the end
                         self.set_text(current_lines) 
                         failure_suffix = f" {len(failure_messages)} source(s) failed." if failure_messages else ""
-                        self.update_status(f"Batch import complete. Added {len(new_lines)} lines from {success_count}/{total} source(s).{failure_suffix}")
+                        self.update_status(f"Success: Imported {len(new_lines)} lines from {success_count}/{total} source(s).{failure_suffix}")
+                        if failure_messages:
+                            messagebox.showwarning(
+                                "Import Completed with Warnings",
+                                "Some sources could not be imported.\n\nFailed sources:\n"
+                                f"{self._summarize_failure_messages(failure_messages)}",
+                                parent=self.root,
+                            )
                     return # Stop checking
 
         except queue.Empty:
@@ -1878,14 +2611,14 @@ class HostsFileEditor:
                         extracted_domains.add(domain)
 
             if not extracted_domains:
-                self.update_status(f"No valid DNSBL domains found in '{filename}'.", is_error=True)
+                self.update_status(f"No blocked domains were detected in '{filename}'.", is_error=True)
                 return
 
             self.fetch_and_append_hosts(filename, lines_to_add=sorted(list(extracted_domains)))
 
         except Exception as e:
             self.update_status(f"Error importing log file: {e}", is_error=True)
-            messagebox.showerror("Import Error", f"An unexpected error occurred while processing the log file:\n{e}")
+            messagebox.showerror("Import Error", f"An unexpected error occurred while processing the log file:\n{e}", parent=self.root)
             
     def import_nextdns_log(self):
         filepath = self._choose_file(
@@ -1917,31 +2650,33 @@ class HostsFileEditor:
                     extracted_domains.add(domain)
 
             if not extracted_domains:
-                self.update_status(f"No blocked domains found in '{filename}'.", is_error=True)
+                self.update_status(f"No blocked domains were detected in '{filename}'.", is_error=True)
                 return
 
             self.fetch_and_append_hosts(f"NextDNS Log: {filename}", lines_to_add=sorted(list(extracted_domains)))
 
         except Exception as e:
             self.update_status(f"Error importing NextDNS log file: {e}", is_error=True)
-            messagebox.showerror("Import Error", f"An unexpected error occurred while processing the NextDNS log file:\n{e}")
+            messagebox.showerror("Import Error", f"An unexpected error occurred while processing the NextDNS log file:\n{e}", parent=self.root)
             
     def append_manual_list(self):
         content = self.manual_text_area.get('1.0', tk.END).strip()
         if not content:
-            self.update_status("Manual list is empty.", is_error=True)
+            self.update_status("Paste a manual list before appending it to the editor.", is_error=True)
             return
         
         lines = content.splitlines()
-        self.fetch_and_append_hosts("Manual List Input", lines_to_add=lines)
-        self.manual_text_area.delete('1.0', tk.END)
+        if self.fetch_and_append_hosts("Manual List Input", lines_to_add=lines):
+            self.manual_text_area.delete('1.0', tk.END)
+            self.manual_text_area.edit_modified(False)
+            self._update_manual_summary()
         
     def fetch_and_append_hosts(self, source_name, url=None, lines_to_add=None):
         # Compatibility wrapper for existing non-threaded logic (for manual/file imports)
         # For URL buttons, we redirect to start_single_import which is threaded.
         if url:
              self.start_single_import(source_name, url)
-             return
+             return True
 
         # Fallback for manual content (already in memory, no need to thread)
         import_mode = self.import_mode.get()
@@ -1949,32 +2684,51 @@ class HostsFileEditor:
             processed_lines = self._apply_import_mode_filter(source_name, lines_to_add, import_mode)
             if not processed_lines:
                 self.update_status(f"No usable entries were found in {source_name}.", is_error=True)
-                return
+                return False
             current_lines = self.get_lines()
             if current_lines and current_lines[-1].strip() != "":
                 current_lines.append("")
             current_lines.extend(processed_lines)
             self.set_text(current_lines)
-            self.update_status(f"Appended manual/file content from {source_name}.")
+            self.update_status(f"Success: Added entries from {source_name} to the editor.")
+            return True
+
+        return False
 
 
     # ------------------------- Custom Sources & UI ------------------------------
     def _clear_custom_source_widgets(self):
         children = self.custom_sources_frame.winfo_children()
-        if children and children[-1] == self.btn_add_custom:
-            widgets_to_destroy = children[:-1]
-        else:
-            widgets_to_destroy = [w for w in children if w != getattr(self, 'btn_add_custom', None)]
+        preserved_widgets = {
+            getattr(self, 'btn_add_custom', None),
+            getattr(self, 'custom_sources_help_label', None),
+            getattr(self, 'custom_sources_empty_label', None),
+        }
+        widgets_to_destroy = [widget for widget in children if widget not in preserved_widgets]
         
         for widget in widgets_to_destroy:
             widget.destroy()
             
         self._custom_source_widgets = {}
+        self.import_action_widgets = [item for item in self.import_action_widgets if item and item.winfo_exists()]
+
+    def _update_custom_source_empty_state(self):
+        if not hasattr(self, "custom_sources_empty_label"):
+            return
+
+        if self.custom_sources:
+            if self.custom_sources_empty_label.winfo_manager():
+                self.custom_sources_empty_label.pack_forget()
+        else:
+            if not self.custom_sources_empty_label.winfo_manager():
+                self.custom_sources_empty_label.pack(fill="x", padx=8, pady=(0, 6), before=self.btn_add_custom)
+        self._update_custom_source_summary()
 
     def _rebuild_custom_source_buttons(self):
         self._clear_custom_source_widgets()
         for source in self.custom_sources:
             self._create_custom_source_button(source['name'], source['url'])
+        self._update_custom_source_empty_state()
         self.btn_add_custom.pack_forget()
         self.btn_add_custom.pack(fill=tk.X, pady=2, side=tk.BOTTOM)
 
@@ -2005,33 +2759,68 @@ class HostsFileEditor:
 
 
     def show_add_source_dialog(self):
-        dialog = AddSourceDialog(self.root)
-        if dialog.result:
+        draft_name = ""
+        draft_url = ""
+
+        while True:
+            dialog = AddSourceDialog(self.root, initial_name=draft_name, initial_url=draft_url)
+            if not dialog.result:
+                return
+
             name, url = dialog.result
-            normalized_url = url.strip().rstrip('/').lower()
+            draft_name, draft_url = name, url
+            normalized_url = normalize_custom_source_url(url)
             if any(s['name'].lower() == name.lower() for s in self.custom_sources):
+                messagebox.showwarning("Duplicate Name", "A custom source with that name already exists. Choose a different label.", parent=self.root)
                 self.update_status("Error: Source name already exists.", is_error=True)
-                return
-            if any(s['url'].strip().rstrip('/').lower() == normalized_url for s in self.custom_sources):
+                continue
+            if any(normalize_custom_source_url(s['url']) == normalized_url for s in self.custom_sources):
+                messagebox.showwarning("Duplicate URL", "That custom source URL is already configured.", parent=self.root)
                 self.update_status("Error: Source URL already exists.", is_error=True)
-                return
+                continue
             source_data = {'name': name, 'url': url}
             self.custom_sources.append(source_data)
             self._create_custom_source_button(name, url)
+            self._update_custom_source_empty_state()
             self.update_status(f"Added custom source: {name}")
             self.save_config()
+            return
 
 
     def remove_custom_source(self, name, widget_frame):
+        if not messagebox.askyesno(
+            "Remove Custom Source",
+            f"Remove the custom source '{name}' from saved configuration?",
+            parent=self.root,
+        ):
+            return
+
         self.custom_sources = [s for s in self.custom_sources if s['name'] != name]
         if name in self._custom_source_widgets:
             widget_frame.destroy()
             del self._custom_source_widgets[name]
+        self._update_custom_source_empty_state()
         self.save_config()
         self.update_status(f"Removed custom source: {name}")
 
 
     # ----------------------- Whitelist & Filtering ----------------------------
+    def _get_current_whitelist_text(self):
+        return self.whitelist_text_area.get('1.0', tk.END).strip()
+
+    def _has_unsaved_whitelist_changes(self):
+        return self._get_current_whitelist_text() != self._last_saved_whitelist_text
+
+    def _confirm_whitelist_replacement(self, source_name: str):
+        if not self._has_unsaved_whitelist_changes():
+            return True
+
+        return messagebox.askyesno(
+            "Replace Whitelist",
+            f"You have unsaved whitelist edits. Replace them with content from {source_name}?",
+            parent=self.root,
+        )
+
     def load_whitelist_from_file(self):
         filepath = self._choose_file(
             title="Select Whitelist File",
@@ -2039,30 +2828,38 @@ class HostsFileEditor:
         )
         if not filepath:
             return
+        if not self._confirm_whitelist_replacement(f"'{os.path.basename(filepath)}'"):
+            return
         try:
             content = read_text_file_content(filepath)
             self.whitelist_text_area.delete('1.0', tk.END)
             self.whitelist_text_area.insert('1.0', content)
+            self._update_whitelist_summary()
             self.update_status(f"Loaded whitelist from '{os.path.basename(filepath)}'.")
             self._trigger_ui_update()
         except Exception as e:
-            messagebox.showerror("File Error", f"Could not load whitelist:\n{e}")
+            messagebox.showerror("File Error", f"Could not load whitelist:\n{e}", parent=self.root)
 
     def import_whitelist_from_web(self):
         url = "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/Whitelist.txt"
+        if not self._confirm_whitelist_replacement("the HOSTShield web feed"):
+            return
         self.update_status("Importing whitelist...")
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
             with urllib.request.urlopen(req, timeout=15) as response:
-                content = '\n'.join(
-                    decode_downloaded_lines(url, response.read(), response.headers.get("Content-Encoding", ""))
-                )
+                lines = decode_downloaded_lines(url, response.read(), response.headers.get("Content-Encoding", ""))
+                if looks_like_html_document(lines):
+                    raise ValueError("Received HTML instead of a whitelist.")
+                content = '\n'.join(lines)
             self.whitelist_text_area.delete('1.0', tk.END)
             self.whitelist_text_area.insert('1.0', content)
+            self._update_whitelist_summary()
             self.update_status("Imported whitelist from HOSTShield.")
             self._trigger_ui_update()
         except Exception as e:
             self.update_status(f"Could not fetch whitelist: {type(e).__name__}", is_error=True)
+            messagebox.showerror("Whitelist Import Error", f"Could not fetch whitelist:\n{e}", parent=self.root)
             
     def _get_whitelist_set(self):
         whitelist_content = self.whitelist_text_area.get('1.0', tk.END)
@@ -2077,7 +2874,7 @@ class HostsFileEditor:
                 whitelist.update(domain.lstrip('.') for domain in domains)
                 continue
 
-            domain, _ = _extract_domain_from_token(stripped)
+            domain, _ = _extract_domain_from_token(stripped, allow_single_label=True)
             if domain:
                 whitelist.add(domain.lstrip('.'))
 
@@ -2094,11 +2891,19 @@ class HostsFileEditor:
         if original != final_lines:
             def apply_to_editor(approved_lines):
                 self.set_text(approved_lines)
-                self.update_status(f"Success: Cleaned and normalized applied. {stats['total_discarded']} lines discarded.")
+                self.update_status(f"Success: Applied the cleaned version to the editor. {summarize_clean_changes(stats['total_discarded'], stats['transformed'])}")
 
-            PreviewWindow(self, original, final_lines, title="Preview: Clean", on_apply_callback=apply_to_editor, stats=stats)
+            PreviewWindow(
+                self,
+                original,
+                final_lines,
+                title="Preview: Clean",
+                on_apply_callback=apply_to_editor,
+                stats=stats,
+                apply_label="Apply Cleaned Version",
+            )
         else:
-            self.update_status(f"No changes to apply for 'Clean' (content is already clean).")
+            self.update_status("No clean-up changes were needed. The editor is already aligned.")
 
     def deduplicate(self):
         self.auto_clean()
@@ -2108,7 +2913,7 @@ class HostsFileEditor:
         try:
             if os.name == 'nt':
                 subprocess.run(['ipconfig', '/flushdns'], capture_output=True, check=True, creationflags=subprocess.CREATE_NO_WINDOW)
-                self.update_status("Successfully flushed DNS resolver cache.")
+                self.update_status("Success: Flushed the DNS resolver cache.")
             else:
                 self.update_status("Unsupported OS: DNS flushing is only available on Windows.", is_error=True)
         except Exception as e:
@@ -2116,11 +2921,13 @@ class HostsFileEditor:
             
     # ----------------------------- Emergency DNS Unlock -----------------
     def emergency_dns_stop(self):
-        if not messagebox.askyesno("Emergency Stop", 
-            "⚠ EMERGENCY UNLOCK ⚠\n\n"
-            "This will launch a brute-force script to KILL the DNS Client service and overwrite your hosts file with a blank one.\n\n"
-            "Use this ONLY if Windows is frozen (CPU 100%) because the hosts file is too large.\n\n"
-            "Proceed?"):
+        if not messagebox.askyesno(
+            "Emergency DNS Recovery",
+            "This launches a last-resort recovery script that force-stops the DNS Client service and overwrites the hosts file with a minimal safe copy.\n\n"
+            "Use it only if Windows is already locked up because the hosts file is too large or corrupted.\n\n"
+            "Continue?",
+            parent=self.root,
+        ):
             return
 
         bat_content = r"""
@@ -2191,7 +2998,7 @@ pause
             self.update_status("Launched Emergency Unlock script in new window.", is_error=False)
             
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to launch emergency script: {e}")
+            messagebox.showerror("Error", f"Failed to launch emergency script: {e}", parent=self.root)
 
 
     # ----------------------------- Editor Warnings -------------------------------------
@@ -2213,17 +3020,17 @@ pause
             if not stripped or _is_comment_line(stripped):
                 continue
 
-            normalized_entries, domains, transformed = normalize_line_to_hosts_entries(line)
+            parsed_entries, transformed = parse_hosts_line_entries(line)
 
-            if not normalized_entries:
+            if not parsed_entries:
                 self.text_area.tag_add("warning_discard", start_index, end_index)
                 continue
 
             discarded_from_line = False
             kept_from_line = 0
 
-            for normalized, domain in zip(normalized_entries, domains):
-                if domain in whitelist or domain.lstrip('.') in whitelist:
+            for normalized, domain, is_block_entry in parsed_entries:
+                if is_block_entry and (domain in whitelist or domain.lstrip('.') in whitelist):
                     discarded_from_line = True
                     continue
 
@@ -2299,6 +3106,43 @@ pause
             self.text_area.tag_add("search_current", pos, end)
             self.text_area.see(pos)
             self.update_status(f"Search match {self._search_index + 1} of {len(self._search_matches)}.")
+
+    def remove_matching_lines(self):
+        query = self.search_var.get().strip()
+        if not query:
+            self.update_status("Enter a search term before removing matches.", is_error=True)
+            return
+
+        current_lines = self.get_lines()
+        matching_indices = find_keyword_match_line_indices(current_lines, query)
+        if not matching_indices:
+            self.update_status(f"No removable entries found for '{query}'.", is_error=True)
+            return
+
+        dialog = MatchRemovalDialog(
+            self.root,
+            query,
+            [(line_index, current_lines[line_index]) for line_index in matching_indices],
+        )
+        self.root.wait_window(dialog)
+        if not dialog.result:
+            return
+
+        updated_lines = remove_lines_by_indices(current_lines, dialog.result)
+
+        def apply_to_editor(approved_lines):
+            self.set_text(approved_lines)
+            self.update_status(f"Removed {len(dialog.result)} matching line(s) for '{query}'.")
+
+        PreviewWindow(
+            self,
+            current_lines,
+            updated_lines,
+            title=f"Preview: Remove Matches for '{query}'",
+            on_apply_callback=apply_to_editor,
+            apply_label="Remove Selected",
+            cancel_label="Keep Remaining",
+        )
 
     def search_find(self):
         query = self.search_var.get().strip()

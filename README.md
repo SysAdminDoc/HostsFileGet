@@ -8,120 +8,141 @@
 </p>
 <!-- codex-branding:end -->
 
-# Hosts File Management Tool
+# Hosts File Get
 
-![License](https://img.shields.io/badge/license-MIT-green) ![Platform](https://img.shields.io/badge/platform-PowerShell-lightgrey)
+Hosts File Get is a Windows-first desktop tool for inspecting, cleaning, importing, and safely writing the system `hosts` file.
 
-A user-friendly desktop GUI application for cleaning, managing, and editing the Windows hosts file.  
-This tool is designed to simplify the process of maintaining large blocklists, importing domains from firewall logs, and ensuring your hosts file is clean and efficient.
+It is designed for people who work with large blocklists, external feed imports, local allowlists, and log-derived domains, without forcing them to hand-edit `C:\Windows\System32\drivers\etc\hosts`.
 
-<img width="1738" height="1086" alt="image" src="https://github.com/user-attachments/assets/238d474a-2e23-420d-b795-fd078a568b80" />
+## Highlights
 
----
+- Split save modes:
+  - `Save Raw` writes the editor exactly as-is
+  - `Save Cleaned` applies normalization, deduplication, and whitelist filtering first while preserving non-blocking custom IP mappings
+- Live impact stats:
+  - active entry count
+  - duplicate removals
+  - whitelist removals
+  - normalization count
+- Polished workspace:
+  - clearer save hierarchy with `Save Cleaned` as the safer primary action
+  - live session badges for admin state, editor state, import mode, and write mode
+  - live sidebar summaries for custom sources, pasted manual content, and whitelist state
+  - selection-aware import/removal dialogs plus calmer sidebar guidance and empty states
+- Safe write workflow:
+  - backup creation before save
+  - preview before cleaned writes
+  - dry-run mode for no-write validation
+  - unsaved-change prompts on reload and exit
+- Import pipeline:
+  - curated web blocklists
+  - batch import with filtering and progress
+  - custom persistent sources
+  - pfSense DNSBL log import
+  - NextDNS CSV import
+  - manual pasted list import
+- Search and cleanup:
+  - find / next / previous navigation
+  - remove matching entries with selection + preview
+- Operational utilities:
+  - DNS cache flush
+  - backup restore preview
+  - emergency DNS recovery helper
 
-## 🚀 Quick Install (PowerShell One-Liner)
+## Supported Input Shapes
 
-Paste this into an elevated PowerShell window:
+The cleaner/importer is more flexible than a plain hosts parser. It can normalize:
 
-<div class="position-relative">
-  <pre><code>irm "https://tinyurl.com/HostsFileGet" | iex</code></pre>
-</div>
+- standard hosts lines like `0.0.0.0 example.com`
+- bare domains like `example.com`
+- wildcard domains like `*.example.com`
+- URL-style entries like `https://example.com/path`
+- adblock-style rules like `||tracker.example^`
+- dnsmasq-style rules like `address=/telemetry.example/0.0.0.0`
 
-## Features
+## Requirements
 
-### Graphical User Interface
-Easily view and edit your entire hosts file in a simple text editor.
+- Windows
+- Python 3.x
+- Administrator privileges for real hosts-file writes
 
-### Intelligent Cleaning
-A powerful **Clean** function that automatically:
-- Removes all comments and empty lines.
-- Standardizes all entries to the `0.0.0.0 domain.com` format.
-- Fixes malformed entries (e.g., `127.0.0.1`, typos, missing IPs).
-- Strips wildcard prefixes (`*.`) from domains.
-- Removes all duplicate entries (case-insensitive).
-- Sorts the final list alphabetically.
+The app can still be useful without elevation in dry-run mode, but raw/cleaned saves to the system hosts file require admin rights.
 
-### pfSense Log Importer
-Directly import `dnsbl.log` files from a pfSense firewall to quickly add blocked domains to your hosts file.
+## Quick Launch
 
-### Interactive Keyword Removal
-Search for entries containing a specific keyword (e.g., `"tiktok"`) and choose exactly which ones to remove from an interactive list.
+### Option 1: Launcher script
 
-### DNS Flushing
-A one-click button to flush the Windows DNS cache (`ipconfig /flushdns`), making your changes take effect immediately.
+Run the launcher from an elevated PowerShell session:
 
-### Safety First
-- Automatically creates a backup (`hosts.txt`) in the same directory before every save.
-- Warns if not run as an administrator.
-- Asks for confirmation before saving an empty file or overwriting unsaved changes.
+```powershell
+.\PythonLauncher.ps1
+```
 
----
+The launcher will:
 
-## Prerequisites
+- ensure `winget` is available
+- reuse an existing Python 3 runtime when possible
+- install Python only if needed
+- refresh the cached `hosts_editor.py` when the download succeeds
+- fall back to the last valid cached editor copy if the network refresh fails
+- launch the editor
 
-- **Python 3.x**: You must have Python installed on your system.  
-  You can download it from [python.org](https://www.python.org/).
+### Option 2: Run directly
 
----
+```powershell
+python hosts_editor.py
+```
 
-## How to Run
+If you are not already elevated, the app will attempt to relaunch with Administrator privileges. If elevation is declined, it can still open in a read-only / dry-run-friendly state.
 
-The easiest way to use this tool is with the automated launcher script. It will handle the entire setup process for you.
+## Main Workflow
 
-Download the Launcher:
+1. Launch the app as Administrator if you plan to write the real hosts file.
+2. Import sources, paste entries, or edit directly in the main editor.
+3. Maintain a persistent whitelist in the sidebar.
+4. Review live warning stats and previews.
+5. Choose `Save Raw` or `Save Cleaned` depending on intent.
+6. Flush DNS if you want the OS cache updated immediately.
 
-1. Download and launch "PythonLauncher.ps1"
+## Search and Removal
 
-2. Run the Launcher: Right-click the PythonLauncher.ps1 file.
+The search box is both a navigator and a cleanup tool.
 
-3. Select "Run with PowerShell".
+- `Find`, `Prev`, and `Next` move through matches
+- `Remove` opens a selection dialog for matching non-comment entries
+- removal is previewed before being applied
 
-The script will automatically request administrator permissions, install Python if needed, download the latest version of the tool, and launch it.
+Keyboard shortcuts:
 
-Because this tool modifies a system file, it must be run **with administrator privileges**.
+- `Ctrl+F` focus search
+- `Ctrl+S` save cleaned
+- `Ctrl+Shift+S` save raw
+- `F5` refresh from disk
 
-If you already have Python installed:
+## Safety Notes
 
-1. **Save the Script:**  
-   Save the `hosts_editor.py` file to a location on your computer (e.g., your Desktop).
+- `Save Cleaned` always shows a preview when it would change the file.
+- Empty saves require confirmation.
+- Reloading from disk prompts before discarding unsaved editor changes.
+- Restoring from backup is previewed before writing.
+- The emergency recovery action is intentionally destructive and should be treated as a last resort.
 
-2. **Open as Administrator:**  
-   - Click the Start Menu, type `cmd` or `powershell`.  
-   - Right-click the application and select **“Run as administrator”**.
+## Tests
 
-3. **Navigate to Directory:**  
-   In the administrator command window, use the `cd` command to navigate to the folder where you saved the script.
+Run the regression suite with:
 
-   Example if you saved it to your desktop:
+```powershell
+python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py
+python -m unittest discover -s tests -v
+```
 
-4. **Execute the Script:**  
-Run the tool by typing the following command and pressing Enter:
+## Repository Notes
 
+- Main application: `hosts_editor.py`
+- Launcher: `PythonLauncher.ps1`
+- Regression tests: `tests/test_hosts_editor_logic.py`
+- Codex handoff notes: `CODEX_CHANGELOG.md`
 
----
+## License
 
-## How to Use the Tool
-
-### Main Controls
-- **Save Changes:** Overwrites the system hosts file with the content in the editor. Creates a backup first.  
-- **Refresh:** Reloads the hosts file from disk. It will warn you if you have unsaved changes.  
-- **Import pfSense Log:** Opens a file dialog to select a `.log` file. It extracts unique domains from the log and appends them to the editor for cleaning.
-
-### Cleaning & Utilities
-- **Clean:** The main all-in-one function. It applies all cleaning and formatting rules to the entire file. A preview window will show you all proposed changes.  
-- **Deduplicate:** A simpler function that only removes duplicate entries without changing formatting or removing comments.  
-- **Flush DNS:** Immediately clears your system's DNS cache.
-
-### Search & Remove
-1. **Enter Keyword:** Type a keyword (e.g., `facebook`, `google`) into the text box.  
-2. **Click "Remove":** A new window will appear, listing only the entries that contain your keyword.  
-3. **Select Entries:** By default, all found entries are checked for removal. Uncheck any you wish to keep.  
-4. **Confirm Removal:** Click the **"Confirm Removal"** button to delete only the checked entries from the main editor.
-
----
-
-## Notes
-
-This tool is designed for Windows environments and should be run with administrator rights to modify the system hosts file safely. Always back up your hosts file before making changes if using it outside this application.
-
----
+MIT
