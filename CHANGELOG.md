@@ -2,6 +2,84 @@
 
 All notable changes to HostsFileGet will be documented in this file.
 
+## [v2.14.0] - 2026-04-17
+
+**Onboarding & preferences**
+- Added **first-run wizard** — on the very first launch, a category picker (Ads & Tracking / Malware & Phishing / Windows Telemetry / Adult / Gambling / Social) offers a curated starter import. Existing installs skip the wizard automatically (detected via whitelist or custom-source presence).
+- Added **Tools → Preferences…** — configure timestamped backup retention (0–50, default 5) and the default block-sink IP (`0.0.0.0`, `127.0.0.1`, `::`, `::1`). Saved to the persistent config.
+
+**Editor polish**
+- Added **syntax highlighting** on the editor pane: loopback IPs render in the accent blue, comments in a muted overlay gray, and `# --- Import Start/End ---` markers get the lavender accent. Tag-only coloring (no background) so warning overlays (red/yellow) still read.
+
+**Discovery**
+- Added **Tools → Goto Anything…** (bound to **Ctrl+P**). Fuzzy-finder over every domain in the editor plus every curated and custom source name. Enter jumps the cursor to the matching line; selecting a source prefilters the catalog sidebar.
+- Added **Tools → Sources Report…** — per-import-section table ranked by blocking-entry contribution, with line totals and percent share. Surfaces bloated or redundant feeds.
+
+**Automation**
+- Added **Tools → Schedule Auto-Update…** — Windows Task Scheduler wizard that registers `schtasks /Create /TN "HostsFileGet Auto-Update" /TR '... --update' /SC {DAILY|WEEKLY|ONLOGON} /RL HIGHEST`. "Remove Schedule" unregisters the task.
+
+**Tests**
+- 5 new pure-function tests for `fuzzy_score`, `summarize_source_contributions`, and the new config knobs (`backup_retention`, `has_completed_first_run`). Suite: 66 tests total (was 61).
+
+## [v2.13.0] - 2026-04-17
+
+**Recovery & panic paths**
+- Added **File → Panic Restore (Microsoft default)** — one-click load of the stock Windows hosts template into the editor. Distinct from "Revert to Backup": works even when every snapshot is also broken.
+
+**Targeted cleanup**
+- Added **Tools → Targeted Cleanup** cascade with previewed, single-category removals: *Remove Comments Only*, *Remove Blank Lines Only*, *Remove Invalid Lines Only*. Each shows a preview diff before applying.
+- Added **Tools → Targeted Cleanup → Remove Import Section…** — lists every detected `# --- Raw|Normalized Import Start/End: NAME ---` block in the editor with a checkbox, bulk-delete with preview. Useful for rolling back a single source without wiping all imports.
+
+**Editor polish**
+- New **line-number gutter** on the editor pane. Tracks viewport scroll and redraws lazily on idle; no measurable latency impact on 100K-line files.
+- Context menu gains **Resolve domain (real DNS)** and **Ping domain** entries — resolve bypasses the hosts file via `socket.getaddrinfo`; ping runs in a background thread so the UI stays responsive.
+
+**Automation**
+- New **`--update`** CLI flag: re-fetches every source the GUI has fetched before, applies a Cleaned Save of the merged result, and refreshes the per-source `last_fetched` stamps. Ready for `schtasks` / Task Scheduler jobs.
+
+**Portable mode**
+- If `hosts_editor_config.json` exists next to the exe/script, HostsFileGet uses it instead of `%LOCALAPPDATA%`. Lets USB-stick deployments and team-shared configs roam with the binary. **Help → Open Config Folder** honors portable mode too.
+
+**Tests**
+- Added 6 new pure-function regression tests covering `strip_lines_by_category`, `discover_import_sections`, `remove_import_section`, and the `STOCK_MICROSOFT_HOSTS` template. Suite: 61 tests total (was 55).
+
+## [v2.12.0] - 2026-04-17
+
+**Hosts-file control**
+- Added **File → Disable / Enable Hosts**. Disable swaps the live hosts file for a minimal Microsoft-default template and stashes the current file as `hosts.disabled`; re-enable swaps them back. A one-click kill switch for blocklist troubleshooting (SwitchHosts / HostsMan parity).
+- Added **Tools → Convert Block IPs** (`0.0.0.0` / `127.0.0.1` / `::`) with preview — rewrites every loopback-style blocking entry to the chosen sink. Custom LAN mappings (e.g. `192.168.1.10 printer`) are preserved.
+- Save flow now keeps the last `N=5` timestamped backups (`hosts.YYYYMMDD-HHMMSS.bak`) alongside the rolling `hosts.bak`. Old snapshots are pruned oldest-first.
+
+**Diagnostics & insight**
+- Added **Tools → Check Domain…** — cross-reference a domain against the current editor, the whitelist, and any curated sources fetched this session; shows every line blocking it plus every source list containing it.
+- Added **Tools → Hosts Health Scan…** — flags every entry whose IP is not loopback *and* not a private LAN range. These are the classic malware-hijack indicator (e.g. `1.2.3.4 www.google.com`).
+- Source catalog now shows **Last fetched: 3 hours ago** in each button's tooltip, persisted in config.
+
+**Imports & catalog**
+- Added **Peek** button next to every curated source — fetches the first ~80 lines into a preview popup so you can eyeball a feed's format and health without committing to an import.
+- Curated source catalog expanded by **56 verified-live sources** (HTTP 200 confirmed 2026-04):
+  - **Major/Unified**: HaGezi Pro / Pro Plus / Multi / Light, 1Hosts Lite/Pro/Xtra, hBlock Aggregate, Ultimate Hosts Blacklist, BlockConvert Aggregate, NeoDev Host
+  - **Ads/Tracking**: ShadowWhisperer Ads/Tracking, Lightswitch05 AMP/FB/Aggressive, GoodbyeAds, AdGuard Mobile (ads + spyware), CombinedPrivacyBlockLists, MobileAdTrackers, DandelionSprout URL Shorteners, BlocklistProject Tracking
+  - **Telemetry**: WindowsSpyBlocker Extra + Update, jmdugan Microsoft + Facebook, Perflyst Session Replay
+  - **Malware/Phishing**: ShadowWhisperer Malware + Scam, ThreatFox, CERT.pl, Phishing Army Extended, Durable Napkin Scam, GlobalAntiScamOrg, Inversion DNS, Curbengh Phishing, CoinBlockerLists + Browser subset, BlocklistProject Fraud + Ransomware
+  - **New Category Filters group**: BlocklistProject Gambling/Porn, Sinfonietta Porn/Social/Gambling, Tiuxo Porn/Social, RPiList Gambling/Fake-Science
+  - **Regional**: MajkiIT Polish Adservers, Cats-Team AdRules (CN), Schakal (RU)
+  - **Vendor/Platform**: Perflyst Vivo + Samsung Smart, llacb47 Smart TV + LG WebOS + Disney
+
+**Editor UX**
+- Right-click menu in the editor pane: Whitelist this domain, Copy domain, Toggle comment on selection, Remove this line, Check this domain.
+- **Ctrl+/** toggles comment (`# `) on the current line or selection.
+- Pure parsing functions remain GUI-free and continue to grow the regression test suite (now **55 tests**, up from 42).
+
+**Export**
+- Added **File → Export Cleaned As…** — save the Cleaned Save output in five formats: hosts, domains-only, adblock (`||domain^`), dnsmasq (`address=/domain/0.0.0.0`), pi-hole gravity.
+
+**Automation / CLI**
+- New CLI entry points: `--version`, `--disable`, `--enable`, `--backup`, `--apply PATH`. Skipping the GUI is now a first-class workflow for Task Scheduler and scripts. Admin-required actions exit with a clear message when not elevated.
+
+**Documentation**
+- Added `ROADMAP.md` — living plan of shipped, in-progress, backlog, and research items organized across ~25 themes (safety, imports, UX, diagnostics, profiles, automation, integration, security/forensics, platform, performance).
+
 ## [v2.11.0] - 2026-04-16
 
 **Correctness & safety**
