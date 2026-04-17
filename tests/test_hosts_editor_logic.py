@@ -7,11 +7,15 @@ import threading
 import unittest
 from unittest import mock
 
+import datetime
+
 import hosts_editor
 from hosts_editor import (
+    BLOCK_SINK_IPS,
     HostsFileEditor,
     IPV4_REGEX,
     MAX_DOWNLOAD_BYTES,
+    STOCK_MICROSOFT_HOSTS,
     _default_hosts_file_path,
     _get_canonical_cleaned_output_and_stats,
     _looks_like_ip_token,
@@ -19,17 +23,27 @@ from hosts_editor import (
     compute_clean_impact_stats,
     decode_text_bytes,
     decode_downloaded_lines,
+    discover_import_sections,
+    fuzzy_score,
+    summarize_source_contributions,
+    export_lines_as_format,
     find_keyword_match_line_indices,
+    find_sources_containing_domain,
+    format_relative_time,
     looks_like_domain,
     looks_like_html_document,
     normalize_line_to_hosts_entries,
     normalize_custom_source_url,
     read_http_body_limited,
     read_text_file_lines,
+    remove_import_section,
     remove_lines_by_indices,
     resolve_saved_state_hashes,
+    rewrite_block_sink_ip,
     sanitize_config_snapshot,
     sanitize_custom_sources,
+    scan_suspicious_redirects,
+    strip_lines_by_category,
     summarize_clean_changes,
     write_text_file_atomic,
 )
@@ -646,6 +660,279 @@ class HostsEditorLogicTests(unittest.TestCase):
         )
         self.assertEqual(result[0], "# --- Raw Import Start: Malicious Name injected ---")
         self.assertEqual(result[-1], "# --- Raw Import End: Malicious Name injected ---")
+
+    # ---- rewrite_block_sink_ip ----
+    def test_rewrite_block_sink_ip_converts_loopback_sinks(self):
+        lines = [
+            "0.0.0.0 ads.example",
+            "127.0.0.1 tracker.example",
+            ":: dns-over-https.example",
+            "::1 analytics.example",
+            "192.168.1.10 printer",  # custom LAN mapping must be preserved
+            "# comment untouched",
+            "",
+        ]
+        rewritten, changed = rewrite_block_sink_ip(lines, "0.0.0.0")
+        self.assertEqual(changed, 3)
+        self.assertEqual(rewritten[0], "0.0.0.0 ads.example")
+        self.assertEqual(rewritten[1], "0.0.0.0 tracker.example")
+        self.assertEqual(rewritten[2], "0.0.0.0 dns-over-https.example")
+        self.assertEqual(rewritten[3], "0.0.0.0 analytics.example")
+        self.assertEqual(rewritten[4], "192.168.1.10 printer")
+        self.assertEqual(rewritten[5], "# comment untouched")
+
+    def test_rewrite_block_sink_ip_no_change_when_already_target(self):
+        lines = ["0.0.0.0 ads.example", "0.0.0.0 tracker.example"]
+        rewritten, changed = rewrite_block_sink_ip(lines, "0.0.0.0")
+        self.assertEqual(changed, 0)
+        self.assertEqual(rewritten, lines)
+
+    def test_rewrite_block_sink_ip_rejects_unsupported_target(self):
+        with self.assertRaises(ValueError):
+            rewrite_block_sink_ip(["0.0.0.0 x.example"], "1.2.3.4")
+
+    # ---- scan_suspicious_redirects ----
+    def test_scan_suspicious_redirects_flags_non_loopback_mappings(self):
+        lines = [
+            "0.0.0.0 ads.example",                 # loopback block, ignored
+            "192.168.1.10 printer",                # private LAN, ignored
+            "10.0.0.5 nas.local",                  # private LAN, ignored
+            "172.20.1.1 dev.local",                # RFC1918 middle of 172.16/12, ignored
+            "172.32.1.1 fake.example",             # OUTSIDE 172.16/12, should flag
+            "8.8.8.8 www.google.com",              # hijack, should flag
+            "# 1.2.3.4 commented.example",         # comment, ignored
+        ]
+        findings = scan_suspicious_redirects(lines)
+        flagged_domains = {domain for _, _, domain in findings}
+        self.assertIn("fake.example", flagged_domains)
+        self.assertIn("www.google.com", flagged_domains)
+        self.assertNotIn("ads.example", flagged_domains)
+        self.assertNotIn("printer", flagged_domains)
+        self.assertNotIn("nas.local", flagged_domains)
+        self.assertNotIn("dev.local", flagged_domains)
+
+    # ---- export_lines_as_format ----
+    def test_export_lines_as_format_hosts_roundtrips(self):
+        lines = ["0.0.0.0 ads.example", "# comment", "0.0.0.0 tracker.example"]
+        self.assertEqual(export_lines_as_format(lines, "hosts"), '\n'.join(lines))
+
+    def test_export_lines_as_format_deduplicates_domains(self):
+        lines = [
+            "0.0.0.0 ads.example",
+            "0.0.0.0 tracker.example",
+            "0.0.0.0 ads.example",  # dup
+            "192.168.1.10 printer",  # not a block entry
+        ]
+        domains_only = export_lines_as_format(lines, "domains")
+        self.assertEqual(domains_only.splitlines(), ["ads.example", "tracker.example"])
+        self.assertEqual(
+            export_lines_as_format(lines, "adblock").splitlines(),
+            ["||ads.example^", "||tracker.example^"],
+        )
+        self.assertEqual(
+            export_lines_as_format(lines, "dnsmasq").splitlines(),
+            ["address=/ads.example/0.0.0.0", "address=/tracker.example/0.0.0.0"],
+        )
+
+    def test_export_lines_as_format_rejects_unknown_format(self):
+        with self.assertRaises(ValueError):
+            export_lines_as_format(["0.0.0.0 x.example"], "yaml")
+
+    # ---- find_sources_containing_domain ----
+    def test_find_sources_containing_domain_matches_subdomain_suffix(self):
+        corpus = {
+            "SourceA": "0.0.0.0 ads.example\n0.0.0.0 notexample.com\n",
+            "SourceB": "||tracker.example^\n||another.host^\n",
+            "SourceC": "0.0.0.0 www.example\n",
+            "SourceD": "nothing interesting here",
+        }
+        matches = find_sources_containing_domain("example", corpus)
+        # Word-boundary semantics: bare 'example' appears as suffix inside
+        # ads.example, tracker.example, www.example — not notexample.com.
+        self.assertIn("SourceA", matches)
+        self.assertIn("SourceB", matches)
+        self.assertIn("SourceC", matches)
+        self.assertNotIn("SourceD", matches)
+
+    def test_find_sources_containing_domain_empty_query(self):
+        self.assertEqual(find_sources_containing_domain("", {"X": "foo"}), [])
+
+    # ---- format_relative_time ----
+    def test_format_relative_time_buckets(self):
+        now = datetime.datetime(2026, 4, 17, 12, 0, 0)
+        stamp = (now - datetime.timedelta(seconds=30)).isoformat(timespec='seconds')
+        self.assertEqual(format_relative_time(stamp, now.timestamp()), "just now")
+
+        stamp_hours = (now - datetime.timedelta(hours=2)).isoformat(timespec='seconds')
+        result = format_relative_time(stamp_hours, now.timestamp())
+        self.assertTrue(result.endswith("hours ago"), result)
+
+        stamp_days = (now - datetime.timedelta(days=3)).isoformat(timespec='seconds')
+        result = format_relative_time(stamp_days, now.timestamp())
+        self.assertTrue(result.endswith("days ago"), result)
+
+        self.assertEqual(format_relative_time("not-a-timestamp"), "")
+        self.assertEqual(format_relative_time(""), "")
+
+    # ---- sanitize_config_snapshot: new v2.12 fields ----
+    def test_sanitize_config_snapshot_keeps_valid_source_last_fetched(self):
+        config = {
+            "source_last_fetched": {
+                "https://example.com/hosts.txt": "2026-04-17T12:00:00",
+                "not-a-url": "2026-04-17T12:00:00",  # rejected
+                "https://evil.example/h.txt": "not-a-timestamp",  # rejected
+            },
+            "preferred_block_sink": "127.0.0.1",
+        }
+        sanitized = sanitize_config_snapshot(config, os.path.expanduser("~"))
+        self.assertEqual(
+            sanitized["source_last_fetched"],
+            {"https://example.com/hosts.txt": "2026-04-17T12:00:00"},
+        )
+        self.assertEqual(sanitized["preferred_block_sink"], "127.0.0.1")
+
+    def test_sanitize_config_snapshot_rejects_unknown_block_sink(self):
+        sanitized = sanitize_config_snapshot(
+            {"preferred_block_sink": "8.8.8.8"}, os.path.expanduser("~")
+        )
+        self.assertEqual(sanitized["preferred_block_sink"], "0.0.0.0")
+
+    def test_block_sink_ips_constant_includes_expected(self):
+        self.assertIn("0.0.0.0", BLOCK_SINK_IPS)
+        self.assertIn("127.0.0.1", BLOCK_SINK_IPS)
+        self.assertIn("::", BLOCK_SINK_IPS)
+        self.assertIn("::1", BLOCK_SINK_IPS)
+
+    # ---- strip_lines_by_category (v2.13) ----
+    def test_strip_lines_by_category_drops_only_selected_categories(self):
+        lines = [
+            "# comment",
+            "",
+            "0.0.0.0 ads.example",
+            "garbage text no ip",
+            "  ",
+            "# another",
+            "0.0.0.0 tracker.example",
+        ]
+        result, stats = strip_lines_by_category(lines, drop_comments=True)
+        self.assertEqual(stats["removed_comments"], 2)
+        self.assertEqual(stats["removed_blanks"], 0)
+        self.assertEqual(stats["removed_invalid"], 0)
+        self.assertNotIn("# comment", result)
+        self.assertIn("0.0.0.0 ads.example", result)
+        self.assertIn("garbage text no ip", result)  # invalid kept
+
+        result, stats = strip_lines_by_category(lines, drop_blanks=True)
+        self.assertEqual(stats["removed_blanks"], 2)
+        # Comments kept, invalid kept.
+        self.assertIn("# comment", result)
+        self.assertIn("garbage text no ip", result)
+
+        result, stats = strip_lines_by_category(lines, drop_invalid=True)
+        self.assertEqual(stats["removed_invalid"], 1)
+        self.assertNotIn("garbage text no ip", result)
+        self.assertIn("# comment", result)
+
+    def test_strip_lines_by_category_noop_is_idempotent(self):
+        lines = ["0.0.0.0 ads.example", "0.0.0.0 tracker.example"]
+        result, stats = strip_lines_by_category(lines)
+        self.assertEqual(result, lines)
+        self.assertEqual(stats, {"removed_comments": 0, "removed_blanks": 0, "removed_invalid": 0})
+
+    # ---- discover_import_sections / remove_import_section (v2.13) ----
+    def test_discover_import_sections_pairs_markers(self):
+        lines = [
+            "0.0.0.0 before.example",
+            "# --- Normalized Import Start: OISD Full ---",
+            "0.0.0.0 a.example",
+            "0.0.0.0 b.example",
+            "# --- Normalized Import End: OISD Full ---",
+            "",
+            "# --- Raw Import Start: MyCustom ---",
+            "0.0.0.0 c.example",
+            "# --- Raw Import End: MyCustom ---",
+            "0.0.0.0 after.example",
+        ]
+        sections = discover_import_sections(lines)
+        self.assertEqual(len(sections), 2)
+        self.assertEqual(sections[0]["name"], "OISD Full")
+        self.assertEqual(sections[0]["mode"], "Normalized")
+        self.assertEqual(sections[0]["start"], 1)
+        self.assertEqual(sections[0]["end"], 4)
+        self.assertEqual(sections[1]["name"], "MyCustom")
+        self.assertEqual(sections[1]["mode"], "Raw")
+
+    def test_discover_import_sections_ignores_unmatched_start(self):
+        lines = [
+            "# --- Raw Import Start: Orphan ---",
+            "0.0.0.0 x.example",
+        ]
+        self.assertEqual(discover_import_sections(lines), [])
+
+    def test_remove_import_section_removes_inclusive_range(self):
+        lines = [
+            "0.0.0.0 before.example",
+            "# --- Normalized Import Start: Foo ---",
+            "0.0.0.0 a.example",
+            "# --- Normalized Import End: Foo ---",
+            "0.0.0.0 after.example",
+        ]
+        sections = discover_import_sections(lines)
+        trimmed = remove_import_section(lines, sections[0])
+        self.assertEqual(trimmed, ["0.0.0.0 before.example", "0.0.0.0 after.example"])
+
+    def test_stock_microsoft_hosts_contains_localhost(self):
+        self.assertIn("127.0.0.1", STOCK_MICROSOFT_HOSTS)
+        self.assertIn("::1", STOCK_MICROSOFT_HOSTS)
+
+    # ---- fuzzy_score (v2.14) ----
+    def test_fuzzy_score_requires_ordered_subsequence(self):
+        self.assertGreaterEqual(fuzzy_score("abc", "aabbcc"), 0)
+        self.assertEqual(fuzzy_score("abc", "cba"), -1)
+        self.assertEqual(fuzzy_score("", "anything"), 0)
+
+    def test_fuzzy_score_prefers_prefix_and_consecutive_matches(self):
+        prefix = fuzzy_score("tra", "tracker.example")
+        middle = fuzzy_score("tra", "fastracker.example")
+        self.assertGreater(prefix, middle)
+
+    # ---- summarize_source_contributions (v2.14) ----
+    def test_summarize_source_contributions_ranks_blocking_entries(self):
+        lines = [
+            "0.0.0.0 manual.example",                      # outside, 1 block
+            "# --- Normalized Import Start: BigSource ---",
+            "0.0.0.0 a.example",
+            "0.0.0.0 b.example",
+            "0.0.0.0 c.example",
+            "# --- Normalized Import End: BigSource ---",
+            "# --- Normalized Import Start: SmallSource ---",
+            "0.0.0.0 x.example",
+            "# --- Normalized Import End: SmallSource ---",
+        ]
+        report = summarize_source_contributions(lines)
+        # Sorted desc by blocking_entries
+        names = [b["name"] for b in report]
+        self.assertEqual(names[0], "BigSource [Normalized]")
+        self.assertIn("SmallSource [Normalized]", names)
+        self.assertIn("(outside imports / manual edits)", names)
+        big = next(b for b in report if b["name"] == "BigSource [Normalized]")
+        self.assertEqual(big["blocking_entries"], 3)
+
+    # ---- sanitize_config_snapshot: backup_retention + first_run ----
+    def test_sanitize_config_snapshot_clamps_backup_retention(self):
+        s = sanitize_config_snapshot({"backup_retention": 9999}, os.path.expanduser("~"))
+        self.assertEqual(s["backup_retention"], 50)
+        s = sanitize_config_snapshot({"backup_retention": -5}, os.path.expanduser("~"))
+        self.assertEqual(s["backup_retention"], 0)
+        s = sanitize_config_snapshot({"backup_retention": "garbage"}, os.path.expanduser("~"))
+        # fallback to default
+        self.assertEqual(s["backup_retention"], 5)
+
+    def test_sanitize_config_snapshot_tracks_first_run_flag(self):
+        s = sanitize_config_snapshot({"has_completed_first_run": True}, os.path.expanduser("~"))
+        self.assertTrue(s["has_completed_first_run"])
+        s = sanitize_config_snapshot({}, os.path.expanduser("~"))
+        self.assertFalse(s["has_completed_first_run"])
 
 
 if __name__ == "__main__":

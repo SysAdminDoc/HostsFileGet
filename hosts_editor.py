@@ -23,10 +23,13 @@ import threading
 import queue
 import gzip
 import bz2
+import datetime
+import argparse
+import glob
 
 APP_NAME = "Hosts File Get"
 APP_SLUG = "HostsFileGet"
-APP_VERSION = "2.11.0"
+APP_VERSION = "2.14.0"
 ELEVATION_ATTEMPT_FLAG = "--hostsfileget-elevation-attempted"
 
 # Hard cap for any single downloaded feed/whitelist payload (50 MB decompressed).
@@ -38,6 +41,22 @@ MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
 # (200K+ lines) ndiff can hang the UI for many seconds. Above this threshold
 # we switch to a cheaper, non-character-aligned unified diff for the preview.
 NDIFF_LINE_LIMIT = 10_000
+
+# Number of timestamped backup snapshots to retain alongside the rolling
+# ``hosts.bak`` latest-copy. Older ones are pruned oldest-first.
+BACKUP_RETENTION = 5
+
+# Cap for a "preview source" pre-fetch. We only need a few dozen lines to let
+# a user decide whether to import the whole feed, so a small cap keeps the
+# popup snappy and avoids burning bandwidth for a feature that's purely
+# advisory.
+SOURCE_PREVIEW_MAX_BYTES = 96 * 1024
+SOURCE_PREVIEW_MAX_LINES = 80
+
+# Loopback / block-style IPs that the "change block target" tool treats as
+# equivalent and will rewrite to the user's chosen sink. :: is the IPv6 null
+# address used by some DoH-aware stubs; ::1 is IPv6 loopback.
+BLOCK_SINK_IPS = {"0.0.0.0", "127.0.0.1", "::", "::1"}
 
 
 def _default_hosts_file_path() -> str:
@@ -1095,6 +1114,21 @@ def looks_like_html_document(lines: list[str]) -> bool:
     marker_hits = sum(1 for marker in html_markers if marker in combined)
     return marker_hits >= 2
 
+def _portable_config_path_candidate() -> str:
+    """Return the path where a portable-mode config would live.
+
+    Portable mode: if the user ships a ``hosts_editor_config.json`` next to
+    the exe / script, we treat that sibling as the live config and skip
+    ``%LOCALAPPDATA%`` entirely. Lets USB-stick / team-share deployments
+    carry their settings with the binary.
+    """
+    return os.path.join(_EXE_DIR, "hosts_editor_config.json")
+
+
+def is_portable_mode() -> bool:
+    return os.path.isfile(_portable_config_path_candidate())
+
+
 def get_app_config_dir() -> str:
     if os.name == 'nt':
         base_dir = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or os.path.expanduser("~")
@@ -1102,6 +1136,12 @@ def get_app_config_dir() -> str:
     return os.path.join(os.path.expanduser("~"), f".{APP_SLUG.lower()}")
 
 def get_primary_config_path(config_filename: str) -> str:
+    if is_portable_mode():
+        return _portable_config_path_candidate()
+    return _roaming_config_path(config_filename)
+
+
+def _roaming_config_path(config_filename: str) -> str:
     return os.path.join(get_app_config_dir(), config_filename)
 
 def normalize_custom_source_url(url: str) -> str:
@@ -1204,12 +1244,44 @@ def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
     if not isinstance(last_open_dir, str) or not os.path.isdir(last_open_dir):
         last_open_dir = fallback_last_open_dir
 
+    raw_last_fetched = config.get("source_last_fetched", {})
+    source_last_fetched: dict[str, str] = {}
+    if isinstance(raw_last_fetched, dict):
+        for url, stamp in raw_last_fetched.items():
+            if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+                continue
+            if not isinstance(stamp, str) or len(stamp) > 64:
+                continue
+            # Reject garbage timestamps so a corrupt config can't poison
+            # tooltips with arbitrary strings.
+            try:
+                datetime.datetime.fromisoformat(stamp)
+            except (TypeError, ValueError):
+                continue
+            source_last_fetched[url] = stamp
+
+    preferred_sink_raw = config.get("preferred_block_sink", "0.0.0.0")
+    preferred_sink = preferred_sink_raw if preferred_sink_raw in BLOCK_SINK_IPS else "0.0.0.0"
+
+    raw_retention = config.get("backup_retention", BACKUP_RETENTION)
+    try:
+        backup_retention = int(raw_retention)
+    except (TypeError, ValueError):
+        backup_retention = BACKUP_RETENTION
+    backup_retention = max(0, min(50, backup_retention))
+
+    has_completed_first_run = bool(config.get("has_completed_first_run", False))
+
     return {
         "whitelist": whitelist_text,
         "custom_sources": sanitize_custom_sources(config.get("custom_sources", [])),
         "last_applied_raw_hash": _normalize_hash(config.get("last_applied_raw_hash")),
         "last_applied_cleaned_hash": _normalize_hash(config.get("last_applied_cleaned_hash")),
         "last_open_dir": last_open_dir,
+        "source_last_fetched": source_last_fetched,
+        "preferred_block_sink": preferred_sink,
+        "backup_retention": backup_retention,
+        "has_completed_first_run": has_completed_first_run,
     }
 
 def resolve_saved_state_hashes(current_hash: str, saved_raw_hash, saved_cleaned_hash) -> tuple[str | None, str | None]:
@@ -1250,6 +1322,402 @@ def summarize_clean_changes(total_discarded: int, transformed: int) -> str:
 def count_nonempty_lines(text: str) -> int:
     return sum(1 for line in text.splitlines() if line.strip())
 
+
+def rewrite_block_sink_ip(lines: list[str], target_ip: str) -> tuple[list[str], int]:
+    """Rewrite loopback-style mapping IPs to ``target_ip``.
+
+    Only touches lines that already start with a recognized blocking-sink IP
+    (``BLOCK_SINK_IPS``). Custom-IP mappings like ``192.168.1.10 nas`` are
+    untouched so LAN aliases survive the conversion. Returns the new line
+    list and the number of lines that actually changed.
+    """
+    if target_ip not in BLOCK_SINK_IPS:
+        raise ValueError(f"Unsupported target IP: {target_ip!r}")
+
+    changed = 0
+    new_lines: list[str] = []
+    for line in lines:
+        stripped = line.lstrip()
+        leading_ws = line[: len(line) - len(stripped)]
+        if not stripped or _is_comment_line(stripped):
+            new_lines.append(line)
+            continue
+
+        content, sep, trailing_comment = stripped.partition('#')
+        tokens = content.split(None, 1)
+        if len(tokens) < 2:
+            new_lines.append(line)
+            continue
+
+        first_ip = tokens[0].lower() if ':' in tokens[0] else tokens[0]
+        if first_ip not in BLOCK_SINK_IPS or first_ip == target_ip:
+            new_lines.append(line)
+            continue
+
+        remainder = tokens[1]
+        rebuilt = f"{target_ip} {remainder}"
+        if sep:
+            rebuilt = f"{rebuilt} #{trailing_comment}".rstrip() if trailing_comment.strip() else f"{rebuilt} #"
+        new_lines.append(f"{leading_ws}{rebuilt}")
+        changed += 1
+
+    return new_lines, changed
+
+
+def scan_suspicious_redirects(lines: list[str]) -> list[tuple[int, str, str]]:
+    """Flag entries that map well-known domains to non-loopback IPs.
+
+    A hosts file with an entry like ``1.2.3.4 www.google.com`` is a classic
+    malware-or-hijack indicator: the attacker steers traffic to a server
+    they control. We return ``(line_index, ip, domain)`` for every mapping
+    whose IP is NOT a loopback/blocking sink and NOT a private LAN range
+    (those are intentional local aliases that we must not false-flag).
+    """
+    private_prefixes = ("10.", "172.", "192.168.", "127.", "169.254.", "0.0.0.0")
+    findings: list[tuple[int, str, str]] = []
+
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or _is_comment_line(stripped):
+            continue
+
+        content = stripped.split('#', 1)[0].strip()
+        tokens = [token for token in TOKEN_SPLITTER.split(content) if token]
+        if len(tokens) < 2:
+            continue
+
+        ip_token = tokens[0]
+        if not _looks_like_ip_token(ip_token):
+            continue
+
+        ip_lower = ip_token.lower() if ':' in ip_token else ip_token
+        if ip_lower in BLOCK_SINK_IPS:
+            continue
+
+        if ip_token.startswith(private_prefixes):
+            # 172.16.0.0/12 is the classic RFC1918 block, but we can't tell
+            # from a prefix alone — treat the full 172.x as private-ish to
+            # avoid false positives on home LAN mappings.
+            if ip_token.startswith("172."):
+                try:
+                    second = int(ip_token.split('.')[1])
+                    if 16 <= second <= 31:
+                        continue
+                except (IndexError, ValueError):
+                    pass
+            else:
+                continue
+
+        for token in tokens[1:]:
+            domain, _ = _extract_domain_from_token(token, allow_single_label=False)
+            if domain:
+                findings.append((idx, ip_token, domain))
+
+    return findings
+
+
+def find_sources_containing_domain(domain: str, source_corpus: dict[str, str]) -> list[str]:
+    """Return the names of sources whose corpus contains ``domain``.
+
+    ``source_corpus`` maps a display name to the raw text of a previously
+    fetched blocklist. Match is exact-suffix (``example.com`` also matches
+    ``sub.example.com``) so that aggregate lists surface correctly.
+    """
+    target = domain.strip().lower().lstrip('.')
+    if not target:
+        return []
+
+    matches: list[str] = []
+    for name, text in source_corpus.items():
+        if not text:
+            continue
+        lowered = text.lower()
+        # Fast-path substring check first; confirm with a word-boundary
+        # pass so we don't hit "notexample.com" when searching "example.com".
+        if target not in lowered:
+            continue
+        needle = re.compile(
+            rf'(?:^|[\s\t,/|^=])(?:\*\.)?(?:[a-z0-9][a-z0-9-]*\.)*{re.escape(target)}(?:$|[\s\t,/|^#$])',
+            re.IGNORECASE | re.MULTILINE,
+        )
+        if needle.search(text):
+            matches.append(name)
+    return matches
+
+
+def export_lines_as_format(lines: list[str], export_format: str) -> str:
+    """Convert cleaned hosts lines to one of the supported export formats.
+
+    Supported formats:
+        hosts       — as-is hosts file content (what Cleaned Save writes)
+        domains     — one domain per line, no IP
+        adblock     — ``||domain^`` uBlock/AdGuard syntax
+        dnsmasq     — ``address=/domain/0.0.0.0``
+        pihole      — pi-hole gravity-style plain domain list (same as domains)
+    """
+    export_format = (export_format or "").strip().lower()
+    if export_format == "hosts":
+        return '\n'.join(lines)
+
+    domains: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or _is_comment_line(stripped):
+            continue
+        parsed, _ = parse_hosts_line_entries(line)
+        for _, domain, is_block_entry in parsed:
+            if not is_block_entry:
+                continue
+            if domain in seen:
+                continue
+            seen.add(domain)
+            domains.append(domain)
+
+    if export_format in ("domains", "pihole"):
+        return '\n'.join(domains)
+    if export_format == "adblock":
+        return '\n'.join(f"||{domain}^" for domain in domains)
+    if export_format == "dnsmasq":
+        return '\n'.join(f"address=/{domain}/0.0.0.0" for domain in domains)
+    raise ValueError(f"Unknown export format: {export_format!r}")
+
+
+STOCK_MICROSOFT_HOSTS = (
+    "# Copyright (c) 1993-2009 Microsoft Corp.\n"
+    "#\n"
+    "# This is a sample HOSTS file used by Microsoft TCP/IP for Windows.\n"
+    "#\n"
+    "# This file contains the mappings of IP addresses to host names. Each\n"
+    "# entry should be kept on an individual line. The IP address should\n"
+    "# be placed in the first column followed by the corresponding host name.\n"
+    "# The IP address and the host name should be separated by at least one\n"
+    "# space.\n"
+    "#\n"
+    "# Additionally, comments (such as these) may be inserted on individual\n"
+    "# lines or following the machine name denoted by a '#' symbol.\n"
+    "#\n"
+    "# For example:\n"
+    "#\n"
+    "#      102.54.94.97     rhino.acme.com          # source server\n"
+    "#       38.25.63.10     x.acme.com              # x client host\n"
+    "\n"
+    "# localhost name resolution is handled within DNS itself.\n"
+    "#\t127.0.0.1       localhost\n"
+    "#\t::1             localhost\n"
+)
+
+
+def strip_lines_by_category(
+    lines: list[str],
+    drop_comments: bool = False,
+    drop_blanks: bool = False,
+    drop_invalid: bool = False,
+) -> tuple[list[str], dict[str, int]]:
+    """Return ``lines`` with selected noise categories removed, plus counts.
+
+    Unlike the full Cleaned Save, this is surgical — the caller picks which
+    category to remove and nothing else. Normalization and deduplication are
+    intentionally skipped. Returned stats:
+        ``{"removed_comments": int, "removed_blanks": int, "removed_invalid": int}``
+    An "invalid" line is anything that isn't a comment, isn't blank, and
+    produces zero parsed hosts entries.
+    """
+    kept: list[str] = []
+    stats = {"removed_comments": 0, "removed_blanks": 0, "removed_invalid": 0}
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            if drop_blanks:
+                stats["removed_blanks"] += 1
+                continue
+            kept.append(line)
+            continue
+        if _is_comment_line(stripped):
+            if drop_comments:
+                stats["removed_comments"] += 1
+                continue
+            kept.append(line)
+            continue
+        if drop_invalid:
+            parsed, _ = parse_hosts_line_entries(line)
+            if not parsed:
+                stats["removed_invalid"] += 1
+                continue
+        kept.append(line)
+    return kept, stats
+
+
+IMPORT_START_RE = re.compile(
+    r'^#\s*---\s*(Raw|Normalized)\s+Import\s+Start:\s*(.+?)\s*---\s*$',
+    re.IGNORECASE,
+)
+IMPORT_END_RE = re.compile(
+    r'^#\s*---\s*(Raw|Normalized)\s+Import\s+End:\s*(.+?)\s*---\s*$',
+    re.IGNORECASE,
+)
+
+
+def summarize_source_contributions(lines: list[str]) -> list[dict]:
+    """Report per-import-section contribution stats.
+
+    For every `# --- Start/End ---` marker pair in ``lines``, tally how many
+    lines are inside the block and how many of those are blocking entries.
+    Lines outside any marker are collected under a synthetic "(outside
+    imports)" entry so the editor's manual edits and pre-existing hosts
+    entries are still visible. Used by the Sources Report dialog.
+    """
+    sections_info = discover_import_sections(lines)
+    buckets: list[dict] = []
+    covered: set[int] = set()
+
+    for section in sections_info:
+        inside = lines[section["start"] + 1 : section["end"]]
+        block_count = 0
+        total = len(inside)
+        for line in inside:
+            parsed, _ = parse_hosts_line_entries(line)
+            if any(entry[2] for entry in parsed):
+                block_count += 1
+        buckets.append({
+            "name": f"{section['name']} [{section['mode']}]",
+            "total_lines": total,
+            "blocking_entries": block_count,
+            "start": section["start"],
+            "end": section["end"],
+        })
+        covered.update(range(section["start"], section["end"] + 1))
+
+    outside_lines = [line for idx, line in enumerate(lines) if idx not in covered]
+    outside_block_count = 0
+    outside_total = 0
+    for line in outside_lines:
+        stripped = line.strip()
+        if not stripped or _is_comment_line(stripped):
+            continue
+        outside_total += 1
+        parsed, _ = parse_hosts_line_entries(line)
+        if any(entry[2] for entry in parsed):
+            outside_block_count += 1
+
+    if outside_total:
+        buckets.insert(0, {
+            "name": "(outside imports / manual edits)",
+            "total_lines": outside_total,
+            "blocking_entries": outside_block_count,
+            "start": None,
+            "end": None,
+        })
+
+    buckets.sort(key=lambda b: b["blocking_entries"], reverse=True)
+    return buckets
+
+
+def fuzzy_score(query: str, target: str) -> int:
+    """Score a target string against a query, higher = better match.
+
+    Ordered-subsequence scorer — every query character must appear in the
+    target in order. Consecutive matches and matches at word boundaries are
+    weighted higher. Returns -1 on no match.
+    """
+    if not query:
+        return 0
+    q = query.lower()
+    t = target.lower()
+    score = 0
+    qi = 0
+    prev_matched = False
+    for ti, ch in enumerate(t):
+        if qi < len(q) and ch == q[qi]:
+            bonus = 3 if ti == 0 or not t[ti - 1].isalnum() else 1
+            if prev_matched:
+                bonus += 2
+            score += bonus
+            qi += 1
+            prev_matched = True
+        else:
+            prev_matched = False
+    if qi < len(q):
+        return -1
+    return score
+
+
+def discover_import_sections(lines: list[str]) -> list[dict]:
+    """Locate every ``# --- {Raw|Normalized} Import Start/End: NAME ---`` block.
+
+    Returns a list of ``{"name", "mode", "start", "end"}`` (inclusive indices).
+    Unmatched start markers are skipped silently so a malformed editor can't
+    crash the UI — the caller just won't see that block as a whole section.
+    """
+    sections: list[dict] = []
+    pending: dict | None = None
+    for idx, line in enumerate(lines):
+        start_match = IMPORT_START_RE.match(line.rstrip())
+        if start_match:
+            pending = {
+                "name": start_match.group(2).strip(),
+                "mode": start_match.group(1).strip(),
+                "start": idx,
+            }
+            continue
+        if pending is None:
+            continue
+        end_match = IMPORT_END_RE.match(line.rstrip())
+        if end_match and end_match.group(2).strip() == pending["name"]:
+            pending["end"] = idx
+            sections.append(pending)
+            pending = None
+    return sections
+
+
+def remove_import_section(lines: list[str], section: dict) -> list[str]:
+    """Delete an entire import block including its Start/End markers."""
+    start = section.get("start", -1)
+    end = section.get("end", -1)
+    if start < 0 or end < start or end >= len(lines):
+        return list(lines)
+    return lines[:start] + lines[end + 1 :]
+
+
+def format_relative_time(iso_timestamp: str, now: float | None = None) -> str:
+    """Render an ISO 8601 timestamp as a short relative string.
+
+    Used in source tooltips to show "Last fetched: 3 hours ago" without
+    requiring the user to parse a timestamp. Returns an empty string on
+    invalid input so callers can short-circuit cleanly. ``now`` is a unix
+    epoch override exposed so tests can pin the reference point.
+    """
+    if not iso_timestamp:
+        return ""
+    try:
+        when = datetime.datetime.fromisoformat(iso_timestamp)
+    except (TypeError, ValueError):
+        return ""
+
+    if now is not None:
+        reference = datetime.datetime.fromtimestamp(now, when.tzinfo) if when.tzinfo else datetime.datetime.fromtimestamp(now)
+    else:
+        reference = datetime.datetime.now(when.tzinfo) if when.tzinfo else datetime.datetime.now()
+    delta_seconds = (reference - when).total_seconds()
+    if delta_seconds < 0:
+        return "just now"
+    if delta_seconds < 60:
+        return "just now"
+    if delta_seconds < 3600:
+        minutes = int(delta_seconds // 60)
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    if delta_seconds < 86400:
+        hours = int(delta_seconds // 3600)
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    if delta_seconds < 86400 * 30:
+        days = int(delta_seconds // 86400)
+        return f"{days} day{'s' if days != 1 else ''} ago"
+    if delta_seconds < 86400 * 365:
+        months = int(delta_seconds // (86400 * 30))
+        return f"{months} month{'s' if months != 1 else ''} ago"
+    years = int(delta_seconds // (86400 * 365))
+    return f"{years} year{'s' if years != 1 else ''} ago"
+
 # -------------------------------- Main App -----------------------------------
 class HostsFileEditor:
     HOSTS_FILE_PATH = _default_hosts_file_path()
@@ -1261,7 +1729,17 @@ class HostsFileEditor:
     BLOCKLIST_SOURCES = {
         "Major / Unified / Aggregated": [
             ("HaGezi Ultimate", "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/ultimate.txt", "Ultimate protection. Very aggressive."),
+            ("HaGezi Pro Plus", "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/pro.plus.txt", "Aggressive HaGezi Pro with extra telemetry/metrics blocking."),
+            ("HaGezi Pro", "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/pro.txt", "Balanced HaGezi tier: ads + tracking + metrics."),
+            ("HaGezi Multi", "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/multi.txt", "HaGezi Multi Pro+ + TIF + threat-intel rollup."),
+            ("HaGezi Light", "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/light.txt", "HaGezi false-positive-free starter list."),
             ("HaGezi TIF", "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/tif.txt", "Threat Intelligence Feeds only."),
+            ("1Hosts Lite", "https://raw.githubusercontent.com/badmojr/1Hosts/master/Lite/hosts.txt", "badmojr conservative ads + tracking."),
+            ("1Hosts Pro", "https://raw.githubusercontent.com/badmojr/1Hosts/master/Pro/hosts.txt", "badmojr balanced ads/tracking/metrics."),
+            ("1Hosts Xtra", "https://raw.githubusercontent.com/badmojr/1Hosts/master/Xtra/hosts.txt", "badmojr maximum-coverage tier; breakage risk."),
+            ("hBlock Aggregate", "https://hblock.molinero.dev/hosts", "Auto-aggregated 50+ upstream sources, daily rebuild."),
+            ("Ultimate Hosts Blacklist", "https://raw.githubusercontent.com/Ultimate-Hosts-Blacklist/Ultimate.Hosts.Blacklist/master/hosts/hosts0", "Mega-aggregate over 100 ads/malware/tracking lists."),
+            ("BlockConvert Aggregate", "https://raw.githubusercontent.com/mkb2091/blockconvert/master/output/domains.txt", "Cross-validated aggregate of mainstream blocklists."),
             ("StevenBlack Unified", "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts", "Classic unified hosts list."),
             ("StevenBlack Data", "https://raw.githubusercontent.com/StevenBlack/hosts/master/data/StevenBlack/hosts", "StevenBlack Data Base."),
             ("OISD Full", "https://hosts.oisd.nl/", "Huge, false-positive free blocklist."),
@@ -1272,6 +1750,7 @@ class HostsFileEditor:
             ("HOSTShield Combined", "https://github.com/SysAdminDoc/HOSTShield/releases/download/v.1/CombinedAll.txt", "Massive combined list."),
             ("The Great Wall", "https://raw.githubusercontent.com/Sekhan/TheGreatWall/master/TheGreatWall.txt", "Comprehensive aggregator."),
             ("NeoHosts Basic", "https://cdn.jsdelivr.net/gh/neoFelhz/neohosts@gh-pages/basic/hosts", "NeoHosts Basic List."),
+            ("NeoDev Host", "https://raw.githubusercontent.com/neodevpro/neodevhost/master/host", "Actively maintained ads + tracker + malware aggregate."),
         ],
         "Ads / Tracking / Analytics": [
             ("Disconnect Tracking", "https://s3.amazonaws.com/lists.disconnect.me/simple_tracking.txt", "Basic tracking protection."),
@@ -1295,9 +1774,25 @@ class HostsFileEditor:
             ("Hoshsadiq NoCoin", "https://raw.githubusercontent.com/hoshsadiq/adblock-nocoin-list/master/hosts.txt", "Adblock plus NoCoin."),
             ("HOSTShield Ads", "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/AdsTrackingAnalytics.txt", "HOSTShield Ads & Tracking."),
             ("Adobe Hosts", "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/AdobeHosts.txt", "Blocks Adobe verification."),
+            ("ShadowWhisperer Ads", "https://raw.githubusercontent.com/ShadowWhisperer/BlockLists/master/Lists/Ads", "Hand-audited ad domains, very low false positives."),
+            ("ShadowWhisperer Tracking", "https://raw.githubusercontent.com/ShadowWhisperer/BlockLists/master/Lists/Tracking", "Hand-audited tracker/analytics list."),
+            ("Lightswitch05 AMP Extended", "https://www.github.developerdan.com/hosts/lists/amp-hosts-extended.txt", "Google AMP cache / proxy URL blocklist."),
+            ("Lightswitch05 FB Extended", "https://www.github.developerdan.com/hosts/lists/facebook-extended.txt", "Extended Meta/Instagram/WhatsApp tracking."),
+            ("Lightswitch05 Tracking Aggressive", "https://www.github.developerdan.com/hosts/lists/tracking-aggressive-extended.txt", "Aggressive tracker list beyond the default extended."),
+            ("GoodbyeAds", "https://raw.githubusercontent.com/jerryn70/GoodbyeAds/master/Hosts/GoodbyeAds.txt", "Mobile ads + YouTube/Spotify/Hulu ad sponsors."),
+            ("AdGuard Mobile Ads (r-a-y)", "https://raw.githubusercontent.com/r-a-y/mobile-hosts/master/AdguardMobileAds.txt", "AdGuard mobile ad filter in hosts format."),
+            ("AdGuard Mobile Spyware (r-a-y)", "https://raw.githubusercontent.com/r-a-y/mobile-hosts/master/AdguardMobileSpyware.txt", "AdGuard mobile spyware filter in hosts format."),
+            ("CombinedPrivacyBlockLists", "https://raw.githubusercontent.com/bongochong/CombinedPrivacyBlockLists/master/NoFormatting/cpbl-ctld.txt", "Curated combined privacy aggregate, cross-TLD-checked."),
+            ("MobileAdTrackers (jawz101)", "https://raw.githubusercontent.com/jawz101/MobileAdTrackers/master/hosts", "Mobile SDK trackers from Exodus Privacy reports."),
+            ("DandelionSprout URL Shorteners", "https://raw.githubusercontent.com/DandelionSprout/adfilt/master/LegitimateURLShortener.txt", "URL shortener neutralizer to kill redirect tracking."),
+            ("BlocklistProject Tracking", "https://blocklistproject.github.io/Lists/tracking.txt", "Community-maintained tracking domain list."),
         ],
         "Telemetry / Privacy / Spyware": [
             ("Windows Spy Blocker", "https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/spy.txt", "Blocks Windows telemetry."),
+            ("Windows Spy Extra", "https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/extra.txt", "WindowsSpyBlocker extra telemetry beyond the core spy list."),
+            ("Windows Spy Update", "https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/update.txt", "Windows Update / delivery-optimization telemetry."),
+            ("jmdugan Microsoft", "https://raw.githubusercontent.com/jmdugan/blocklists/master/corporations/microsoft/all", "Broad Microsoft corporate telemetry + services."),
+            ("jmdugan Facebook", "https://raw.githubusercontent.com/jmdugan/blocklists/master/corporations/facebook/all", "Meta/Facebook corporate domain blocklist."),
             ("Frogeye 1st Party", "https://hostfiles.frogeye.fr/firstparty-trackers-hosts.txt", "First-party trackers."),
             ("Frogeye Multi Party", "https://hostfiles.frogeye.fr/multiparty-trackers-hosts.txt", "Multi-party trackers."),
             ("Matomo Referrer Spam", "https://raw.githubusercontent.com/matomo-org/referrer-spam-blacklist/master/spammers.txt", "Referrer spam blockers."),
@@ -1306,6 +1801,7 @@ class HostsFileEditor:
             ("Perflyst Android", "https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/android-tracking.txt", "Android tracking."),
             ("Perflyst SmartTV", "https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/SmartTV.txt", "Smart TV tracking."),
             ("Perflyst FireTV", "https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/AmazonFireTV.txt", "FireTV tracking."),
+            ("Perflyst Session Replay", "https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/SessionReplay.txt", "Session-replay/heatmap vendors (Hotjar, FullStory)."),
             ("TrackersList All", "https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_all.txt", "Torrent trackers list."),
         ],
         "Malware / Phishing / Scam": [
@@ -1342,10 +1838,26 @@ class HostsFileEditor:
             ("JoeWein Domains", "https://www.joewein.net/dl/bl/dom-bl.txt", "JoeWein spam/scam."),
             ("JoeWein Base", "https://www.joewein.net/dl/bl/dom-bl-base.txt", "JoeWein base."),
             ("Toxic Domains", "https://www.stopforumspam.com/downloads/toxic_domains_whole.txt", "StopForumSpam toxic."),
+            ("ShadowWhisperer Malware", "https://raw.githubusercontent.com/ShadowWhisperer/BlockLists/master/Lists/Malware", "Hand-audited malware domain list."),
+            ("ShadowWhisperer Scam", "https://raw.githubusercontent.com/ShadowWhisperer/BlockLists/master/Lists/Scam", "Curated scam / fraud domain list."),
+            ("ThreatFox abuse.ch", "https://threatfox.abuse.ch/downloads/hostfile/", "abuse.ch live malware IOC feed in hosts format."),
+            ("CERT.pl Warning List", "https://hole.cert.pl/domains/domains_hosts.txt", "Polish national CERT phishing feed (EU-focused)."),
+            ("Phishing Army Extended", "https://phishing.army/download/phishing_army_blocklist_extended.txt", "Extended Phishing Army feed (adds recent hits)."),
+            ("Durable Napkin Scam", "https://raw.githubusercontent.com/durablenapkin/scamblocklist/master/hosts.txt", "Curated scam / tech-support / fake-shop blocklist."),
+            ("GlobalAntiScamOrg", "https://raw.githubusercontent.com/elliotwutingfeng/GlobalAntiScamOrg-blocklist/main/global-anti-scam-org-scam-urls-pihole.txt", "Global Anti-Scam Org reports reformatted for Pi-hole."),
+            ("Inversion DNS Blocklist", "https://raw.githubusercontent.com/elliotwutingfeng/inversion-dnsblocklist/main/inversion-dnsblocklist-pihole.txt", "Crowd-sourced active-phish domain feed."),
+            ("Curbengh Phishing Filter", "https://raw.githubusercontent.com/curbengh/phishing-filter/master/phishing-filter-hosts.txt", "Aggregated phishing feed (OpenPhish, PhishTank, etc)."),
+            ("CoinBlockerLists", "https://raw.githubusercontent.com/ZeroDot1/CoinBlockerLists/master/hosts", "ZeroDot1 comprehensive cryptominer hosts."),
+            ("CoinBlockerLists Browser", "https://raw.githubusercontent.com/ZeroDot1/CoinBlockerLists/master/hosts_browser", "In-browser-mining subset from CoinBlockerLists."),
+            ("BlocklistProject Fraud", "https://blocklistproject.github.io/Lists/fraud.txt", "Fraud / scam-focused subset."),
+            ("BlocklistProject Ransomware", "https://blocklistproject.github.io/Lists/ransomware.txt", "Ransomware C2 / dropper domains."),
         ],
         "Spam / Abuse / Misc": [
             ("KAD Hosts (Polish)", "https://raw.githubusercontent.com/PolishFiltersTeam/KADhosts/master/KADhosts.txt", "Polish focused filters."),
             ("KAD Hosts (Azet12)", "https://raw.githubusercontent.com/azet12/KADhosts/master/KADhosts.txt", "Alternative KADHosts mirror."),
+            ("MajkiIT Polish Adservers", "https://raw.githubusercontent.com/MajkiIT/polish-ads-filter/master/hosts-based-list/adservers.txt", "Polish ad-server hosts list."),
+            ("Cats-Team AdRules (CN)", "https://raw.githubusercontent.com/Cats-Team/AdRules/main/adrules_domainset.txt", "Chinese-language ads / tracker aggregate."),
+            ("Schakal (Russian)", "https://schakal.ru/hosts/hosts_adblock.txt", "Russian ad / tracker block list."),
             ("FadeMind Spam", "https://raw.githubusercontent.com/FadeMind/hosts.extras/master/add.Spam/hosts", "Spam hosts."),
             ("FadeMind Risk", "https://raw.githubusercontent.com/FadeMind/hosts.extras/master/add.Risk/hosts", "Risky hosts."),
             ("FadeMind Unchecky", "https://raw.githubusercontent.com/FadeMind/hosts.extras/master/UncheckyAds/hosts", "Unchecky ads."),
@@ -1357,6 +1869,17 @@ class HostsFileEditor:
             ("OneOffDallas DoH", "https://raw.githubusercontent.com/oneoffdallas/dohservers/master/list.txt", "DoH servers."),
             ("Dawsey21 Blacklist", "https://raw.githubusercontent.com/Dawsey21/Lists/master/main-blacklist.txt", "General blacklist."),
             ("Vokins YHosts", "https://raw.githubusercontent.com/vokins/yhosts/master/hosts.txt", "YHosts."),
+        ],
+        "Category Filters (Opt-in)": [
+            ("BlocklistProject Gambling", "https://blocklistproject.github.io/Lists/gambling.txt", "Online gambling / casino / sportsbook domains."),
+            ("BlocklistProject Porn", "https://blocklistproject.github.io/Lists/porn.txt", "Adult content top-1M style blocklist."),
+            ("Sinfonietta Pornography", "https://raw.githubusercontent.com/Sinfonietta/hostfiles/master/pornography-hosts", "Curated adult-content hosts, broad coverage."),
+            ("Sinfonietta Social", "https://raw.githubusercontent.com/Sinfonietta/hostfiles/master/social-hosts", "Social media domain list (opt-in distraction blocking)."),
+            ("Sinfonietta Gambling", "https://raw.githubusercontent.com/Sinfonietta/hostfiles/master/gambling-hosts", "Curated gambling hosts (smaller alternative)."),
+            ("Tiuxo Porn", "https://raw.githubusercontent.com/tiuxo/hosts/master/porn", "Minimal adult-content hosts list."),
+            ("Tiuxo Social", "https://raw.githubusercontent.com/tiuxo/hosts/master/social", "Minimal social-media hosts list."),
+            ("RPiList Gambling", "https://raw.githubusercontent.com/RPiList/specials/master/Blocklisten/Gambling.txt", "German-maintained gambling blocklist, EU coverage."),
+            ("RPiList Fake Science", "https://raw.githubusercontent.com/RPiList/specials/master/Blocklisten/Fake-Science.txt", "Predatory journals / junk-science publishers."),
         ],
         "Vendor / Platform": [
             ("Amazon Native", "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.amazon.txt", "Block Amazon devices telemetry."),
@@ -1376,6 +1899,11 @@ class HostsFileEditor:
             ("HOSTShield Microsoft", "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/Microsoft.txt", "HOSTShield Microsoft."),
             ("HOSTShield TikTok", "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/Tiktok.txt", "HOSTShield TikTok."),
             ("HOSTShield Twitter", "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/Twitter.txt", "HOSTShield Twitter."),
+            ("Perflyst Vivo Telemetry", "https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/Vivotelemetry.txt", "Vivo / BBK Android phone telemetry."),
+            ("Perflyst Samsung Smart", "https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/SamsungSmart.txt", "Samsung Smart TV / Tizen telemetry & ads."),
+            ("llacb47 Smart TV", "https://raw.githubusercontent.com/llacb47/mischosts/main/smart-tv", "Generic smart-TV telemetry (Sony/Philips/Panasonic/Vizio)."),
+            ("llacb47 LG WebOS", "https://raw.githubusercontent.com/llacb47/mischosts/main/lgwebos-hosts", "LG WebOS smart-TV telemetry supplement."),
+            ("llacb47 Disney", "https://raw.githubusercontent.com/llacb47/mischosts/main/disney-hosts", "Disney+ / ESPN / Hulu tracker + ad infrastructure."),
         ]
     }
 
@@ -1412,6 +1940,18 @@ class HostsFileEditor:
         self._cached_whitelist_set = frozenset()
         self.config_path = get_primary_config_path(self.CONFIG_FILENAME)
         self.last_open_dir = os.path.expanduser("~")
+
+        # Per-session cache of raw source text (keyed by display name) used
+        # by the "Check Domain" cross-reference so the user can ask which
+        # curated sources contain a given domain without re-fetching.
+        # Capped per entry to keep memory sane on aggregate lists.
+        self._source_corpus_cache: dict[str, str] = {}
+        # Persisted across sessions: URL → ISO timestamp of last successful
+        # fetch. Lets source tooltips surface how stale a feed is.
+        self.source_last_fetched: dict[str, str] = {}
+        self._preferred_block_sink = "0.0.0.0"
+        self._backup_retention = BACKUP_RETENTION
+        self._has_completed_first_run = False
         
         self.import_mode = tk.StringVar(value="Normalized") 
         self.dry_run_mode = tk.BooleanVar(value=False)
@@ -1764,18 +2304,46 @@ class HostsFileEditor:
         self.stats_panel.pack(fill="x", padx=4, pady=(0, 4))
         self._init_stats_panel(self.stats_panel)
 
-        self.text_area = scrolledtext.ScrolledText(
-            editor_panel, wrap=tk.WORD, font=("Consolas", 12),
-            bg=PALETTE["crust"], fg=PALETTE["text"], insertbackground=PALETTE["text"],
-            selectbackground=PALETTE["blue"], relief="flat"
+        editor_container = ttk.Frame(editor_panel)
+        editor_container.pack(expand=True, fill='both', padx=4, pady=(0, 4))
+
+        self.line_gutter = tk.Canvas(
+            editor_container, width=52, bg=PALETTE["mantle"],
+            highlightthickness=0, bd=0, relief="flat",
         )
-        self.text_area.pack(expand=True, fill='both', padx=4, pady=(0, 4))
+        self.line_gutter.pack(side="left", fill="y")
+
+        editor_scroll = ttk.Scrollbar(editor_container, orient="vertical")
+        editor_scroll.pack(side="right", fill="y")
+
+        self.text_area = tk.Text(
+            editor_container, wrap=tk.WORD, font=("Consolas", 12),
+            bg=PALETTE["crust"], fg=PALETTE["text"], insertbackground=PALETTE["text"],
+            selectbackground=PALETTE["blue"], relief="flat",
+            yscrollcommand=lambda first, last: self._on_editor_scroll(editor_scroll, first, last),
+        )
+        self.text_area.pack(side="left", expand=True, fill='both')
+        editor_scroll.config(command=self.text_area.yview)
+
+        self._gutter_last_line_count = -1
+        self._gutter_redraw_job = None
+        # Any visual change that can shift line numbers triggers a redraw.
+        for seq in ("<KeyRelease>", "<MouseWheel>", "<Button-4>", "<Button-5>",
+                    "<Configure>", "<ButtonRelease-1>"):
+            self.text_area.bind(seq, self._schedule_gutter_redraw, add="+")
 
         # Search highlighting setup
         self._search_matches = []
         self._search_index = -1
         self.text_area.tag_configure("search_match", background=PALETTE["blue"], foreground=PALETTE["crust"])
         self.text_area.tag_configure("search_current", background=PALETTE["green"], foreground=PALETTE["crust"])
+
+        # Syntax highlighting tags. Using `foreground` only (no background)
+        # keeps warning overlays (red/yellow) readable when they coexist
+        # on the same line.
+        self.text_area.tag_configure("syntax_ip", foreground=PALETTE["blue"])
+        self.text_area.tag_configure("syntax_comment", foreground=PALETTE["overlay1"])
+        self.text_area.tag_configure("syntax_marker", foreground=PALETTE["accent"])
         
         # Warning highlighting setup
         self.text_area.tag_configure("warning_discard", background=PALETTE["red_press"], foreground=PALETTE["text"]) 
@@ -1791,6 +2359,14 @@ class HostsFileEditor:
         self.root.bind("<Control-Shift-S>", self._save_raw_shortcut)
         self.root.bind("<F5>", self._refresh_shortcut)
 
+        # Editor context menu + comment-toggle shortcut.
+        self._build_editor_context_menu()
+        # Windows fires Button-3 for right-click; Mac uses Button-2.
+        self.text_area.bind("<Button-3>", self._show_editor_context_menu)
+        self.text_area.bind("<Button-2>", self._show_editor_context_menu)
+        self.text_area.bind("<Control-slash>", self.toggle_selection_comment)
+        self.root.bind("<Control-p>", self.show_goto_anything)
+
         # Init
         try:
             self.load_config()
@@ -1804,6 +2380,7 @@ class HostsFileEditor:
         self._update_manual_summary()
         self._update_whitelist_summary()
         self._refresh_mode_badges()
+        self.maybe_show_first_run_wizard()
 
     # ----------------------------- UI Helpers & Panels ---------------------------------
     def _apply_window_branding(self):
@@ -1981,9 +2558,26 @@ class HostsFileEditor:
             web_import_frame = ttk.LabelFrame(self.web_catalog_frame, text=category)
             web_import_frame.pack(fill="x", pady=4)
             for name, url, tooltip in filtered_sources:
-                self._register_import_widget(
-                    self._btn(web_import_frame, name, lambda u=url, n=name: self.start_single_import(n, u), tooltip)
-                ).pack(fill="x", pady=2)
+                row = ttk.Frame(web_import_frame)
+                row.pack(fill="x", pady=2)
+                last_stamp = self.source_last_fetched.get(url, "") if hasattr(self, "source_last_fetched") else ""
+                stamp_hint = format_relative_time(last_stamp)
+                tooltip_full = f"{tooltip}\n\nLast fetched: {stamp_hint}" if stamp_hint else tooltip
+                import_btn = self._btn(
+                    row, name,
+                    lambda u=url, n=name: self.start_single_import(n, u),
+                    tooltip_full,
+                )
+                self._register_import_widget(import_btn)
+                import_btn.pack(side="left", fill="x", expand=True)
+                preview_btn = self._btn(
+                    row, "Peek",
+                    lambda u=url, n=name: self.preview_blocklist_source(n, u),
+                    f"Preview the first entries of {name} without importing.",
+                    style="Secondary.TButton",
+                )
+                self._register_import_widget(preview_btn)
+                preview_btn.pack(side="right", padx=(4, 0))
 
         if matched_sources == 0:
             ttk.Label(
@@ -2140,6 +2734,11 @@ class HostsFileEditor:
         file_menu.add_command(label="Save Cleaned", command=self.save_cleaned_file)
         file_menu.add_command(label="Refresh", command=self.load_file)
         file_menu.add_command(label="Revert to Backup", command=self.revert_to_backup)
+        file_menu.add_command(label="Panic Restore (Microsoft default)", command=self.panic_restore_stock)
+        file_menu.add_separator()
+        file_menu.add_command(label="Export Cleaned As…", command=self.show_export_dialog)
+        file_menu.add_separator()
+        file_menu.add_command(label="Disable / Enable Hosts", command=self.toggle_hosts_enabled)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.on_closing)
         menu_bar.add_cascade(label="File", menu=file_menu)
@@ -2149,6 +2748,30 @@ class HostsFileEditor:
         tools_menu.add_command(label="Clean", command=self.auto_clean)
         tools_menu.add_command(label="Normalize & Deduplicate", command=self.deduplicate)
         tools_menu.add_command(label="Flush DNS", command=self.flush_dns)
+        tools_menu.add_separator()
+        cleanup_menu = tk.Menu(tools_menu, tearoff=0, bg=PALETTE["mantle"], fg=PALETTE["text"],
+                               activebackground=PALETTE["blue"], activeforeground="#0b1020")
+        cleanup_menu.add_command(label="Remove Comments Only", command=self.cleanup_comments_only)
+        cleanup_menu.add_command(label="Remove Blank Lines Only", command=self.cleanup_blanks_only)
+        cleanup_menu.add_command(label="Remove Invalid Lines Only", command=self.cleanup_invalid_only)
+        cleanup_menu.add_separator()
+        cleanup_menu.add_command(label="Remove Import Section…", command=self.show_remove_import_section)
+        tools_menu.add_cascade(label="Targeted Cleanup", menu=cleanup_menu)
+        tools_menu.add_separator()
+        tools_menu.add_command(label="Check Domain…", command=self.show_check_domain)
+        tools_menu.add_command(label="Hosts Health Scan…", command=self.show_health_scan)
+        tools_menu.add_command(label="Sources Report…", command=self.show_sources_report)
+        tools_menu.add_command(label="Goto Anything…", command=self.show_goto_anything)
+        tools_menu.add_separator()
+        tools_menu.add_command(label="Schedule Auto-Update…", command=self.show_schedule_wizard)
+        tools_menu.add_command(label="Preferences…", command=self.show_preferences)
+        tools_menu.add_separator()
+        convert_menu = tk.Menu(tools_menu, tearoff=0, bg=PALETTE["mantle"], fg=PALETTE["text"],
+                               activebackground=PALETTE["blue"], activeforeground="#0b1020")
+        convert_menu.add_command(label="Use 0.0.0.0 (fastest on Windows)", command=lambda: self.convert_block_ips("0.0.0.0"))
+        convert_menu.add_command(label="Use 127.0.0.1", command=lambda: self.convert_block_ips("127.0.0.1"))
+        convert_menu.add_command(label="Use :: (IPv6 null)", command=lambda: self.convert_block_ips("::"))
+        tools_menu.add_cascade(label="Convert Block IPs", menu=convert_menu)
         tools_menu.add_separator()
         tools_menu.add_checkbutton(label="Dry-run only", variable=self.dry_run_mode, command=self._check_dry_run_warning)
         menu_bar.add_cascade(label="Tools", menu=tools_menu)
@@ -2240,7 +2863,7 @@ class HostsFileEditor:
         ``hosts_editor_config.json`` manually, or manually clean a corrupt
         config entry the app can't surface through the UI.
         """
-        folder = get_app_config_dir()
+        folder = os.path.dirname(self.config_path) if is_portable_mode() else get_app_config_dir()
         try:
             os.makedirs(folder, exist_ok=True)
         except OSError as e:
@@ -2277,6 +2900,56 @@ class HostsFileEditor:
             ),
             parent=self.root,
         )
+
+    def _on_editor_scroll(self, scrollbar, first, last):
+        """Keep the scrollbar and the line-number gutter in sync with the text.
+
+        Tk `yscrollcommand` fires whenever the viewport moves, so we hook it
+        to redraw line numbers lazily via ``after_idle`` — redrawing here
+        directly would flicker badly during rapid paging.
+        """
+        try:
+            scrollbar.set(first, last)
+        except tk.TclError:
+            return
+        self._schedule_gutter_redraw()
+
+    def _schedule_gutter_redraw(self, _event=None):
+        if self._gutter_redraw_job is not None:
+            return
+        self._gutter_redraw_job = self._safe_after(16, self._redraw_gutter)
+
+    def _redraw_gutter(self):
+        self._gutter_redraw_job = None
+        if not hasattr(self, "line_gutter"):
+            return
+        try:
+            if not self.line_gutter.winfo_exists():
+                return
+            self.line_gutter.delete("all")
+            # Walk visible lines from the first displayed to the last.
+            index = self.text_area.index("@0,0")
+            while True:
+                dline = self.text_area.dlineinfo(index)
+                if dline is None:
+                    break
+                y = dline[1]
+                line_no = int(index.split('.')[0])
+                self.line_gutter.create_text(
+                    46, y + 2,
+                    anchor="ne",
+                    text=str(line_no),
+                    fill=PALETTE["overlay1"],
+                    font=("Consolas", 10),
+                )
+                index = self.text_area.index(f"{index}+1line")
+                # Defensive guard: if Tk returns the same index twice (EOF),
+                # break so we don't spin.
+                next_line_no = int(index.split('.')[0])
+                if next_line_no <= line_no:
+                    break
+        except tk.TclError:
+            return
 
     def _safe_after(self, delay_ms: int, callback):
         """Schedule a Tk callback, swallowing errors when root is torn down.
@@ -2438,6 +3111,10 @@ class HostsFileEditor:
         self._last_applied_cleaned_hash = sanitized_config["last_applied_cleaned_hash"]
         self._last_saved_whitelist_text = sanitized_config["whitelist"]
         self.last_open_dir = sanitized_config["last_open_dir"]
+        self.source_last_fetched = sanitized_config.get("source_last_fetched", {})
+        self._preferred_block_sink = sanitized_config.get("preferred_block_sink", "0.0.0.0")
+        self._backup_retention = sanitized_config.get("backup_retention", BACKUP_RETENTION)
+        self._has_completed_first_run = sanitized_config.get("has_completed_first_run", False)
 
         self.whitelist_text_area.delete('1.0', tk.END)
         self.whitelist_text_area.insert('1.0', sanitized_config["whitelist"])
@@ -2473,6 +3150,10 @@ class HostsFileEditor:
             "last_applied_raw_hash": self._last_applied_raw_hash,
             "last_applied_cleaned_hash": self._last_applied_cleaned_hash,
             "last_open_dir": self.last_open_dir,
+            "source_last_fetched": self.source_last_fetched,
+            "preferred_block_sink": self._preferred_block_sink,
+            "backup_retention": self._backup_retention,
+            "has_completed_first_run": self._has_completed_first_run,
         }, self.last_open_dir)
         try:
             self._write_config_payload(config)
@@ -2516,6 +3197,7 @@ class HostsFileEditor:
 
         self._update_save_button_state()
         self._trigger_ui_update()
+        self._schedule_gutter_redraw()
 
     def _hash_lines(self, lines):
         return hashlib.sha256('\n'.join(lines).encode('utf-8')).hexdigest()
@@ -2560,6 +3242,7 @@ class HostsFileEditor:
         self._update_save_button_state(_lines=lines, _current_hash=current_hash)
         self._update_diff_stats(lines)
         self._apply_inline_warnings(lines)
+        self._apply_syntax_highlighting(lines)
 
         query = self.search_var.get().strip()
         if query:
@@ -2625,6 +3308,1125 @@ class HostsFileEditor:
             self.manual_text_area.edit_modified(False)
             self._update_manual_summary()
 
+
+    # ----------------------------- Backup Rotation ---------------------------
+    def _rotate_backups(self) -> str | None:
+        """Create a timestamped backup and prune old ones.
+
+        In addition to the rolling ``hosts.bak`` that "Revert to Backup" has
+        always used, we now persist up to ``BACKUP_RETENTION`` timestamped
+        snapshots alongside it (``hosts.YYYYMMDD-HHMMSS.bak``). Returns the
+        path of the newly created timestamped backup, or ``None`` if the
+        hosts file does not exist yet (first save on a fresh install).
+        """
+        if not os.path.exists(self.HOSTS_FILE_PATH):
+            return None
+
+        latest_bak = self.HOSTS_FILE_PATH + ".bak"
+        shutil.copy2(self.HOSTS_FILE_PATH, latest_bak)
+
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        timestamped = f"{self.HOSTS_FILE_PATH}.{stamp}.bak"
+        try:
+            shutil.copy2(self.HOSTS_FILE_PATH, timestamped)
+        except OSError:
+            # Timestamped copy is a convenience layer — the rolling .bak
+            # is still in place so a failure here is non-fatal.
+            return None
+
+        self._prune_old_backups()
+        return timestamped
+
+    def _prune_old_backups(self) -> None:
+        """Keep only the newest ``self._backup_retention`` timestamped snapshots."""
+        pattern = f"{self.HOSTS_FILE_PATH}.*.bak"
+        try:
+            candidates = glob.glob(pattern)
+        except OSError:
+            return
+
+        # Exclude the rolling latest-copy from timestamped pruning — it
+        # matches the same wildcard but is managed separately.
+        latest_bak = os.path.normcase(self.HOSTS_FILE_PATH + ".bak")
+        timestamped = [
+            path for path in candidates
+            if os.path.normcase(path) != latest_bak
+        ]
+        retention = getattr(self, "_backup_retention", BACKUP_RETENTION)
+        if len(timestamped) <= retention:
+            return
+
+        timestamped.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        for stale in timestamped[retention:]:
+            try:
+                os.unlink(stale)
+            except OSError:
+                pass
+
+    def list_backup_snapshots(self) -> list[str]:
+        pattern = f"{self.HOSTS_FILE_PATH}.*.bak"
+        try:
+            candidates = glob.glob(pattern)
+        except OSError:
+            return []
+        latest_bak = os.path.normcase(self.HOSTS_FILE_PATH + ".bak")
+        timestamped = [
+            path for path in candidates
+            if os.path.normcase(path) != latest_bak
+        ]
+        timestamped.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        return timestamped
+
+    # ----------------------------- Enable / Disable --------------------------
+    DISABLED_MARKER_PATH_ATTR = None
+
+    def _disabled_sibling_path(self) -> str:
+        return self.HOSTS_FILE_PATH + ".disabled"
+
+    def is_hosts_disabled(self) -> bool:
+        return os.path.exists(self._disabled_sibling_path())
+
+    def toggle_hosts_enabled(self):
+        """Flip between the user's hosts file and a minimal Microsoft default.
+
+        When disabling: the active hosts is copied to ``hosts.disabled`` and
+        the active file is replaced with the stock Windows template.
+        When re-enabling: we swap them back. This is a common pattern in
+        SwitchHosts / HostsMan for quickly turning blocklists off to
+        troubleshoot broken sites without losing any data.
+        """
+        if self._block_during_import("Disable/Enable Hosts"):
+            return
+        if not self.is_admin:
+            messagebox.showerror(
+                "Administrator Required",
+                "Disabling or re-enabling the hosts file requires Administrator privileges.",
+                parent=self.root,
+            )
+            self.update_status("Disable/Enable blocked: Admin rights required.", is_error=True)
+            return
+
+        disabled_path = self._disabled_sibling_path()
+        try:
+            if self.is_hosts_disabled():
+                # Re-enable: restore the previously-stashed user file.
+                try:
+                    self._rotate_backups()
+                except OSError:
+                    pass
+                if os.path.exists(self.HOSTS_FILE_PATH):
+                    # Preserve the current minimal file as a backup too, so
+                    # the user can always get back to "stock Windows".
+                    shutil.copy2(self.HOSTS_FILE_PATH, self.HOSTS_FILE_PATH + ".bak")
+                shutil.copy2(disabled_path, self.HOSTS_FILE_PATH)
+                os.unlink(disabled_path)
+                self.update_status("Success: Hosts file re-enabled. Blocklists are active again.")
+            else:
+                if not messagebox.askyesno(
+                    "Disable Hosts File",
+                    "Disabling temporarily replaces the hosts file with the minimal Microsoft default so every blocklist is bypassed.\n\n"
+                    "Your current file is preserved alongside it and can be re-enabled from this menu.\n\n"
+                    "Continue?",
+                    parent=self.root,
+                ):
+                    return
+                try:
+                    self._rotate_backups()
+                except OSError:
+                    pass
+                if os.path.exists(self.HOSTS_FILE_PATH):
+                    shutil.copy2(self.HOSTS_FILE_PATH, disabled_path)
+                minimal = (
+                    "# Copyright (c) 1993-2009 Microsoft Corp.\n"
+                    "#\n"
+                    "# This is a sample HOSTS file used by Microsoft TCP/IP for Windows.\n"
+                    "127.0.0.1       localhost\n"
+                    "::1             localhost\n"
+                )
+                write_text_file_atomic(self.HOSTS_FILE_PATH, minimal)
+                self.update_status("Success: Hosts file disabled. Minimal Microsoft template is active.")
+            self.flush_dns_silent()
+            self.load_file(is_initial_load=False)
+            self._refresh_mode_badges()
+        except Exception as e:
+            self.update_status(f"Disable/Enable error: {e}", is_error=True)
+            messagebox.showerror("Error", f"Could not toggle hosts file:\n{e}", parent=self.root)
+
+    def flush_dns_silent(self):
+        if os.name != 'nt':
+            return
+        try:
+            subprocess.run(['ipconfig', '/flushdns'], capture_output=True, check=False, creationflags=subprocess.CREATE_NO_WINDOW)
+        except Exception:
+            pass
+
+    # ----------------------------- IP target conversion ----------------------
+    def convert_block_ips(self, target: str):
+        if target not in BLOCK_SINK_IPS:
+            return
+        if self._block_during_import("Convert Block IPs"):
+            return
+        original = self.get_lines()
+        rewritten, changed = rewrite_block_sink_ip(original, target)
+        if not changed:
+            self.update_status(f"All blocking entries already use {target}. No changes made.")
+            return
+
+        def apply_to_editor(approved_lines):
+            self.set_text(approved_lines)
+            self.update_status(f"Rewrote {changed} blocking entr{'y' if changed == 1 else 'ies'} to {target}.")
+            self._preferred_block_sink = target
+
+        PreviewWindow(
+            self,
+            original,
+            rewritten,
+            title=f"Preview: Convert Block IPs to {target}",
+            on_apply_callback=apply_to_editor,
+            apply_label=f"Use {target}",
+        )
+
+    # ----------------------------- Health Scan -------------------------------
+    def show_health_scan(self):
+        lines = self.get_lines()
+        findings = scan_suspicious_redirects(lines)
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Hosts Health Scan")
+        dialog.configure(bg=PALETTE["base"])
+        dialog.transient(self.root)
+        dialog.geometry("720x520")
+
+        header = ttk.Label(
+            dialog,
+            text="Hosts Health Scan",
+            font=("Segoe UI Semibold", 14),
+        )
+        header.pack(anchor='w', padx=16, pady=(16, 4))
+
+        if not findings:
+            ttk.Label(
+                dialog,
+                text="No suspicious redirects detected. Every non-loopback mapping is on a private LAN range.",
+                wraplength=660,
+                justify="left",
+                style="Hint.TLabel",
+            ).pack(anchor='w', padx=16, pady=(0, 12))
+        else:
+            ttk.Label(
+                dialog,
+                text=(
+                    f"Found {len(findings)} entr{'y' if len(findings) == 1 else 'ies'} mapping domains to "
+                    "non-loopback, non-LAN IPs. These are a classic malware/hijack indicator — "
+                    "verify each one against a legitimate source before keeping it."
+                ),
+                wraplength=660,
+                justify="left",
+                foreground=PALETTE["yellow"],
+            ).pack(anchor='w', padx=16, pady=(0, 12))
+
+        body = scrolledtext.ScrolledText(
+            dialog, wrap=tk.WORD, font=("Consolas", 10),
+            bg=PALETTE["crust"], fg=PALETTE["text"], relief="flat",
+        )
+        body.pack(expand=True, fill='both', padx=16, pady=(0, 12))
+        if findings:
+            body.insert(tk.END, "Line    IP                  Domain\n")
+            body.insert(tk.END, "-----   -----------------   -----------------------------\n")
+            for line_idx, ip, domain in findings:
+                body.insert(tk.END, f"{line_idx + 1:>5}   {ip:<17}   {domain}\n")
+        else:
+            body.insert(tk.END, "(clean)\n")
+        body.configure(state="disabled")
+
+        btn_row = ttk.Frame(dialog)
+        btn_row.pack(fill="x", padx=16, pady=(0, 16))
+        ttk.Button(btn_row, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
+        dialog.grab_set()
+
+    # ----------------------------- Check Domain ------------------------------
+    def show_check_domain(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Check Domain")
+        dialog.configure(bg=PALETTE["base"])
+        dialog.transient(self.root)
+        dialog.geometry("720x560")
+
+        ttk.Label(dialog, text="Check Domain", font=("Segoe UI Semibold", 14)).pack(anchor='w', padx=16, pady=(16, 2))
+        ttk.Label(
+            dialog,
+            text="Enter a domain to see whether it's blocked by the editor, on your whitelist, and which curated sources we've fetched that contain it.",
+            wraplength=660, justify="left", style="Hint.TLabel",
+        ).pack(anchor='w', padx=16, pady=(0, 10))
+
+        query_frame = ttk.Frame(dialog)
+        query_frame.pack(fill="x", padx=16)
+        query_var = tk.StringVar()
+        entry = ttk.Entry(query_frame, textvariable=query_var)
+        entry.pack(side="left", fill="x", expand=True)
+        entry.focus_set()
+
+        output = scrolledtext.ScrolledText(
+            dialog, wrap=tk.WORD, font=("Consolas", 10),
+            bg=PALETTE["crust"], fg=PALETTE["text"], relief="flat",
+        )
+        output.pack(expand=True, fill='both', padx=16, pady=12)
+        output.configure(state="disabled")
+
+        def write_output(text):
+            output.configure(state="normal")
+            output.delete('1.0', tk.END)
+            output.insert(tk.END, text)
+            output.configure(state="disabled")
+
+        def run_check(_event=None):
+            domain = query_var.get().strip().lower().lstrip('.')
+            if not domain:
+                write_output("Enter a domain to check.")
+                return
+            if not looks_like_domain(domain, allow_single_label=False):
+                write_output(f"'{domain}' does not look like a valid multi-label domain.")
+                return
+
+            lines = self.get_lines()
+            blocked_on_lines = []
+            for idx, line in enumerate(lines):
+                parsed, _ = parse_hosts_line_entries(line)
+                for _, entry_domain, is_block in parsed:
+                    if is_block and (entry_domain == domain or entry_domain.endswith('.' + domain)):
+                        blocked_on_lines.append((idx + 1, entry_domain, line.strip()))
+
+            whitelist = self._get_whitelist_set()
+            on_whitelist = domain in whitelist or any(
+                domain.endswith('.' + w) for w in whitelist
+            )
+
+            source_matches = find_sources_containing_domain(domain, self._source_corpus_cache)
+            not_yet_fetched = [
+                name for category in self.BLOCKLIST_SOURCES.values()
+                for name, _, _ in category
+                if name not in self._source_corpus_cache
+            ]
+
+            buf = [f"Domain: {domain}", ""]
+            if blocked_on_lines:
+                buf.append(f"BLOCKED in current editor on {len(blocked_on_lines)} line(s):")
+                for line_no, matched, raw in blocked_on_lines[:30]:
+                    buf.append(f"  line {line_no}: {raw}  ({matched})")
+                if len(blocked_on_lines) > 30:
+                    buf.append(f"  ...and {len(blocked_on_lines) - 30} more")
+            else:
+                buf.append("NOT blocked in current editor.")
+            buf.append("")
+            buf.append(f"Whitelist: {'YES' if on_whitelist else 'no'}")
+            buf.append("")
+            if source_matches:
+                buf.append(f"Found in {len(source_matches)} previously-fetched source(s):")
+                for name in source_matches:
+                    buf.append(f"  - {name}")
+            else:
+                buf.append("Not present in any previously-fetched curated source.")
+            if not_yet_fetched:
+                buf.append("")
+                buf.append(f"({len(not_yet_fetched)} source(s) not yet fetched this session — import them to include in this lookup.)")
+            write_output('\n'.join(buf))
+
+        ttk.Button(query_frame, text="Check", command=run_check, style="Action.TButton").pack(side="left", padx=(8, 0))
+        entry.bind("<Return>", run_check)
+
+        btn_row = ttk.Frame(dialog)
+        btn_row.pack(fill="x", padx=16, pady=(0, 16))
+        ttk.Button(btn_row, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
+        dialog.grab_set()
+
+    # ----------------------------- Export ------------------------------------
+    def show_export_dialog(self):
+        original = self.get_lines()
+        whitelist_set = self._get_whitelist_set()
+        cleaned, _ = _get_canonical_cleaned_output_and_stats(original, whitelist_set)
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Export Cleaned Hosts")
+        dialog.configure(bg=PALETTE["base"])
+        dialog.transient(self.root)
+        dialog.geometry("460x260")
+
+        ttk.Label(dialog, text="Export Cleaned Hosts", font=("Segoe UI Semibold", 13)).pack(anchor='w', padx=16, pady=(16, 2))
+        ttk.Label(
+            dialog,
+            text="Choose a format to save the cleaned view under. Whitelist and deduplication are applied first.",
+            wraplength=420, justify="left", style="Hint.TLabel",
+        ).pack(anchor='w', padx=16, pady=(0, 10))
+
+        format_var = tk.StringVar(value="hosts")
+        formats = [
+            ("hosts", "Hosts file (what Cleaned Save writes)"),
+            ("domains", "Plain domains, one per line"),
+            ("adblock", "Adblock / uBlock (||domain^)"),
+            ("dnsmasq", "dnsmasq (address=/domain/0.0.0.0)"),
+            ("pihole", "Pi-hole gravity (plain domains)"),
+        ]
+        for value, label in formats:
+            ttk.Radiobutton(dialog, text=label, variable=format_var, value=value).pack(anchor='w', padx=20)
+
+        def do_export():
+            fmt = format_var.get()
+            default_ext = {
+                "hosts": ".txt", "domains": ".txt", "adblock": ".txt",
+                "dnsmasq": ".conf", "pihole": ".txt",
+            }.get(fmt, ".txt")
+            path = filedialog.asksaveasfilename(
+                parent=dialog,
+                title="Export As",
+                defaultextension=default_ext,
+                initialdir=self.last_open_dir,
+                filetypes=[("Text file", "*.txt"), ("All files", "*.*")],
+            )
+            if not path:
+                return
+            try:
+                content = export_lines_as_format(cleaned, fmt)
+                write_text_file_atomic(path, content)
+                self.last_open_dir = os.path.dirname(path) or self.last_open_dir
+                self.update_status(f"Exported {fmt} format to {path}")
+                dialog.destroy()
+            except Exception as e:
+                messagebox.showerror("Export Error", f"Could not export:\n{e}", parent=dialog)
+
+        btn_row = ttk.Frame(dialog)
+        btn_row.pack(fill="x", padx=16, pady=(12, 16))
+        ttk.Button(btn_row, text="Export…", command=do_export, style="Action.TButton").pack(side="right")
+        ttk.Button(btn_row, text="Cancel", command=dialog.destroy, style="Secondary.TButton").pack(side="right", padx=(0, 8))
+        dialog.grab_set()
+
+    # ----------------------------- Preferences -------------------------------
+    def show_preferences(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Preferences")
+        dialog.configure(bg=PALETTE["base"])
+        dialog.transient(self.root)
+        dialog.geometry("480x260")
+
+        ttk.Label(dialog, text="Preferences", font=("Segoe UI Semibold", 14)).pack(anchor='w', padx=20, pady=(20, 2))
+        ttk.Label(
+            dialog,
+            text="Settings roam via the persistent config file.",
+            wraplength=440, justify="left", style="Hint.TLabel",
+        ).pack(anchor='w', padx=20, pady=(0, 12))
+
+        row = ttk.Frame(dialog)
+        row.pack(fill='x', padx=20, pady=6)
+        ttk.Label(row, text="Timestamped backup retention (0-50):").pack(side='left')
+        retention_var = tk.IntVar(value=self._backup_retention)
+        spin = tk.Spinbox(
+            row, from_=0, to=50, textvariable=retention_var, width=6,
+            bg=PALETTE["crust"], fg=PALETTE["text"], insertbackground=PALETTE["text"],
+            buttonbackground=PALETTE["surface0"], highlightthickness=0, relief="flat",
+        )
+        spin.pack(side='right')
+
+        row2 = ttk.Frame(dialog)
+        row2.pack(fill='x', padx=20, pady=6)
+        ttk.Label(row2, text="Default block-sink IP:").pack(side='left')
+        sink_var = tk.StringVar(value=self._preferred_block_sink)
+        sink_menu = ttk.OptionMenu(row2, sink_var, self._preferred_block_sink, *sorted(BLOCK_SINK_IPS))
+        sink_menu.pack(side='right')
+
+        btn_row = ttk.Frame(dialog)
+        btn_row.pack(fill='x', padx=20, pady=(16, 20))
+
+        def do_save():
+            try:
+                new_ret = max(0, min(50, int(retention_var.get())))
+            except (TypeError, tk.TclError, ValueError):
+                new_ret = BACKUP_RETENTION
+            self._backup_retention = new_ret
+            chosen = sink_var.get()
+            if chosen in BLOCK_SINK_IPS:
+                self._preferred_block_sink = chosen
+            self.save_config()
+            dialog.destroy()
+            self.update_status(f"Preferences saved: retention={new_ret}, sink={self._preferred_block_sink}.")
+
+        ttk.Button(btn_row, text="Cancel", command=dialog.destroy, style="Secondary.TButton").pack(side="right", padx=(0, 8))
+        ttk.Button(btn_row, text="Save", command=do_save, style="Action.TButton").pack(side="right")
+        dialog.grab_set()
+
+    # ----------------------------- Scheduled Auto-Update ---------------------
+    def show_schedule_wizard(self):
+        if os.name != 'nt':
+            messagebox.showinfo("Not Supported", "Scheduled auto-update uses Windows Task Scheduler.", parent=self.root)
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Schedule Auto-Update")
+        dialog.configure(bg=PALETTE["base"])
+        dialog.transient(self.root)
+        dialog.geometry("560x340")
+
+        ttk.Label(dialog, text="Schedule Auto-Update", font=("Segoe UI Semibold", 14)).pack(anchor='w', padx=20, pady=(20, 2))
+        ttk.Label(
+            dialog,
+            text=(
+                "Registers a Windows Scheduled Task that runs "
+                f"`{APP_SLUG} --update` at your chosen interval. The task runs with the highest "
+                "privilege level so it can write the hosts file unattended."
+            ),
+            wraplength=520, justify="left", style="Hint.TLabel",
+        ).pack(anchor='w', padx=20, pady=(0, 12))
+
+        freq_frame = ttk.Frame(dialog)
+        freq_frame.pack(fill='x', padx=20, pady=6)
+        ttk.Label(freq_frame, text="Interval:").pack(side='left')
+        freq_var = tk.StringVar(value="DAILY")
+        ttk.OptionMenu(freq_frame, freq_var, "DAILY", "DAILY", "WEEKLY", "ONLOGON").pack(side='left', padx=(8, 0))
+
+        time_frame = ttk.Frame(dialog)
+        time_frame.pack(fill='x', padx=20, pady=6)
+        ttk.Label(time_frame, text="Time (HH:MM, 24h):").pack(side='left')
+        time_var = tk.StringVar(value="03:30")
+        ttk.Entry(time_frame, textvariable=time_var, width=8).pack(side='left', padx=(8, 0))
+
+        status = ttk.Label(dialog, text="", style="Hint.TLabel", wraplength=520)
+        status.pack(anchor='w', padx=20, pady=(8, 0))
+
+        def do_register():
+            task_name = "HostsFileGet Auto-Update"
+            interpreter = sys.executable
+            script = os.path.abspath(sys.argv[0] if not getattr(sys, 'frozen', False) else sys.executable)
+            command = f'"{interpreter}" "{script}" --update' if not getattr(sys, 'frozen', False) else f'"{script}" --update'
+            tr = command
+            freq = freq_var.get()
+            args = [
+                'schtasks', '/Create', '/TN', task_name, '/TR', tr,
+                '/SC', freq, '/RL', 'HIGHEST', '/F',
+            ]
+            if freq in ("DAILY", "WEEKLY"):
+                args += ['/ST', time_var.get().strip() or "03:30"]
+            try:
+                proc = subprocess.run(args, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                if proc.returncode == 0:
+                    status.config(text=f"Task '{task_name}' registered successfully.", foreground=PALETTE["green"])
+                    self.update_status(f"Scheduled auto-update: {freq} @ {time_var.get()}.")
+                else:
+                    err = (proc.stderr or proc.stdout or "").strip() or f"schtasks exit {proc.returncode}"
+                    status.config(text=err, foreground=PALETTE["red"])
+            except Exception as e:
+                status.config(text=f"Failed to register task: {e}", foreground=PALETTE["red"])
+
+        def do_unregister():
+            task_name = "HostsFileGet Auto-Update"
+            try:
+                proc = subprocess.run(
+                    ['schtasks', '/Delete', '/TN', task_name, '/F'],
+                    capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+                if proc.returncode == 0:
+                    status.config(text="Task removed.", foreground=PALETTE["yellow"])
+                else:
+                    status.config(text=(proc.stderr or proc.stdout).strip(), foreground=PALETTE["red"])
+            except Exception as e:
+                status.config(text=f"Failed to remove task: {e}", foreground=PALETTE["red"])
+
+        btn_row = ttk.Frame(dialog)
+        btn_row.pack(fill='x', padx=20, pady=(16, 20))
+        ttk.Button(btn_row, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
+        ttk.Button(btn_row, text="Remove Schedule", command=do_unregister, style="Danger.TButton").pack(side="right", padx=(0, 8))
+        ttk.Button(btn_row, text="Register / Replace", command=do_register, style="Action.TButton").pack(side="right", padx=(0, 8))
+        dialog.grab_set()
+
+    # ----------------------------- Goto Anything -----------------------------
+    def show_goto_anything(self, _event=None):
+        lines = self.get_lines()
+        # Collect candidates: every domain in editor + source name + custom source name.
+        candidates: list[tuple[str, str, int | None]] = []
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if _is_comment_line(stripped):
+                continue
+            parsed, _ = parse_hosts_line_entries(line)
+            for _, domain, _ in parsed:
+                candidates.append((domain, "editor domain", idx + 1))
+        seen: set[str] = set()
+        unique_candidates: list[tuple[str, str, int | None]] = []
+        for domain, kind, ln in candidates:
+            if domain in seen:
+                continue
+            seen.add(domain)
+            unique_candidates.append((domain, kind, ln))
+        for category, sources in self.BLOCKLIST_SOURCES.items():
+            for name, _url, _tooltip in sources:
+                unique_candidates.append((f"{name} — {category}", "curated source", None))
+        for entry in self.custom_sources:
+            unique_candidates.append((entry["name"], "custom source", None))
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Goto Anything")
+        dialog.configure(bg=PALETTE["base"])
+        dialog.transient(self.root)
+        dialog.geometry("640x440")
+
+        query_var = tk.StringVar()
+        entry = ttk.Entry(dialog, textvariable=query_var, font=("Segoe UI", 11))
+        entry.pack(fill='x', padx=12, pady=(12, 4))
+        entry.focus_set()
+
+        listbox = tk.Listbox(
+            dialog, bg=PALETTE["crust"], fg=PALETTE["text"],
+            selectbackground=PALETTE["blue"], selectforeground=PALETTE["crust"],
+            font=("Consolas", 10), relief="flat", highlightthickness=0, borderwidth=0, activestyle="none",
+        )
+        listbox.pack(expand=True, fill='both', padx=12, pady=(0, 12))
+
+        current_results: list[tuple[str, str, int | None]] = []
+
+        def refresh(*_a):
+            query = query_var.get().strip()
+            listbox.delete(0, tk.END)
+            current_results.clear()
+            if not query:
+                ranked = [(c, 0) for c in unique_candidates[:200]]
+            else:
+                scored = [(c, fuzzy_score(query, c[0])) for c in unique_candidates]
+                ranked = [pair for pair in scored if pair[1] >= 0]
+                ranked.sort(key=lambda p: p[1], reverse=True)
+                ranked = ranked[:200]
+            for (label, kind, ln), _score in ranked:
+                suffix = f" (line {ln})" if ln else ""
+                listbox.insert(tk.END, f"[{kind}] {label}{suffix}")
+                current_results.append((label, kind, ln))
+
+        def on_enter(_event=None):
+            try:
+                sel = listbox.curselection()
+                if not sel and current_results:
+                    sel = (0,)
+                if not sel:
+                    return
+                label, kind, ln = current_results[sel[0]]
+                dialog.destroy()
+                if ln:
+                    self.text_area.mark_set('insert', f"{ln}.0")
+                    self.text_area.see(f"{ln}.0")
+                elif kind == "curated source":
+                    self.source_filter_var.set(label.split(" — ")[0])
+                return "break"
+            except (IndexError, tk.TclError):
+                return
+
+        query_var.trace_add('write', refresh)
+        entry.bind("<Down>", lambda e: (listbox.focus_set(), listbox.selection_set(0) if listbox.size() else None, "break")[-1])
+        entry.bind("<Return>", on_enter)
+        listbox.bind("<Return>", on_enter)
+        listbox.bind("<Double-Button-1>", on_enter)
+        dialog.bind("<Escape>", lambda _e: dialog.destroy())
+        refresh()
+        dialog.grab_set()
+
+    # ----------------------------- Sources Report ----------------------------
+    def show_sources_report(self):
+        lines = self.get_lines()
+        buckets = summarize_source_contributions(lines)
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Sources Report")
+        dialog.configure(bg=PALETTE["base"])
+        dialog.transient(self.root)
+        dialog.geometry("720x520")
+
+        ttk.Label(dialog, text="Sources Report", font=("Segoe UI Semibold", 14)).pack(anchor='w', padx=16, pady=(16, 2))
+        ttk.Label(
+            dialog,
+            text="Ranked by blocking-entry contribution. Use this to prune bloated or redundant feeds.",
+            wraplength=660, justify="left", style="Hint.TLabel",
+        ).pack(anchor='w', padx=16, pady=(0, 10))
+
+        body = scrolledtext.ScrolledText(
+            dialog, wrap=tk.NONE, font=("Consolas", 10),
+            bg=PALETTE["crust"], fg=PALETTE["text"], relief="flat",
+        )
+        body.pack(expand=True, fill='both', padx=16, pady=(0, 12))
+
+        if not buckets:
+            body.insert(tk.END, "(editor is empty)\n")
+        else:
+            total_blocks = sum(b["blocking_entries"] for b in buckets) or 1
+            body.insert(tk.END, f"{'Source':<50} {'Blocks':>10} {'Lines':>10} {'Share':>8}\n")
+            body.insert(tk.END, "-" * 80 + "\n")
+            for b in buckets:
+                share = 100.0 * b["blocking_entries"] / total_blocks
+                name = b["name"][:49]
+                body.insert(tk.END, f"{name:<50} {b['blocking_entries']:>10,} {b['total_lines']:>10,} {share:>7.1f}%\n")
+        body.configure(state="disabled")
+
+        btn_row = ttk.Frame(dialog)
+        btn_row.pack(fill="x", padx=16, pady=(0, 16))
+        ttk.Button(btn_row, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
+        dialog.grab_set()
+
+    # ----------------------------- First-Run Wizard --------------------------
+    FIRST_RUN_BUNDLES = [
+        ("Ads & tracking", True, [
+            ("HaGezi Pro", "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/pro.txt"),
+            ("StevenBlack Unified", "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"),
+            ("EasyList Hosts", "https://v.firebog.net/hosts/Easylist.txt"),
+        ]),
+        ("Malware & phishing", True, [
+            ("URLHaus Malware", "https://urlhaus.abuse.ch/downloads/hostfile/"),
+            ("Phishing Army", "https://phishing.army/download/phishing_army_blocklist.txt"),
+            ("Scam Domains Wildcard", "https://raw.githubusercontent.com/jarelllama/Scam-Blocklist/main/lists/wildcard_domains/scams.txt"),
+        ]),
+        ("Windows / Microsoft telemetry", False, [
+            ("Windows Spy Blocker", "https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/spy.txt"),
+            ("jmdugan Microsoft", "https://raw.githubusercontent.com/jmdugan/blocklists/master/corporations/microsoft/all"),
+        ]),
+        ("Adult / NSFW", False, [
+            ("Sinfonietta Pornography", "https://raw.githubusercontent.com/Sinfonietta/hostfiles/master/pornography-hosts"),
+            ("BlocklistProject Porn", "https://blocklistproject.github.io/Lists/porn.txt"),
+        ]),
+        ("Gambling", False, [
+            ("BlocklistProject Gambling", "https://blocklistproject.github.io/Lists/gambling.txt"),
+        ]),
+        ("Social media (opt-in distraction block)", False, [
+            ("Sinfonietta Social", "https://raw.githubusercontent.com/Sinfonietta/hostfiles/master/social-hosts"),
+        ]),
+    ]
+
+    def maybe_show_first_run_wizard(self):
+        if self._has_completed_first_run:
+            return
+        # Don't show if user already has an existing whitelist or custom
+        # sources — those signal returning users whose config predated
+        # v2.14 where this flag was introduced.
+        if self.custom_sources or self._last_saved_whitelist_text.strip():
+            self._has_completed_first_run = True
+            self.save_config()
+            return
+        self._safe_after(400, self.show_first_run_wizard)
+
+    def show_first_run_wizard(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Welcome to HostsFileGet")
+        dialog.configure(bg=PALETTE["base"])
+        dialog.transient(self.root)
+        dialog.geometry("640x560")
+
+        ttk.Label(dialog, text=f"Welcome to {APP_NAME}", font=("Segoe UI Semibold", 16)).pack(anchor='w', padx=20, pady=(20, 2))
+        ttk.Label(
+            dialog,
+            text=(
+                "Pick the categories you want blocked and we'll import a small curated starter set "
+                "for each one. You can always add more sources later from the sidebar."
+            ),
+            wraplength=600, justify="left", style="Hint.TLabel",
+        ).pack(anchor='w', padx=20, pady=(0, 12))
+
+        body = ttk.Frame(dialog)
+        body.pack(expand=True, fill='both', padx=20)
+
+        vars_by_category: dict[str, tk.BooleanVar] = {}
+        for label, default_on, _ in self.FIRST_RUN_BUNDLES:
+            var = tk.BooleanVar(value=default_on)
+            vars_by_category[label] = var
+            ttk.Checkbutton(body, text=label, variable=var).pack(anchor='w', pady=2)
+
+        btn_row = ttk.Frame(dialog)
+        btn_row.pack(fill="x", padx=20, pady=(12, 20))
+
+        def do_apply():
+            selected: list[tuple[str, str]] = []
+            for label, _, sources in self.FIRST_RUN_BUNDLES:
+                if vars_by_category[label].get():
+                    selected.extend(sources)
+            self._has_completed_first_run = True
+            self.save_config()
+            dialog.destroy()
+            if selected:
+                self.start_import_worker(selected)
+
+        def do_skip():
+            self._has_completed_first_run = True
+            self.save_config()
+            dialog.destroy()
+
+        ttk.Button(btn_row, text="Skip for now", command=do_skip, style="Secondary.TButton").pack(side="left")
+        ttk.Button(btn_row, text="Import Selected", command=do_apply, style="Action.TButton").pack(side="right")
+        dialog.grab_set()
+
+    # ----------------------------- Panic Restore -----------------------------
+    def panic_restore_stock(self):
+        """Replace the editor with the stock Microsoft default hosts.
+
+        Unlike ``revert_to_backup`` this does not depend on any user-created
+        snapshot — handy when every backup is also broken or when the user
+        just wants the original Windows baseline back.
+        """
+        if self._block_during_import("Panic Restore"):
+            return
+        if not messagebox.askyesno(
+            "Panic Restore",
+            "Replace the editor with the Microsoft default hosts file?\n\n"
+            "Your current editor content is discarded. Use File > Save Raw "
+            "to commit the stock template to disk.",
+            parent=self.root,
+        ):
+            return
+        lines = STOCK_MICROSOFT_HOSTS.splitlines()
+        self.set_text(lines)
+        self.update_status("Panic Restore: loaded Microsoft default into editor. Save Raw to apply.")
+
+    # ----------------------------- Granular Cleanup --------------------------
+    def _granular_cleanup(self, *, drop_comments=False, drop_blanks=False, drop_invalid=False, label: str = "Cleanup"):
+        if self._block_during_import(label):
+            return
+        original = self.get_lines()
+        cleaned, stats = strip_lines_by_category(
+            original,
+            drop_comments=drop_comments,
+            drop_blanks=drop_blanks,
+            drop_invalid=drop_invalid,
+        )
+        total_removed = sum(stats.values())
+        if total_removed == 0:
+            self.update_status(f"{label}: nothing to remove — editor is already clean.")
+            return
+
+        def apply_to_editor(approved_lines):
+            self.set_text(approved_lines)
+            parts = []
+            if stats["removed_comments"]:
+                parts.append(f"{stats['removed_comments']:,} comments")
+            if stats["removed_blanks"]:
+                parts.append(f"{stats['removed_blanks']:,} blank lines")
+            if stats["removed_invalid"]:
+                parts.append(f"{stats['removed_invalid']:,} invalid lines")
+            self.update_status(f"{label}: removed " + ", ".join(parts) + ".")
+
+        PreviewWindow(
+            self,
+            original,
+            cleaned,
+            title=f"Preview: {label}",
+            on_apply_callback=apply_to_editor,
+            apply_label="Apply",
+        )
+
+    def cleanup_comments_only(self):
+        self._granular_cleanup(drop_comments=True, label="Remove Comments")
+
+    def cleanup_blanks_only(self):
+        self._granular_cleanup(drop_blanks=True, label="Remove Blank Lines")
+
+    def cleanup_invalid_only(self):
+        self._granular_cleanup(drop_invalid=True, label="Remove Invalid Lines")
+
+    # ----------------------------- Kill Import Section -----------------------
+    def show_remove_import_section(self):
+        if self._block_during_import("Remove Import Section"):
+            return
+        lines = self.get_lines()
+        sections = discover_import_sections(lines)
+        if not sections:
+            self.update_status("No import sections detected. Sections require `# --- Raw|Normalized Import Start/End: NAME ---` markers.")
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Remove Import Section")
+        dialog.configure(bg=PALETTE["base"])
+        dialog.transient(self.root)
+        dialog.geometry("620x480")
+
+        ttk.Label(dialog, text="Remove Import Section", font=("Segoe UI Semibold", 13)).pack(anchor='w', padx=16, pady=(16, 2))
+        ttk.Label(
+            dialog,
+            text="Each row is an imported source block detected in the editor. Removing a section deletes every line between its Start and End markers, including the markers themselves.",
+            wraplength=580, justify="left", style="Hint.TLabel",
+        ).pack(anchor='w', padx=16, pady=(0, 10))
+
+        list_frame = ttk.Frame(dialog)
+        list_frame.pack(expand=True, fill='both', padx=16, pady=(0, 12))
+
+        selected = {idx: tk.BooleanVar(value=False) for idx, _ in enumerate(sections)}
+        for idx, section in enumerate(sections):
+            label = (
+                f"[{section['mode']}] {section['name']}  "
+                f"(lines {section['start']+1:,} - {section['end']+1:,}, "
+                f"{section['end'] - section['start'] + 1:,} lines)"
+            )
+            ttk.Checkbutton(list_frame, text=label, variable=selected[idx]).pack(anchor='w', padx=4, pady=2)
+
+        def do_remove():
+            targets = [sections[i] for i, var in selected.items() if var.get()]
+            if not targets:
+                dialog.destroy()
+                return
+            # Delete in reverse index order so later sections' indices stay valid.
+            new_lines = list(lines)
+            for section in sorted(targets, key=lambda s: s["start"], reverse=True):
+                new_lines = remove_import_section(new_lines, section)
+
+            def apply_to_editor(approved_lines):
+                self.set_text(approved_lines)
+                self.update_status(
+                    f"Removed {len(targets)} import section(s), "
+                    f"{len(lines) - len(approved_lines):,} line(s) deleted."
+                )
+                dialog.destroy()
+
+            PreviewWindow(
+                self,
+                lines,
+                new_lines,
+                title="Preview: Remove Import Section(s)",
+                on_apply_callback=apply_to_editor,
+                apply_label="Remove Section(s)",
+            )
+
+        btn_row = ttk.Frame(dialog)
+        btn_row.pack(fill="x", padx=16, pady=(0, 16))
+        ttk.Button(btn_row, text="Remove Selected", command=do_remove, style="Danger.TButton").pack(side="right")
+        ttk.Button(btn_row, text="Cancel", command=dialog.destroy, style="Secondary.TButton").pack(side="right", padx=(0, 8))
+        dialog.grab_set()
+
+    # ----------------------------- DNS Resolver / Ping -----------------------
+    def _ctx_resolve_domain(self):
+        _, _, domain = self._ctx_line_info()
+        if not domain:
+            self.update_status("No domain detected at cursor.", is_error=True)
+            return
+        import socket
+        try:
+            infos = socket.getaddrinfo(domain, None)
+        except socket.gaierror as e:
+            messagebox.showinfo("Resolve Domain", f"{domain}\n\nResolution failed: {e}", parent=self.root)
+            return
+        addrs = sorted({info[4][0] for info in infos})
+        messagebox.showinfo(
+            "Resolve Domain",
+            f"{domain}\n\n" + "\n".join(addrs) if addrs else f"{domain}\n\n(no addresses)",
+            parent=self.root,
+        )
+
+    def _ctx_ping_domain(self):
+        _, _, domain = self._ctx_line_info()
+        if not domain:
+            self.update_status("No domain detected at cursor.", is_error=True)
+            return
+        if os.name != 'nt':
+            self.update_status("Ping is only wired for Windows in this build.", is_error=True)
+            return
+
+        def worker():
+            try:
+                proc = subprocess.run(
+                    ['ping', '-n', '4', '-w', '1500', domain],
+                    capture_output=True, text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+                output = proc.stdout.strip() or proc.stderr.strip() or "(no output)"
+            except Exception as e:
+                output = f"Ping failed: {e}"
+            self._safe_after(0, lambda o=output: messagebox.showinfo(f"Ping {domain}", o, parent=self.root))
+
+        threading.Thread(target=worker, daemon=True).start()
+        self.update_status(f"Pinging {domain}…")
+
+    # ----------------------------- Editor Context Menu -----------------------
+    def _build_editor_context_menu(self):
+        menu = tk.Menu(
+            self.text_area, tearoff=0,
+            bg=PALETTE["mantle"], fg=PALETTE["text"],
+            activebackground=PALETTE["blue"], activeforeground="#0b1020",
+        )
+        menu.add_command(label="Whitelist this domain", command=self._ctx_whitelist_domain)
+        menu.add_command(label="Copy domain", command=self._ctx_copy_domain)
+        menu.add_separator()
+        menu.add_command(label="Toggle comment on selection", command=self.toggle_selection_comment)
+        menu.add_command(label="Remove this line", command=self._ctx_remove_line)
+        menu.add_separator()
+        menu.add_command(label="Resolve domain (real DNS)", command=self._ctx_resolve_domain)
+        menu.add_command(label="Ping domain", command=self._ctx_ping_domain)
+        menu.add_separator()
+        menu.add_command(label="Check this domain…", command=self._ctx_check_domain)
+        self._editor_context_menu = menu
+
+    def _ctx_line_info(self):
+        try:
+            idx = self.text_area.index("insert")
+            line_no = int(idx.split('.')[0])
+            line = self.text_area.get(f"{line_no}.0", f"{line_no}.end")
+        except tk.TclError:
+            return None, None, None
+        parsed, _ = parse_hosts_line_entries(line)
+        domain = parsed[0][1] if parsed else None
+        return line_no, line, domain
+
+    def _ctx_whitelist_domain(self):
+        _, _, domain = self._ctx_line_info()
+        if not domain:
+            self.update_status("No domain detected at cursor.", is_error=True)
+            return
+        current = self.whitelist_text_area.get('1.0', tk.END).strip()
+        entries = set(line.strip().lower() for line in current.splitlines() if line.strip())
+        if domain in entries:
+            self.update_status(f"'{domain}' is already in the whitelist.")
+            return
+        new_text = (current + '\n' + domain).strip() if current else domain
+        self.whitelist_text_area.delete('1.0', tk.END)
+        self.whitelist_text_area.insert('1.0', new_text + '\n')
+        self._cached_whitelist_text = None  # invalidate
+        self._trigger_ui_update()
+        self.update_status(f"Added '{domain}' to whitelist.")
+
+    def _ctx_copy_domain(self):
+        _, _, domain = self._ctx_line_info()
+        if not domain:
+            self.update_status("No domain detected at cursor.", is_error=True)
+            return
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(domain)
+            self.update_status(f"Copied '{domain}' to clipboard.")
+        except tk.TclError:
+            self.update_status("Clipboard unavailable.", is_error=True)
+
+    def _ctx_remove_line(self):
+        line_no, _, _ = self._ctx_line_info()
+        if line_no is None:
+            return
+        try:
+            self.text_area.delete(f"{line_no}.0", f"{line_no + 1}.0")
+            self._trigger_ui_update()
+            self.update_status(f"Removed line {line_no}.")
+        except tk.TclError:
+            pass
+
+    def _ctx_check_domain(self):
+        _, _, domain = self._ctx_line_info()
+        self.show_check_domain()
+        # Best-effort: prefill the dialog's query. We rely on it being the
+        # topmost Toplevel that just opened.
+        if domain:
+            try:
+                top = self.root.tk.call('winfo', 'children', '.')
+                # Can't reliably prefill without refactoring the dialog to
+                # return its entry. Status message is the minimum signal.
+            except tk.TclError:
+                pass
+
+    def toggle_selection_comment(self, _event=None):
+        try:
+            if self.text_area.tag_ranges("sel"):
+                first = self.text_area.index("sel.first")
+                last = self.text_area.index("sel.last")
+            else:
+                cursor = self.text_area.index("insert")
+                first = f"{cursor.split('.')[0]}.0"
+                last = f"{int(cursor.split('.')[0]) + 1}.0"
+            start_line = int(first.split('.')[0])
+            end_line = int(last.split('.')[0])
+            if last.endswith('.0') and end_line > start_line:
+                end_line -= 1
+        except tk.TclError:
+            return "break"
+
+        lines = [self.text_area.get(f"{ln}.0", f"{ln}.end") for ln in range(start_line, end_line + 1)]
+        all_commented = all(not line.strip() or line.lstrip().startswith('#') for line in lines)
+        new_lines = []
+        for line in lines:
+            if all_commented:
+                stripped = line.lstrip()
+                if stripped.startswith('#'):
+                    lead = line[: len(line) - len(stripped)]
+                    after = stripped[1:]
+                    if after.startswith(' '):
+                        after = after[1:]
+                    new_lines.append(lead + after)
+                else:
+                    new_lines.append(line)
+            else:
+                if line.strip():
+                    new_lines.append('# ' + line)
+                else:
+                    new_lines.append(line)
+
+        self.text_area.delete(f"{start_line}.0", f"{end_line}.end")
+        self.text_area.insert(f"{start_line}.0", '\n'.join(new_lines))
+        self._trigger_ui_update()
+        return "break"
+
+    def _show_editor_context_menu(self, event):
+        try:
+            self.text_area.mark_set("insert", f"@{event.x},{event.y}")
+            self._editor_context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self._editor_context_menu.grab_release()
+
+    # ----------------------------- Preview Source ----------------------------
+    def preview_blocklist_source(self, name: str, url: str):
+        if not url:
+            return
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"Preview Source: {name}")
+        dialog.configure(bg=PALETTE["base"])
+        dialog.transient(self.root)
+        dialog.geometry("760x540")
+
+        ttk.Label(dialog, text=f"Preview: {name}", font=("Segoe UI Semibold", 13)).pack(anchor='w', padx=16, pady=(16, 2))
+        ttk.Label(
+            dialog,
+            text=f"{url}\nFirst ~{SOURCE_PREVIEW_MAX_LINES} lines fetched below. This does NOT import; use the source button to import.",
+            wraplength=720, justify="left", style="Hint.TLabel",
+        ).pack(anchor='w', padx=16, pady=(0, 8))
+
+        body = scrolledtext.ScrolledText(
+            dialog, wrap=tk.NONE, font=("Consolas", 10),
+            bg=PALETTE["crust"], fg=PALETTE["text"], relief="flat",
+        )
+        body.pack(expand=True, fill='both', padx=16, pady=(0, 12))
+        body.insert(tk.END, "Fetching…\n")
+        body.configure(state="disabled")
+
+        def write_body(text: str):
+            try:
+                if not dialog.winfo_exists():
+                    return
+                body.configure(state="normal")
+                body.delete('1.0', tk.END)
+                body.insert(tk.END, text)
+                body.configure(state="disabled")
+            except tk.TclError:
+                pass
+
+        def worker():
+            try:
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=15) as response:
+                    if response.getcode() != 200:
+                        raise urllib.error.HTTPError(url, response.getcode(), f"HTTP {response.getcode()}", response.info(), response.fp)
+                    raw = read_http_body_limited(response, max_bytes=SOURCE_PREVIEW_MAX_BYTES)
+                    lines = decode_downloaded_lines(
+                        url, raw, response.headers.get("Content-Encoding", "")
+                    )
+                if looks_like_html_document(lines):
+                    self._safe_after(0, lambda: write_body(
+                        "This URL returned HTML rather than a hosts list — the feed may be behind a captive page or has moved."
+                    ))
+                    return
+                snippet = '\n'.join(lines[:SOURCE_PREVIEW_MAX_LINES])
+                truncated = len(lines) > SOURCE_PREVIEW_MAX_LINES
+                if truncated:
+                    snippet += f"\n\n… ({len(lines) - SOURCE_PREVIEW_MAX_LINES} more lines not shown)"
+                self._safe_after(0, lambda: write_body(snippet or "(empty)"))
+            except Exception as e:
+                self._safe_after(0, lambda err=e: write_body(f"Could not fetch preview:\n{err}"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+        btn_row = ttk.Frame(dialog)
+        btn_row.pack(fill="x", padx=16, pady=(0, 16))
+        ttk.Button(btn_row, text="Import This Source", command=lambda: (dialog.destroy(), self.start_single_import(name, url)), style="Action.TButton").pack(side="right")
+        ttk.Button(btn_row, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right", padx=(0, 8))
 
     def load_file(self, is_initial_load=False):
         if not is_initial_load and self._block_during_import("Refresh"):
@@ -2751,10 +4553,8 @@ class HostsFileEditor:
             if not messagebox.askyesno("Save Empty Hosts File", "The editor is empty. Replace the current hosts file with an empty one?", parent=self.root):
                 return False
 
-        backup_path = self.HOSTS_FILE_PATH + ".bak"
         try:
-            if os.path.exists(self.HOSTS_FILE_PATH):
-                shutil.copy2(self.HOSTS_FILE_PATH, backup_path)
+            self._rotate_backups()
         except Exception as e:
             if not messagebox.askyesno("Backup Could Not Be Created", f"Could not create a backup before saving.\nError: {e}\n\nContinue anyway?", parent=self.root):
                 return False
@@ -2968,7 +4768,12 @@ class HostsFileEditor:
                     if self.stop_import_flag.is_set():
                         self.import_queue.put(("cancelled",))
                         return
-                 
+
+                # Record success metadata so the "Check Domain" tool can
+                # cross-reference without re-fetching, and tooltips can show
+                # freshness.
+                self.import_queue.put(("source_fetched", name, url, raw_lines))
+
                 processed = self._apply_import_mode_filter(name, raw_lines, mode)
                 if self.stop_import_flag.is_set():
                     self.import_queue.put(("cancelled",))
@@ -3000,7 +4805,17 @@ class HostsFileEditor:
                     i, total, name = msg[1], msg[2], msg[3]
                     self.progress_bar['value'] = i + 1
                     self.update_status(f"Importing source {i+1} of {total}: {name}...")
-                
+
+                elif msg_type == "source_fetched":
+                    name, url, raw_lines = msg[1], msg[2], msg[3]
+                    # Cap per-source corpus at ~2 MB of text so a huge
+                    # aggregate list can't balloon the session cache.
+                    text = '\n'.join(raw_lines)
+                    if len(text) > 2 * 1024 * 1024:
+                        text = text[: 2 * 1024 * 1024]
+                    self._source_corpus_cache[name] = text
+                    self.source_last_fetched[url] = datetime.datetime.now().isoformat(timespec='seconds')
+
                 elif msg_type == "log":
                     text, is_err = msg[1], msg[2]
                     # Only show log if it's an error, otherwise it flickers too fast
@@ -3610,6 +5425,51 @@ pause
                 return
 
 
+    def _apply_syntax_highlighting(self, lines: list[str]):
+        """Color IPs, comments, and import-section markers.
+
+        Kept cheap: only three tags, no per-domain coloring (which would
+        require O(n) regex scans and isn't legible at 10pt anyway). Runs in
+        the same debounced path as `_apply_inline_warnings` so we share the
+        O(n) line walk.
+        """
+        try:
+            if not self.text_area.winfo_exists():
+                return
+            self.text_area.tag_remove("syntax_ip", "1.0", tk.END)
+            self.text_area.tag_remove("syntax_comment", "1.0", tk.END)
+            self.text_area.tag_remove("syntax_marker", "1.0", tk.END)
+        except tk.TclError:
+            return
+
+        if not lines:
+            return
+
+        try:
+            for i, line in enumerate(lines):
+                ln = i + 1
+                stripped = line.lstrip()
+                if not stripped:
+                    continue
+                leading = len(line) - len(stripped)
+
+                if _is_comment_line(stripped):
+                    tag = "syntax_marker" if (
+                        IMPORT_START_RE.match(stripped) or IMPORT_END_RE.match(stripped)
+                    ) else "syntax_comment"
+                    self.text_area.tag_add(tag, f"{ln}.0", f"{ln}.end")
+                    continue
+
+                # Highlight the leading IP token if present.
+                content = stripped.split('#', 1)[0]
+                first = content.split(None, 1)[0] if content.split() else ""
+                if first and _looks_like_ip_token(first):
+                    col_start = leading
+                    col_end = leading + len(first)
+                    self.text_area.tag_add("syntax_ip", f"{ln}.{col_start}", f"{ln}.{col_end}")
+        except tk.TclError:
+            return
+
     # ----------------------------- Search -------------------------------------
     def search_clear(self, announce=True):
         self.text_area.tag_remove("search_match", "1.0", tk.END)
@@ -3759,7 +5619,253 @@ pause
         self._focus_current_match()
 
 
+def _cli_hosts_path() -> str:
+    return _default_hosts_file_path()
+
+
+def _cli_print(msg: str):
+    # Use stderr so GUI-less automation can redirect cleanly.
+    print(msg, file=sys.stderr)
+
+
+def _cli_is_admin() -> bool:
+    if os.name != 'nt':
+        return os.geteuid() == 0
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except (AttributeError, OSError):
+        return False
+
+
+def _cli_backup(hosts_path: str) -> int:
+    if not os.path.exists(hosts_path):
+        _cli_print(f"hosts file not found: {hosts_path}")
+        return 2
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = f"{hosts_path}.{stamp}.bak"
+    shutil.copy2(hosts_path, f"{hosts_path}.bak")
+    shutil.copy2(hosts_path, dest)
+    _cli_print(f"Backup created: {dest}")
+    # Prune old ones.
+    try:
+        candidates = [p for p in glob.glob(f"{hosts_path}.*.bak")
+                      if os.path.normcase(p) != os.path.normcase(f"{hosts_path}.bak")]
+        candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        for stale in candidates[BACKUP_RETENTION:]:
+            try:
+                os.unlink(stale)
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return 0
+
+
+def _cli_disable(hosts_path: str) -> int:
+    if not _cli_is_admin():
+        _cli_print("Administrator privileges required.")
+        return 1
+    disabled = hosts_path + ".disabled"
+    if os.path.exists(disabled):
+        _cli_print("hosts file is already disabled.")
+        return 0
+    _cli_backup(hosts_path)
+    if os.path.exists(hosts_path):
+        shutil.copy2(hosts_path, disabled)
+    minimal = (
+        "# Copyright (c) 1993-2009 Microsoft Corp.\n#\n"
+        "127.0.0.1       localhost\n"
+        "::1             localhost\n"
+    )
+    write_text_file_atomic(hosts_path, minimal)
+    _cli_print("hosts file disabled; minimal template is active.")
+    return 0
+
+
+def _cli_enable(hosts_path: str) -> int:
+    if not _cli_is_admin():
+        _cli_print("Administrator privileges required.")
+        return 1
+    disabled = hosts_path + ".disabled"
+    if not os.path.exists(disabled):
+        _cli_print("no disabled sibling found; hosts file is already enabled.")
+        return 0
+    _cli_backup(hosts_path)
+    shutil.copy2(disabled, hosts_path)
+    os.unlink(disabled)
+    _cli_print("hosts file re-enabled.")
+    return 0
+
+
+def _cli_apply(hosts_path: str, source_file: str) -> int:
+    if not _cli_is_admin():
+        _cli_print("Administrator privileges required.")
+        return 1
+    if not os.path.isfile(source_file):
+        _cli_print(f"source file not found: {source_file}")
+        return 2
+    _cli_backup(hosts_path)
+    content = read_text_file_content(source_file)
+    write_text_file_atomic(hosts_path, content)
+    _cli_print(f"Applied {source_file} to {hosts_path}")
+    return 0
+
+
+def _cli_update(hosts_path: str) -> int:
+    """Re-fetch every source the GUI has fetched before, cleaned-save the result.
+
+    Reads ``source_last_fetched`` from the persisted config to discover which
+    sources this install has used. Skips if the user has never imported
+    anything (nothing to update).
+    """
+    if not _cli_is_admin():
+        _cli_print("Administrator privileges required.")
+        return 1
+
+    config_path = get_primary_config_path("hosts_editor_config.json")
+    if not os.path.isfile(config_path):
+        _cli_print("No config found; nothing to update.")
+        return 2
+    try:
+        config = json.loads(read_text_file_content(config_path))
+    except (OSError, ValueError) as e:
+        _cli_print(f"Config read failed: {e}")
+        return 2
+    sanitized = sanitize_config_snapshot(config, os.path.expanduser("~"))
+    last_fetched = sanitized.get("source_last_fetched", {})
+    if not last_fetched:
+        _cli_print("No previously-imported sources recorded; nothing to update.")
+        return 0
+
+    # Reverse-map URL -> display name from the bundled catalog so the output
+    # comments look like a GUI batch import.
+    reverse: dict[str, str] = {}
+    for sources in HostsFileEditor.BLOCKLIST_SOURCES.values():
+        for name, url, _ in sources:
+            reverse[url] = name
+    for entry in sanitized.get("custom_sources", []):
+        reverse[entry["url"]] = entry["name"]
+
+    _cli_backup(hosts_path)
+    collected: list[str] = []
+    updated_stamps: dict[str, str] = dict(last_fetched)
+    now_iso = datetime.datetime.now().isoformat(timespec='seconds')
+    successes, failures = 0, []
+    for url in last_fetched:
+        name = reverse.get(url, url)
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=20) as response:
+                if response.getcode() != 200:
+                    raise urllib.error.HTTPError(url, response.getcode(), f"HTTP {response.getcode()}", response.info(), response.fp)
+                raw_lines = decode_downloaded_lines(
+                    url,
+                    read_http_body_limited(response),
+                    response.headers.get("Content-Encoding", ""),
+                )
+            if looks_like_html_document(raw_lines):
+                raise ValueError("received HTML instead of hosts list")
+            safe_name = re.sub(r'[\r\n\t]+', ' ', name).strip() or "Imported Source"
+            collected.append(f"# --- Normalized Import Start: {safe_name} ---")
+            seen_entries: set[str] = set()
+            for line in raw_lines:
+                entries, _, _ = normalize_line_to_hosts_entries(line)
+                for normalized in entries:
+                    if normalized not in seen_entries:
+                        collected.append(normalized)
+                        seen_entries.add(normalized)
+            collected.append(f"# --- Normalized Import End: {safe_name} ---")
+            collected.append("")
+            updated_stamps[url] = now_iso
+            successes += 1
+            _cli_print(f"OK  {name}")
+        except Exception as e:
+            failures.append(f"{name}: {e}")
+            _cli_print(f"ERR {name}: {e}")
+
+    if not collected:
+        _cli_print("No content successfully fetched; hosts file left unchanged.")
+        return 1
+
+    existing_lines: list[str] = []
+    if os.path.exists(hosts_path):
+        existing_lines = read_text_file_lines(hosts_path)
+    whitelist_text = sanitized.get("whitelist", "")
+    whitelist_set: set[str] = set()
+    for wline in whitelist_text.splitlines():
+        entries, domains, _ = normalize_line_to_hosts_entries(wline)
+        whitelist_set.update(domain.lstrip('.') for domain in domains)
+
+    # Merge: drop everything between existing Start/End markers (previous
+    # imports), then append the freshly-fetched bundle, then Cleaned-Save.
+    previous_sections = discover_import_sections(existing_lines)
+    trimmed = list(existing_lines)
+    for section in sorted(previous_sections, key=lambda s: s["start"], reverse=True):
+        trimmed = remove_import_section(trimmed, section)
+    merged = trimmed + [""] + collected
+    cleaned, stats = _get_canonical_cleaned_output_and_stats(merged, whitelist_set)
+    write_text_file_atomic(hosts_path, '\n'.join(cleaned))
+
+    # Persist new timestamps.
+    try:
+        snapshot = dict(sanitized)
+        snapshot["source_last_fetched"] = updated_stamps
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        write_text_file_atomic(config_path, json.dumps(snapshot, indent=2))
+    except OSError:
+        pass
+
+    _cli_print(f"Applied {stats['final_active']:,} active entries from {successes} source(s); {len(failures)} failed.")
+    return 0 if successes and not failures else (0 if successes else 1)
+
+
+def _handle_cli_args(argv: list[str]) -> int | None:
+    """Return an exit code when a CLI action was performed; else ``None`` to
+    continue launching the GUI.
+    """
+    # Strip the elevation-probe flag so argparse doesn't choke on it; the
+    # flag exists only to keep us from UAC-looping.
+    argv = [arg for arg in argv if arg != ELEVATION_ATTEMPT_FLAG]
+    cli_flags = {"--version", "--disable", "--enable", "--backup", "--apply", "--update", "-h", "--help"}
+    if not any(arg in cli_flags or arg.startswith("--apply=") for arg in argv):
+        return None
+
+    parser = argparse.ArgumentParser(
+        prog=APP_SLUG,
+        description=f"{APP_NAME} v{APP_VERSION} -- scriptable hosts-file actions.",
+    )
+    parser.add_argument("--version", action="store_true", help="Print version and exit.")
+    parser.add_argument("--disable", action="store_true", help="Replace hosts file with minimal template; stash current as .disabled.")
+    parser.add_argument("--enable", action="store_true", help="Restore hosts file from .disabled sibling.")
+    parser.add_argument("--backup", action="store_true", help="Create a timestamped backup of the current hosts file.")
+    parser.add_argument("--apply", metavar="PATH", help="Overwrite the hosts file with the contents of PATH (creates backup first).")
+    parser.add_argument("--update", action="store_true", help="Re-fetch every source previously imported in the GUI and apply a Cleaned Save of the merged result.")
+
+    args = parser.parse_args(argv)
+
+    if args.version:
+        print(f"{APP_NAME} v{APP_VERSION}")
+        return 0
+
+    hosts_path = _cli_hosts_path()
+    if args.disable:
+        return _cli_disable(hosts_path)
+    if args.enable:
+        return _cli_enable(hosts_path)
+    if args.backup:
+        return _cli_backup(hosts_path)
+    if args.apply:
+        return _cli_apply(hosts_path, args.apply)
+    if args.update:
+        return _cli_update(hosts_path)
+    return None
+
+
 if __name__ == "__main__":
+    exit_code = _handle_cli_args(sys.argv[1:])
+    if exit_code is not None:
+        sys.exit(exit_code)
+
     root = tk.Tk()
     app = HostsFileEditor(root)
     root.mainloop()
