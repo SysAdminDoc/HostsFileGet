@@ -1,5 +1,6 @@
 import bz2
 import gzip
+import io
 import os
 import queue
 import threading
@@ -10,6 +11,8 @@ import hosts_editor
 from hosts_editor import (
     HostsFileEditor,
     IPV4_REGEX,
+    MAX_DOWNLOAD_BYTES,
+    _default_hosts_file_path,
     _get_canonical_cleaned_output_and_stats,
     _looks_like_ip_token,
     count_nonempty_lines,
@@ -21,6 +24,7 @@ from hosts_editor import (
     looks_like_html_document,
     normalize_line_to_hosts_entries,
     normalize_custom_source_url,
+    read_http_body_limited,
     read_text_file_lines,
     remove_lines_by_indices,
     resolve_saved_state_hashes,
@@ -193,6 +197,9 @@ class HostsEditorLogicTests(unittest.TestCase):
     def test_sanitize_config_snapshot_recovers_from_malformed_values(self):
         import tempfile
 
+        valid_sha256 = "a" * 64
+        padded_sha256 = "  " + ("b" * 64) + "  "
+
         with tempfile.TemporaryDirectory() as tmpdir:
             payload = sanitize_config_snapshot(
                 {
@@ -202,7 +209,7 @@ class HostsEditorLogicTests(unittest.TestCase):
                         {"name": "alpha", "url": "https://duplicate.example/list.txt"},
                     ],
                     "last_applied_raw_hash": 123,
-                    "last_applied_cleaned_hash": " cleaned-hash ",
+                    "last_applied_cleaned_hash": padded_sha256,
                     "last_open_dir": os.path.join(tmpdir, "missing"),
                 },
                 tmpdir,
@@ -213,9 +220,24 @@ class HostsEditorLogicTests(unittest.TestCase):
             payload["custom_sources"],
             [{"name": "Alpha", "url": "https://example.com/list.txt"}],
         )
+        # Integer hash from a corrupt config is rejected.
         self.assertIsNone(payload["last_applied_raw_hash"])
-        self.assertEqual(payload["last_applied_cleaned_hash"], "cleaned-hash")
+        # Whitespace-padded valid hash is accepted and stripped.
+        self.assertEqual(payload["last_applied_cleaned_hash"], "b" * 64)
         self.assertEqual(payload["last_open_dir"], tmpdir)
+
+    def test_sanitize_config_snapshot_rejects_non_sha256_hashes(self):
+        payload = sanitize_config_snapshot(
+            {
+                # Too short.
+                "last_applied_raw_hash": "abc123",
+                # Right length, wrong alphabet.
+                "last_applied_cleaned_hash": "Z" * 64,
+            },
+            os.getcwd(),
+        )
+        self.assertIsNone(payload["last_applied_raw_hash"])
+        self.assertIsNone(payload["last_applied_cleaned_hash"])
 
     def test_sanitize_config_snapshot_uses_safe_fallback_open_dir(self):
         payload = sanitize_config_snapshot(
@@ -233,7 +255,53 @@ class HostsEditorLogicTests(unittest.TestCase):
             path = Path(tmpdir) / "hosts.txt"
             path.write_text("old", encoding="utf-8")
             write_text_file_atomic(str(path), "new content")
-            self.assertEqual(path.read_text(encoding="utf-8"), "new content")
+            # Atomic write terminates the file with a newline for POSIX
+            # compatibility; the round-trip through splitlines still
+            # preserves the original lines.
+            self.assertEqual(path.read_text(encoding="utf-8"), "new content\n")
+
+    def test_write_text_file_atomic_preserves_existing_trailing_newline(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "hosts.txt"
+            write_text_file_atomic(str(path), "already terminated\n")
+            # We must not double-append a newline.
+            self.assertEqual(path.read_text(encoding="utf-8"), "already terminated\n")
+
+    def test_write_text_file_atomic_preserves_hash_round_trip(self):
+        """Writing then reading back must produce the same splitlines hash.
+
+        Regression: when we added the trailing-newline terminator we had to
+        make sure that ``'\\n'.join(lines)`` produces the same hash as the
+        splitlines result after read-back. Otherwise every saved file would
+        immediately flag as "unsaved changes".
+        """
+        import hashlib
+        import tempfile
+        from pathlib import Path
+
+        lines = ["0.0.0.0 a.example", "0.0.0.0 b.example", "0.0.0.0 c.example"]
+        original_hash = hashlib.sha256('\n'.join(lines).encode('utf-8')).hexdigest()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "hosts.txt"
+            write_text_file_atomic(str(path), '\n'.join(lines))
+            readback = read_text_file_lines(str(path))
+            readback_hash = hashlib.sha256('\n'.join(readback).encode('utf-8')).hexdigest()
+            self.assertEqual(readback, lines)
+            self.assertEqual(readback_hash, original_hash)
+
+    def test_write_text_file_atomic_empty_content_stays_empty(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "hosts.txt"
+            write_text_file_atomic(str(path), "")
+            # Empty input must not spuriously gain a newline.
+            self.assertEqual(path.read_text(encoding="utf-8"), "")
 
     def test_summarize_clean_changes_formats_consistent_status_text(self):
         self.assertEqual(
@@ -291,6 +359,61 @@ class HostsEditorLogicTests(unittest.TestCase):
             )
         )
 
+    def test_import_worker_reports_failure_for_oversize_response(self):
+        class FakeEditor:
+            def __init__(self):
+                self.import_queue = queue.Queue()
+                self.stop_import_flag = threading.Event()
+
+            def _apply_import_mode_filter(self, source_name, lines, mode):
+                return lines
+
+        class FakeResponse:
+            def __init__(self):
+                self.headers = {}
+                self.info = lambda: {}
+                self.fp = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def getcode(self):
+                return 200
+
+            def read(self, size=-1):
+                # Fake server that streams more than the configured cap.
+                if size is None or size < 0:
+                    return b"x" * (MAX_DOWNLOAD_BYTES + 10)
+                # The helper passes cap+1; returning the requested amount
+                # triggers the size-overflow branch in read_http_body_limited.
+                return b"x" * size
+
+        editor = FakeEditor()
+
+        with mock.patch.object(hosts_editor.urllib.request, "urlopen", return_value=FakeResponse()):
+            HostsFileEditor._import_worker_thread(
+                editor,
+                [("Big Source", "https://example.com/huge.txt")],
+                "Raw",
+            )
+
+        messages = []
+        while not editor.import_queue.empty():
+            messages.append(editor.import_queue.get_nowait())
+
+        # Expect: progress, log (error), done (with failure_messages populated)
+        message_types = [m[0] for m in messages]
+        self.assertIn("log", message_types)
+        self.assertEqual(message_types[-1], "done")
+        _, new_lines, _total, success, failure_messages = messages[-1]
+        self.assertEqual(new_lines, [])
+        self.assertEqual(success, 0)
+        self.assertEqual(len(failure_messages), 1)
+        self.assertIn("size cap", failure_messages[0])
+
     def test_import_worker_cancels_if_stop_requested_during_final_download(self):
         class FakeEditor:
             def __init__(self):
@@ -316,7 +439,7 @@ class HostsEditorLogicTests(unittest.TestCase):
             def getcode(self):
                 return 200
 
-            def read(self):
+            def read(self, _size=-1):
                 self.editor.stop_import_flag.set()
                 return b"0.0.0.0 cancelled.example\n"
 
@@ -391,6 +514,138 @@ class HostsEditorLogicTests(unittest.TestCase):
         self.assertFalse(editor.stop_import_flag.is_set())
         self.assertFalse(editor.root.destroy_called)
         self.assertFalse(editor.save_config_called)
+
+
+    def test_read_http_body_limited_rejects_oversize_responses(self):
+        class FakeResponse:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def read(self, size=-1):
+                # Mirror the wire behaviour: when size is specified, return up
+                # to size + whatever overflow the server would have sent.
+                if size is None or size < 0:
+                    return self._payload
+                # Return one byte more than the requested cap so the helper
+                # sees an overrun and raises.
+                return self._payload[:size]
+
+        big = b"0" * (MAX_DOWNLOAD_BYTES + 10)
+        with self.assertRaises(ValueError):
+            read_http_body_limited(FakeResponse(big))
+
+    def test_read_http_body_limited_returns_payload_below_cap(self):
+        class FakeResponse:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def read(self, size=-1):
+                return self._payload[: size if size and size >= 0 else len(self._payload)]
+
+        small = b"0.0.0.0 example.com\n"
+        self.assertEqual(read_http_body_limited(FakeResponse(small)), small)
+
+    def test_decode_downloaded_lines_rejects_gzip_bomb(self):
+        bomb = gzip.compress(b"x" * (MAX_DOWNLOAD_BYTES + 1))
+        with self.assertRaises(ValueError):
+            decode_downloaded_lines("https://example.com/hosts.gz", bomb, "gzip")
+
+    def test_default_hosts_file_path_uses_systemroot(self):
+        with mock.patch.dict(os.environ, {"SystemRoot": r"D:\Windows"}, clear=False):
+            with mock.patch.object(hosts_editor.os, "name", "nt"):
+                self.assertEqual(
+                    _default_hosts_file_path(),
+                    r"D:\Windows\System32\drivers\etc\hosts",
+                )
+
+    def test_enable_windows_dpi_awareness_is_idempotent(self):
+        """Calling DPI awareness twice must not raise."""
+        # On non-Windows the function is a no-op; on Windows the OS dedupes
+        # repeated calls. Either way, two back-to-back calls should be safe.
+        hosts_editor._enable_windows_dpi_awareness()
+        hosts_editor._enable_windows_dpi_awareness()
+
+    def test_sanitize_custom_sources_rejects_control_characters(self):
+        sanitized = sanitize_custom_sources(
+            [
+                {"name": "Clean", "url": "https://example.com/list.txt"},
+                {"name": "Has\nNewline", "url": "https://example.com/a.txt"},
+                {"name": "Tab\there", "url": "https://example.com/b.txt"},
+                {"name": "Ok", "url": "https://example.com/c\r\n.txt"},
+            ]
+        )
+        # Only the first clean entry should survive.
+        self.assertEqual(sanitized, [{"name": "Clean", "url": "https://example.com/list.txt"}])
+
+    def test_sanitize_custom_sources_rejects_oversized_entries(self):
+        oversize_name = "A" * 200
+        oversize_url = "https://example.com/" + ("x" * 3000)
+        sanitized = sanitize_custom_sources(
+            [
+                {"name": oversize_name, "url": "https://example.com/list.txt"},
+                {"name": "Short", "url": oversize_url},
+                {"name": "Good", "url": "https://example.com/ok.txt"},
+            ]
+        )
+        self.assertEqual(sanitized, [{"name": "Good", "url": "https://example.com/ok.txt"}])
+
+    def test_block_during_import_returns_true_and_updates_status(self):
+        editor = HostsFileEditor.__new__(HostsFileEditor)
+        editor.is_importing = True
+        captured = {}
+
+        def fake_update_status(message, is_error=False):
+            captured["message"] = message
+            captured["is_error"] = is_error
+
+        editor.update_status = fake_update_status
+        self.assertTrue(HostsFileEditor._block_during_import(editor, "Save Raw"))
+        self.assertIn("Save Raw", captured["message"])
+        self.assertIn("import", captured["message"].lower())
+        self.assertTrue(captured["is_error"])
+
+    def test_block_during_import_allows_when_idle(self):
+        editor = HostsFileEditor.__new__(HostsFileEditor)
+        editor.is_importing = False
+        editor.update_status = lambda *args, **kwargs: None
+        self.assertFalse(HostsFileEditor._block_during_import(editor, "Any Action"))
+
+    def test_update_status_truncates_and_collapses_newlines(self):
+        class FakeLabel:
+            def __init__(self):
+                self.last_text = None
+
+            def config(self, **kwargs):
+                self.last_text = kwargs.get("text")
+
+        editor = HostsFileEditor.__new__(HostsFileEditor)
+        editor.status_label = FakeLabel()
+        editor._cancel_after_job = lambda _attr: None
+        editor._safe_after = lambda *_args, **_kwargs: None
+        editor._status_reset_job = None
+        editor.is_importing = False
+
+        long_msg = "A" * 500 + "\nsecond line"
+        HostsFileEditor.update_status(editor, long_msg)
+        self.assertTrue(editor.status_label.last_text)
+        self.assertNotIn("\n", editor.status_label.last_text)
+        self.assertLessEqual(
+            len(editor.status_label.last_text),
+            HostsFileEditor._STATUS_MESSAGE_MAX_LEN,
+        )
+
+    def test_apply_import_mode_filter_sanitizes_source_name(self):
+        editor = HostsFileEditor.__new__(HostsFileEditor)
+        # Source names that include newlines or carriage returns must not
+        # produce multi-line Start/End marker comments.
+        result = HostsFileEditor._apply_import_mode_filter(
+            editor,
+            "Malicious\nName\r\ninjected",
+            ["0.0.0.0 example.com"],
+            "Raw",
+        )
+        self.assertEqual(result[0], "# --- Raw Import Start: Malicious Name injected ---")
+        self.assertEqual(result[-1], "# --- Raw Import End: Malicious Name injected ---")
 
 
 if __name__ == "__main__":

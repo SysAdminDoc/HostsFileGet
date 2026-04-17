@@ -26,8 +26,31 @@ import bz2
 
 APP_NAME = "Hosts File Get"
 APP_SLUG = "HostsFileGet"
-APP_VERSION = "2.10.0"
+APP_VERSION = "2.11.0"
 ELEVATION_ATTEMPT_FLAG = "--hostsfileget-elevation-attempted"
+
+# Hard cap for any single downloaded feed/whitelist payload (50 MB decompressed).
+# Even the biggest public blocklists are well under 20 MB; this guards against
+# runaway servers streaming gigabytes and OOMing the GUI process.
+MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
+
+# Preview windows use difflib.ndiff which is O(n*m). On very large editors
+# (200K+ lines) ndiff can hang the UI for many seconds. Above this threshold
+# we switch to a cheaper, non-character-aligned unified diff for the preview.
+NDIFF_LINE_LIMIT = 10_000
+
+
+def _default_hosts_file_path() -> str:
+    """Resolve the real Windows hosts file path from %SystemRoot% when possible.
+
+    Hard-coding ``C:\\Windows`` breaks on installs where Windows lives on a
+    non-C drive (IoT images, WinPE, forensic mounts). Fall back to the classic
+    path only if the environment variable is missing.
+    """
+    if os.name == 'nt':
+        system_root = os.environ.get("SystemRoot") or os.environ.get("SYSTEMROOT") or r"C:\Windows"
+        return os.path.join(system_root, "System32", "drivers", "etc", "hosts")
+    return "/etc/hosts"
 
 # PyInstaller support: resolve bundled asset directory vs. script directory
 if getattr(sys, 'frozen', False):
@@ -36,6 +59,30 @@ if getattr(sys, 'frozen', False):
 else:
     _BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
     _EXE_DIR = _BUNDLE_DIR
+
+
+def _enable_windows_dpi_awareness() -> None:
+    """Tell Windows this process understands high-DPI displays.
+
+    Without this, Tk fonts and icons are bitmap-stretched by the shell
+    compatibility layer, which looks blurry on 125%+ displays (the default
+    scaling on most modern laptops). The SetProcessDpiAwareness call is
+    the modern API; SetProcessDPIAware is the fallback for older Windows.
+    Both are idempotent and safe to call even when already set.
+    """
+    if os.name != 'nt':
+        return
+    try:
+        # 2 = Per-monitor DPI aware (Windows 8.1+).
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except (AttributeError, OSError):
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except (AttributeError, OSError):
+            pass
+
+
+_enable_windows_dpi_awareness()
 
 # ----------------------------- Theme (Catppuccin Mocha) ----------------------
 PALETTE = {
@@ -62,43 +109,83 @@ PALETTE = {
 
 # ----------------------------- Tooltip Helper --------------------------------
 class ToolTip:
-    """Creates a tooltip for a given widget."""
+    """Creates a tooltip for a given widget.
+
+    Tooltips show after a short hover delay (450ms) to avoid flashing
+    on every transient mouse-over, and hide on click or when the widget
+    is destroyed.
+    """
+    _SHOW_DELAY_MS = 450
+
     def __init__(self, widget, text):
         self.widget = widget
         self.text = text
         self.tooltip_window = None
-        self.widget.bind("<Enter>", self.show_tooltip, add="+")
+        self._show_job = None
+        self.widget.bind("<Enter>", self._schedule_show, add="+")
         self.widget.bind("<Leave>", self.hide_tooltip, add="+")
         self.widget.bind("<Destroy>", self.hide_tooltip, add="+")
+        # Clicking or keyboard-activating the widget should dismiss any
+        # lingering tooltip immediately so it doesn't hover over a just-
+        # pressed button.
+        self.widget.bind("<ButtonPress>", self.hide_tooltip, add="+")
+        self.widget.bind("<KeyPress>", self.hide_tooltip, add="+")
+
+    def _schedule_show(self, event=None):
+        self._cancel_pending_show()
+        try:
+            self._show_job = self.widget.after(self._SHOW_DELAY_MS, self.show_tooltip)
+        except tk.TclError:
+            self._show_job = None
+
+    def _cancel_pending_show(self):
+        if self._show_job is not None:
+            try:
+                self.widget.after_cancel(self._show_job)
+            except (tk.TclError, ValueError):
+                pass
+            self._show_job = None
 
     def show_tooltip(self, event=None):
+        self._show_job = None
         if self.tooltip_window:
             return
+        # Any of these widget calls can raise if the widget was destroyed
+        # between scheduling and firing (e.g. during a config reload).
         try:
-            x, y, _, _ = self.widget.bbox("insert")
-        except Exception:
-            x, y = (0, 0)
-        x += self.widget.winfo_rootx() + 25
-        y += self.widget.winfo_rooty() + 25
+            if not self.widget.winfo_exists():
+                return
+            try:
+                x, y, _, _ = self.widget.bbox("insert")
+            except Exception:
+                x, y = (0, 0)
+            x += self.widget.winfo_rootx() + 25
+            y += self.widget.winfo_rooty() + 25
 
-        self.tooltip_window = tk.Toplevel(self.widget)
-        self.tooltip_window.wm_overrideredirect(True)
-        self.tooltip_window.wm_geometry(f"+{x}+{y}")
-        label = tk.Label(
-            self.tooltip_window,
-            text=self.text,
-            justify="left",
-            background=PALETTE["mantle"],
-            foreground=PALETTE["text"],
-            relief="solid",
-            borderwidth=1,
-            font=("Segoe UI", 9),
-        )
-        label.pack(ipadx=6, ipady=3)
+            self.tooltip_window = tk.Toplevel(self.widget)
+            self.tooltip_window.wm_overrideredirect(True)
+            self.tooltip_window.wm_geometry(f"+{x}+{y}")
+            label = tk.Label(
+                self.tooltip_window,
+                text=self.text,
+                justify="left",
+                background=PALETTE["mantle"],
+                foreground=PALETTE["text"],
+                relief="solid",
+                borderwidth=1,
+                font=("Segoe UI", 9),
+            )
+            label.pack(ipadx=6, ipady=3)
+        except tk.TclError:
+            self.tooltip_window = None
 
     def hide_tooltip(self, event=None):
+        self._cancel_pending_show()
         if self.tooltip_window:
-            self.tooltip_window.destroy()
+            try:
+                self.tooltip_window.destroy()
+            except tk.TclError:
+                pass
         self.tooltip_window = None
 
 # ------------------------------ Preview Window --------------------------------
@@ -124,7 +211,17 @@ class PreviewWindow(tk.Toplevel):
         self._removed_lines = 0
 
         self.title(title)
-        self.geometry("900x650")
+        # Clamp to available screen so the preview never opens larger than
+        # the user's display (common on 1366x768 laptops where 900x650 +
+        # window chrome overflows).
+        try:
+            screen_w = parent.root.winfo_screenwidth()
+            screen_h = parent.root.winfo_screenheight()
+        except Exception:
+            screen_w, screen_h = 900, 650
+        width = min(900, max(640, screen_w - 80))
+        height = min(650, max(420, screen_h - 120))
+        self.geometry(f"{width}x{height}")
         self.configure(bg=PALETTE["base"])
         self.transient(parent.root)
         self.grab_set()
@@ -173,6 +270,14 @@ class PreviewWindow(tk.Toplevel):
         self.display_diff(original_lines, new_lines)
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.bind("<Escape>", lambda _event: self.destroy(), add="+")
+        # Return/Enter confirms the preview without forcing the user to
+        # mouse over to the button. Bound on the window so it works from
+        # wherever focus sits (scrolling, header, etc.).
+        self.bind("<Return>", lambda _event: self.apply_changes(), add="+")
+        self.bind("<KP_Enter>", lambda _event: self.apply_changes(), add="+")
+        # Focus the apply button so keyboard activation is predictable and
+        # screen readers pick up the primary action.
+        self.apply_button.focus_set()
 
     def _add_stat_banner(self, parent):
         total_discarded = self.stats.get('total_discarded', 0)
@@ -227,26 +332,53 @@ class PreviewWindow(tk.Toplevel):
 
 
     def display_diff(self, original, new):
-        diff = difflib.ndiff(original, new)
         self.preview_text.config(state=tk.NORMAL)
         self.preview_text.delete('1.0', tk.END)
         self._added_lines = 0
         self._removed_lines = 0
-        for line in diff:
-            line_content = line[2:] + '\n'
-            if line.startswith('+ '):
-                self._added_lines += 1
-                self.preview_text.insert(tk.END, line_content, 'added')
-            elif line.startswith('- '):
-                self._removed_lines += 1
-                self.preview_text.insert(tk.END, line_content, 'removed')
-            elif not line.startswith('? '):
-                self.preview_text.insert(tk.END, line_content)
+
+        # difflib.ndiff is O(n*m). For very large editors (hundreds of
+        # thousands of lines) it can hang the preview dialog for tens of
+        # seconds. Fall back to unified_diff above the threshold — it still
+        # classifies every line as added/removed/context, just without the
+        # character-level hint lines.
+        use_ndiff = max(len(original), len(new)) <= NDIFF_LINE_LIMIT
+
+        if use_ndiff:
+            for line in difflib.ndiff(original, new):
+                line_content = line[2:] + '\n'
+                if line.startswith('+ '):
+                    self._added_lines += 1
+                    self.preview_text.insert(tk.END, line_content, 'added')
+                elif line.startswith('- '):
+                    self._removed_lines += 1
+                    self.preview_text.insert(tk.END, line_content, 'removed')
+                elif not line.startswith('? '):
+                    self.preview_text.insert(tk.END, line_content)
+        else:
+            for line in difflib.unified_diff(original, new, n=3, lineterm=""):
+                if line.startswith("+++") or line.startswith("---"):
+                    continue
+                if line.startswith('@@'):
+                    self.preview_text.insert(tk.END, line + '\n')
+                    continue
+                if line.startswith('+'):
+                    self._added_lines += 1
+                    self.preview_text.insert(tk.END, line[1:] + '\n', 'added')
+                elif line.startswith('-'):
+                    self._removed_lines += 1
+                    self.preview_text.insert(tk.END, line[1:] + '\n', 'removed')
+                else:
+                    self.preview_text.insert(tk.END, line[1:] + '\n' if line.startswith(' ') else line + '\n')
+
         self.preview_text.config(state=tk.DISABLED)
         self.preview_summary_label.config(
-            text=f"{self._added_lines} line(s) added, {self._removed_lines} removed"
+            text=f"{self._added_lines:,} line(s) added, {self._removed_lines:,} removed"
         )
-        self.preview_legend_label.config(text="Green lines are new. Red lines will be removed.")
+        legend = "Green lines are new. Red lines will be removed."
+        if not use_ndiff:
+            legend += " (Compact diff used for large files.)"
+        self.preview_legend_label.config(text=legend)
 
     def apply_changes(self):
         if self._is_applying:
@@ -297,6 +429,12 @@ class AddSourceDialog(simpledialog.Dialog):
             self.url_entry.insert(0, self.initial_url)
         return self.name_entry
 
+    # Upper bound on any custom source URL. 2083 is the practical browser
+    # limit (IE/Edge legacy); anything longer is almost certainly pasted
+    # junk or a prompt-injection attempt against the sidebar text.
+    _URL_MAX_LEN = 2083
+    _NAME_MAX_LEN = 120
+
     def validate(self):
         name, url = self.name_entry.get().strip(), self.url_entry.get().strip()
         if not name or not url:
@@ -307,10 +445,51 @@ class AddSourceDialog(simpledialog.Dialog):
                 self.url_entry.focus_set()
             return False
 
+        if len(name) > self._NAME_MAX_LEN:
+            messagebox.showerror(
+                "Name Too Long",
+                f"Display names are capped at {self._NAME_MAX_LEN} characters.",
+                parent=self,
+            )
+            self.name_entry.focus_set()
+            return False
+
+        if any(ord(ch) < 32 for ch in name + url):
+            # Embedded tabs / newlines / control bytes would corrupt the
+            # sidebar display and the sanitized marker comments. Reject
+            # rather than silently stripping.
+            messagebox.showerror(
+                "Invalid Characters",
+                "Name and URL must not contain tabs, newlines, or control characters.",
+                parent=self,
+            )
+            self.url_entry.focus_set()
+            return False
+
         if not url.lower().startswith(('http://', 'https://')):
             messagebox.showerror("Invalid URL", "URL must start with http:// or https://", parent=self)
             self.url_entry.focus_set()
             self.url_entry.selection_range(0, tk.END)
+            return False
+
+        if len(url) > self._URL_MAX_LEN:
+            messagebox.showerror(
+                "URL Too Long",
+                f"URLs are capped at {self._URL_MAX_LEN} characters.",
+                parent=self,
+            )
+            self.url_entry.focus_set()
+            return False
+
+        try:
+            parsed = urllib.parse.urlsplit(url)
+        except ValueError:
+            messagebox.showerror("Invalid URL", "URL could not be parsed.", parent=self)
+            self.url_entry.focus_set()
+            return False
+        if not parsed.netloc:
+            messagebox.showerror("Invalid URL", "URL is missing a host name.", parent=self)
+            self.url_entry.focus_set()
             return False
 
         self.result = (name, url)
@@ -452,6 +631,18 @@ class BulkSelectionDialog(tk.Toplevel):
             
         self.result = selected
         self.destroy()
+
+# Hard limit on the number of checkboxes the removal dialog will render at
+# once. Above this, Tk's layout engine takes many seconds to pack the widgets
+# and the resulting scrollable frame becomes unusable on slower machines.
+MATCH_REMOVAL_DIALOG_LIMIT = 2000
+
+# Hard cap on the number of in-editor search matches we will highlight.
+# A common one-letter query against a multi-megabyte hosts file could
+# otherwise produce hundreds of thousands of matches and hang Tk while it
+# tried to add that many tag ranges.
+SEARCH_MATCH_LIMIT = 50_000
+
 
 class MatchRemovalDialog(tk.Toplevel):
     def __init__(self, parent, query: str, matching_lines: list[tuple[int, str]]):
@@ -840,6 +1031,11 @@ def write_text_file_atomic(path: str, content: str):
     try:
         with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as f:
             f.write(content)
+            # Ensure a trailing newline. Some POSIX-style tools that consume
+            # the hosts file expect one, and hash comparisons here go through
+            # splitlines so an added terminator doesn't change equality.
+            if content and not content.endswith('\n'):
+                f.write('\n')
             f.flush()
             os.fsync(f.fileno())
         os.replace(temp_path, path)
@@ -847,6 +1043,22 @@ def write_text_file_atomic(path: str, content: str):
         if os.path.exists(temp_path):
             os.unlink(temp_path)
         raise
+
+def read_http_body_limited(response, max_bytes: int = MAX_DOWNLOAD_BYTES) -> bytes:
+    """Read an HTTP response with a hard ceiling on total bytes.
+
+    ``response.read(max_bytes + 1)`` is used so we can detect overruns without
+    paying for an unbounded read. Returning the body as-is lets callers decode
+    and normalize it through the existing pipeline.
+    """
+    data = response.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError(
+            f"Response exceeded {max_bytes // (1024 * 1024)} MB size cap "
+            "(feed too large or server is streaming non-hosts content)."
+        )
+    return data
+
 
 def decode_downloaded_lines(url: str, raw_bytes: bytes, content_encoding: str = "") -> list[str]:
     lowered_url = url.lower()
@@ -860,6 +1072,13 @@ def decode_downloaded_lines(url: str, raw_bytes: bytes, content_encoding: str = 
     except OSError:
         # Some mirrors advertise compression inconsistently; fall back to raw bytes.
         pass
+
+    # After decompression, re-check the size so a 1 KB gzip bomb can't expand
+    # into hundreds of MB in memory undetected.
+    if len(raw_bytes) > MAX_DOWNLOAD_BYTES:
+        raise ValueError(
+            f"Decompressed payload exceeded {MAX_DOWNLOAD_BYTES // (1024 * 1024)} MB size cap."
+        )
 
     return decode_text_bytes(raw_bytes).splitlines()
 
@@ -925,6 +1144,16 @@ def sanitize_custom_sources(custom_sources) -> list[dict[str, str]]:
         if not name or not url or not url.lower().startswith(("http://", "https://")):
             continue
 
+        # Reject names or URLs containing control bytes (tab, newline, ESC,
+        # etc.). A legacy config with a malformed entry could otherwise
+        # corrupt the import marker comments or the sidebar layout.
+        if any(ord(ch) < 32 for ch in name) or any(ord(ch) < 32 for ch in url):
+            continue
+
+        # Cap sizes defensively; see AddSourceDialog for rationale.
+        if len(name) > 120 or len(url) > 2083:
+            continue
+
         normalized_name = name.lower()
         normalized_url = normalize_custom_source_url(url)
         if normalized_name in seen_names or normalized_url in seen_urls:
@@ -957,10 +1186,19 @@ def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
         whitelist_text = ""
 
     def _normalize_hash(value):
-        if isinstance(value, str):
-            value = value.strip()
-            return value or None
-        return None
+        # SHA-256 hex digests are exactly 64 lowercase hex characters.
+        # Rejecting anything else prevents a corrupted config from putting
+        # arbitrary strings into the saved-state comparator where they
+        # would never match a real editor hash and would quietly confuse
+        # the "unsaved changes" badge.
+        if not isinstance(value, str):
+            return None
+        value = value.strip().lower()
+        if len(value) != 64:
+            return None
+        if not all(ch in "0123456789abcdef" for ch in value):
+            return None
+        return value
 
     last_open_dir = config.get("last_open_dir", fallback_last_open_dir)
     if not isinstance(last_open_dir, str) or not os.path.isdir(last_open_dir):
@@ -1014,7 +1252,7 @@ def count_nonempty_lines(text: str) -> int:
 
 # -------------------------------- Main App -----------------------------------
 class HostsFileEditor:
-    HOSTS_FILE_PATH = r"C:\Windows\System32\drivers\etc\hosts"
+    HOSTS_FILE_PATH = _default_hosts_file_path()
     CONFIG_FILENAME = "hosts_editor_config.json"
     
     SIDEBAR_WIDTH = 420
@@ -1415,6 +1653,12 @@ class HostsFileEditor:
         ttk.Label(source_catalog, text="Filter by name, category, or feed URL", style="Hint.TLabel").pack(anchor='w', padx=8, pady=(8, 4))
         self.source_filter_entry = ttk.Entry(source_catalog, textvariable=self.source_filter_var)
         self.source_filter_entry.pack(fill="x", padx=8, pady=(0, 6))
+        # Escape clears the filter while focus is inside the entry — quick
+        # way to reset back to the full catalog without mouse travel.
+        self.source_filter_entry.bind(
+            "<Escape>",
+            lambda _event: (self.source_filter_var.set(""), "break")[-1],
+        )
         self._register_import_widget(self.source_filter_entry)
         self.catalog_summary_label = ttk.Label(source_catalog, text="", style="Hint.TLabel")
         self.catalog_summary_label.pack(anchor='w', padx=8, pady=(0, 6))
@@ -1563,10 +1807,20 @@ class HostsFileEditor:
 
     # ----------------------------- UI Helpers & Panels ---------------------------------
     def _apply_window_branding(self):
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
+        try:
+            screen_width = self.root.winfo_screenwidth()
+            screen_height = self.root.winfo_screenheight()
+        except tk.TclError:
+            screen_width, screen_height = 1280, 800
+        # Remote desktop / headless sessions can report zero or negative
+        # screen dimensions. Fall back to sane minimums instead of asking
+        # Tk to size a 0x0 window.
+        if screen_width <= 0 or screen_height <= 0:
+            screen_width, screen_height = 1280, 800
         width = min(1360, max(screen_width - 80, min(screen_width, 900)))
         height = min(900, max(screen_height - 120, min(screen_height, 680)))
+        width = max(640, width)
+        height = max(480, height)
         x_pos = max((screen_width - width) // 2, 0)
         y_pos = max((screen_height - height) // 2, 0)
         self.root.geometry(f"{width}x{height}+{x_pos}+{y_pos}")
@@ -1587,14 +1841,17 @@ class HostsFileEditor:
             self._icon_image = None
 
     def _init_stats_panel(self, parent):
+        # StringVars let us format large counts with thousand separators —
+        # hosts files with 150K+ entries were previously shown as an
+        # unreadable wall of digits.
         self.stat_vars = {
-            "total": tk.IntVar(value=0),
-            "final_active": tk.IntVar(value=0),
-            "removed_comments": tk.IntVar(value=0),
-            "removed_duplicates": tk.IntVar(value=0),
-            "total_discarded": tk.IntVar(value=0), 
-            "transformed": tk.IntVar(value=0),
-            "removed_whitelist": tk.IntVar(value=0)
+            "total": tk.StringVar(value="0"),
+            "final_active": tk.StringVar(value="0"),
+            "removed_comments": tk.StringVar(value="0"),
+            "removed_duplicates": tk.StringVar(value="0"),
+            "total_discarded": tk.StringVar(value="0"),
+            "transformed": tk.StringVar(value="0"),
+            "removed_whitelist": tk.StringVar(value="0"),
         }
 
         ttk.Label(
@@ -1688,13 +1945,17 @@ class HostsFileEditor:
             self.update_status("Import mode set to Normalized. Domains will be standardized into clean 0.0.0.0 entries.")
 
     def _on_source_filter_changed(self):
-        if self._source_filter_job:
-            self.root.after_cancel(self._source_filter_job)
-        self._source_filter_job = self.root.after(200, self._populate_blocklist_source_buttons)
+        self._cancel_after_job("_source_filter_job")
+        self._source_filter_job = self._safe_after(200, self._populate_blocklist_source_buttons)
 
     def _populate_blocklist_source_buttons(self):
         self._source_filter_job = None
         if not hasattr(self, "web_catalog_frame"):
+            return
+        try:
+            if not self.web_catalog_frame.winfo_exists():
+                return
+        except tk.TclError:
             return
 
         for child in self.web_catalog_frame.winfo_children():
@@ -1754,26 +2015,25 @@ class HostsFileEditor:
 
     def _update_diff_stats(self, lines):
         stats = compute_clean_impact_stats(lines, self._get_whitelist_set())
-        
-        self.stat_vars["total"].set(stats["lines_total"])
-        self.stat_vars["final_active"].set(stats["final_active"])
-        self.stat_vars["removed_comments"].set(stats["removed_comments"] + stats["removed_blanks"])
-        self.stat_vars["removed_duplicates"].set(stats["removed_duplicates"])
-        self.stat_vars["transformed"].set(stats["transformed"])
-        self.stat_vars["removed_whitelist"].set(stats["removed_whitelist"])
-        self.stat_vars["total_discarded"].set(stats["total_discarded"])
-        
+
+        self.stat_vars["total"].set(f"{stats['lines_total']:,}")
+        self.stat_vars["final_active"].set(f"{stats['final_active']:,}")
+        self.stat_vars["removed_comments"].set(f"{stats['removed_comments'] + stats['removed_blanks']:,}")
+        self.stat_vars["removed_duplicates"].set(f"{stats['removed_duplicates']:,}")
+        self.stat_vars["transformed"].set(f"{stats['transformed']:,}")
+        self.stat_vars["removed_whitelist"].set(f"{stats['removed_whitelist']:,}")
+        self.stat_vars["total_discarded"].set(f"{stats['total_discarded']:,}")
+
         discard_count = stats["removed_invalid"] + stats["removed_duplicates"] + stats["removed_whitelist"]
-        total_warned = discard_count + stats["transformed"]
-        
+
         if discard_count > 0:
             self.warning_status_label.config(
-                text=f"Cleaned Save will remove {discard_count} entries and normalize {stats['transformed']} line(s).",
+                text=f"Cleaned Save will remove {discard_count:,} entries and normalize {stats['transformed']:,} line(s).",
                 foreground=PALETTE["red"]
             )
         elif stats["transformed"] > 0:
             self.warning_status_label.config(
-                text=f"Cleaned Save will normalize {stats['transformed']} line(s). No entries will be removed.",
+                text=f"Cleaned Save will normalize {stats['transformed']:,} line(s). No entries will be removed.",
                 foreground=PALETTE["yellow"]
             )
         else:
@@ -1896,6 +2156,8 @@ class HostsFileEditor:
         help_menu = tk.Menu(menu_bar, tearoff=0, bg=PALETTE["mantle"], fg=PALETTE["text"],
                             activebackground=PALETTE["blue"], activeforeground="#0b1020")
         help_menu.add_command(label="About", command=self.show_about_dialog)
+        help_menu.add_command(label="Open Config Folder", command=self.open_config_folder)
+        help_menu.add_separator()
         help_menu.add_command(label="Project on GitHub", command=lambda: webbrowser.open("https://github.com/SysAdminDoc/HostsFileGet"))
         menu_bar.add_cascade(label="Help", menu=help_menu)
 
@@ -1930,17 +2192,31 @@ class HostsFileEditor:
         self.import_action_widgets = [item for item in self.import_action_widgets if item and item.winfo_exists()]
 
     def _reset_status_color(self):
-        if self.status_label.winfo_exists():
-            self.status_label.config(foreground=PALETTE["subtext"])
+        try:
+            if self.status_label.winfo_exists():
+                self.status_label.config(foreground=PALETTE["subtext"])
+        except tk.TclError:
+            pass
 
     def _set_status_hint(self, text=None):
-        if hasattr(self, "status_hint_label") and self.status_hint_label.winfo_exists():
-            self.status_hint_label.config(text=text or self.default_status_hint)
+        try:
+            if hasattr(self, "status_hint_label") and self.status_hint_label.winfo_exists():
+                self.status_hint_label.config(text=text or self.default_status_hint)
+        except tk.TclError:
+            pass
+
+    _STATUS_MESSAGE_MAX_LEN = 220
 
     def update_status(self, message, is_error=False):
-        if self._status_reset_job:
-            self.root.after_cancel(self._status_reset_job)
-            self._status_reset_job = None
+        self._cancel_after_job("_status_reset_job")
+        # Collapse newlines and truncate so a multi-line exception message
+        # can't distort the status bar layout or push the hint label off
+        # the window edge.
+        if message is None:
+            message = ""
+        message = str(message).replace("\r", " ").replace("\n", " ")
+        if len(message) > self._STATUS_MESSAGE_MAX_LEN:
+            message = message[: self._STATUS_MESSAGE_MAX_LEN - 1] + "…"
         message_lower = message.lower()
         if is_error:
             color = PALETTE["red"]
@@ -1950,9 +2226,37 @@ class HostsFileEditor:
             color = PALETTE["yellow"]
         else:
             color = PALETTE["subtext"]
-        self.status_label.config(text=message, foreground=color)
+        try:
+            self.status_label.config(text=message, foreground=color)
+        except tk.TclError:
+            return
         if not self.is_importing:
-             self._status_reset_job = self.root.after(4000, self._reset_status_color)
+            self._status_reset_job = self._safe_after(4000, self._reset_status_color)
+
+    def open_config_folder(self):
+        """Open the per-user config directory in the OS file manager.
+
+        Useful when the user wants to inspect or back up
+        ``hosts_editor_config.json`` manually, or manually clean a corrupt
+        config entry the app can't surface through the UI.
+        """
+        folder = get_app_config_dir()
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except OSError as e:
+            messagebox.showerror("Error", f"Could not create config folder:\n{e}", parent=self.root)
+            return
+
+        try:
+            if os.name == 'nt':
+                os.startfile(folder)
+            elif sys.platform == 'darwin':
+                subprocess.Popen(['open', folder])
+            else:
+                subprocess.Popen(['xdg-open', folder])
+            self.update_status(f"Opened config folder: {folder}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not open config folder:\n{e}", parent=self.root)
 
     def show_about_dialog(self):
         messagebox.showinfo(
@@ -1974,6 +2278,30 @@ class HostsFileEditor:
             parent=self.root,
         )
 
+    def _safe_after(self, delay_ms: int, callback):
+        """Schedule a Tk callback, swallowing errors when root is torn down.
+
+        Background threads that post work onto the Tk main loop via ``after``
+        can fire after the window has been destroyed (e.g. whitelist web fetch
+        racing with app close). Without this wrapper those calls raise
+        TclError, which surfaces as a noisy stderr stack trace on exit.
+        """
+        try:
+            if self.root and self.root.winfo_exists():
+                return self.root.after(delay_ms, callback)
+        except tk.TclError:
+            pass
+        return None
+
+    def _cancel_after_job(self, attr_name: str):
+        job = getattr(self, attr_name, None)
+        if job:
+            try:
+                self.root.after_cancel(job)
+            except (tk.TclError, ValueError):
+                pass
+            setattr(self, attr_name, None)
+
     def on_closing(self):
         should_cancel_import = False
         if self.is_importing:
@@ -1988,7 +2316,18 @@ class HostsFileEditor:
         if should_cancel_import:
             self.stop_import_flag.set()
 
-        self.save_config()
+        # Cancel pending Tk ``after`` callbacks so they don't try to touch
+        # widgets after we destroy the root window.
+        for attr in ("_update_ui_job", "_source_filter_job", "_status_reset_job"):
+            self._cancel_after_job(attr)
+
+        try:
+            self.save_config()
+        except Exception:
+            # Never block shutdown because of a config save failure — the
+            # user is trying to exit and the error is non-recoverable at
+            # this point.
+            pass
         self.root.destroy()
 
     # --------------------------- Admin Check & Dry Run ----------------------------------
@@ -2084,15 +2423,25 @@ class HostsFileEditor:
         except (json.JSONDecodeError, ValueError):
             self.update_status("Config file is corrupt — using defaults.", is_error=True)
             return
+        except OSError as e:
+            self.update_status(f"Config read failed: {e}", is_error=True)
+            return
+
         sanitized_config = sanitize_config_snapshot(config, self.last_open_dir)
 
-        self.whitelist_text_area.delete('1.0', tk.END)
-        self.whitelist_text_area.insert('1.0', sanitized_config["whitelist"])
+        # Set the saved-hash markers BEFORE writing to the whitelist widget so
+        # the transient <<Modified>> event triggered by insert() sees the
+        # correct "saved copy matches editor" state instead of briefly
+        # flashing "Unsaved changes are pending".
         self.custom_sources = sanitized_config["custom_sources"]
         self._last_applied_raw_hash = sanitized_config["last_applied_raw_hash"]
         self._last_applied_cleaned_hash = sanitized_config["last_applied_cleaned_hash"]
         self._last_saved_whitelist_text = sanitized_config["whitelist"]
         self.last_open_dir = sanitized_config["last_open_dir"]
+
+        self.whitelist_text_area.delete('1.0', tk.END)
+        self.whitelist_text_area.insert('1.0', sanitized_config["whitelist"])
+        self.whitelist_text_area.edit_modified(False)
 
         self.update_status("Configuration loaded.")
         self._rebuild_custom_source_buttons()
@@ -2100,10 +2449,26 @@ class HostsFileEditor:
 
         if config_source_path != self.config_path:
             self._write_config_payload(sanitized_config)
+            # Clean up the legacy file so we don't keep re-reading it on
+            # future launches. Failures here are non-fatal — the primary
+            # path now exists and will be preferred regardless.
+            try:
+                os.unlink(config_source_path)
+            except OSError:
+                pass
 
     def save_config(self):
+        # When called from `on_closing`, the Tk widget tree may already be
+        # partially torn down. Guard the widget read so shutdown continues
+        # cleanly; without this guard a stray TclError surfaced as a stderr
+        # traceback for users closing the app during an active import.
+        try:
+            whitelist_text = self.whitelist_text_area.get('1.0', tk.END).strip()
+        except tk.TclError:
+            whitelist_text = self._last_saved_whitelist_text or ""
+
         config = sanitize_config_snapshot({
-            "whitelist": self.whitelist_text_area.get('1.0', tk.END).strip(),
+            "whitelist": whitelist_text,
             "custom_sources": self.custom_sources,
             "last_applied_raw_hash": self._last_applied_raw_hash,
             "last_applied_cleaned_hash": self._last_applied_cleaned_hash,
@@ -2115,6 +2480,10 @@ class HostsFileEditor:
             self._update_whitelist_summary()
         except OSError as e:
             self.update_status(f"Config save failed: {e}", is_error=True)
+        except tk.TclError:
+            # Widget torn down between payload write and summary refresh —
+            # the config IS on disk, nothing else to do.
+            pass
 
     # ----------------------------- File Ops & State Tracking -----------------------------------
     def get_lines(self):
@@ -2125,20 +2494,28 @@ class HostsFileEditor:
         self.text_area.delete('1.0', tk.END)
         # Performance: Join lines once and insert as one block
         self.text_area.insert(tk.END, '\n'.join(lines))
+        # After a bulk insert Tk positions the view at the end of the text.
+        # For load/import/clean flows the user expects to see the top of
+        # the file first.
+        try:
+            self.text_area.mark_set('insert', '1.0')
+            self.text_area.see('1.0')
+        except tk.TclError:
+            pass
         self.text_area.edit_modified(False)
         self._suppress_modified_handler = False
-        
+
         current_hash = self._hash_lines(lines)
         if update_hash:
             if is_cleaned:
                 self._last_applied_cleaned_hash = current_hash
-                self._last_applied_raw_hash = None 
-            else: 
+                self._last_applied_raw_hash = None
+            else:
                 self._last_applied_raw_hash = current_hash
                 self._last_applied_cleaned_hash = None
-        
+
         self._update_save_button_state()
-        self._trigger_ui_update() 
+        self._trigger_ui_update()
 
     def _hash_lines(self, lines):
         return hashlib.sha256('\n'.join(lines).encode('utf-8')).hexdigest()
@@ -2158,9 +2535,8 @@ class HostsFileEditor:
             self._trigger_ui_update()
 
     def _trigger_ui_update(self):
-        if self._update_ui_job:
-            self.root.after_cancel(self._update_ui_job)
-        self._update_ui_job = self.root.after(300, self._on_text_modified_handler)
+        self._cancel_after_job("_update_ui_job")
+        self._update_ui_job = self._safe_after(300, self._on_text_modified_handler)
 
 
     def _on_text_modified_debounced(self, event=None):
@@ -2170,15 +2546,21 @@ class HostsFileEditor:
 
     def _on_text_modified_handler(self):
         self._update_ui_job = None
-        if self.text_area.edit_modified():
-            self.text_area.edit_modified(False)
+        try:
+            if not self.text_area.winfo_exists():
+                return
+            if self.text_area.edit_modified():
+                self.text_area.edit_modified(False)
 
-        lines = self.get_lines()
+            lines = self.get_lines()
+        except tk.TclError:
+            return
+
         current_hash = self._hash_lines(lines)
         self._update_save_button_state(_lines=lines, _current_hash=current_hash)
         self._update_diff_stats(lines)
         self._apply_inline_warnings(lines)
-        
+
         query = self.search_var.get().strip()
         if query:
             self._recompute_search_matches(query, preserve_index=True)
@@ -2223,7 +2605,7 @@ class HostsFileEditor:
         elif count == 1:
             text = f"1 non-empty line ready to append in {mode} mode."
         else:
-            text = f"{count} non-empty lines ready to append in {mode} mode."
+            text = f"{count:,} non-empty lines ready to append in {mode} mode."
         self.manual_summary_label.config(text=text)
 
     def _update_whitelist_summary(self):
@@ -2235,7 +2617,7 @@ class HostsFileEditor:
         if count == 1:
             text = "1 whitelist entry." + dirty_suffix
         else:
-            text = f"{count} whitelist entries." + dirty_suffix
+            text = f"{count:,} whitelist entries." + dirty_suffix
         self.whitelist_summary_label.config(text=text)
 
     def _on_manual_modified(self, event=None):
@@ -2245,6 +2627,8 @@ class HostsFileEditor:
 
 
     def load_file(self, is_initial_load=False):
+        if not is_initial_load and self._block_during_import("Refresh"):
+            return
         try:
             if os.path.exists(self.HOSTS_FILE_PATH):
                 if not is_initial_load and self._has_unsaved_changes():
@@ -2274,7 +2658,26 @@ class HostsFileEditor:
 
     # ----------------------------- Save Logic (Split) -----------------------------------
     
+    def _block_during_import(self, action_label: str) -> bool:
+        """Return True and show a warning if a batch import is running.
+
+        Saving or reloading while an import is mid-flight writes a
+        partial/inconsistent snapshot of the editor. Rather than silently
+        allowing it, surface a clear status message and tell the user to
+        wait or Stop Import.
+        """
+        if self.is_importing:
+            self.update_status(
+                f"{action_label} blocked: a batch import is running. "
+                "Wait for it to finish or click Stop Import.",
+                is_error=True,
+            )
+            return True
+        return False
+
     def save_raw_file(self):
+        if self._block_during_import("Save Raw"):
+            return
         lines = self.get_lines()
         content = '\n'.join(lines)
 
@@ -2292,6 +2695,8 @@ class HostsFileEditor:
 
 
     def save_cleaned_file(self):
+        if self._block_during_import("Save Cleaned"):
+            return
         original_lines = self.get_lines()
         whitelist_set = self._get_whitelist_set()
         
@@ -2357,6 +2762,22 @@ class HostsFileEditor:
         try:
             write_text_file_atomic(self.HOSTS_FILE_PATH, content_to_save)
             return True
+        except PermissionError as e:
+            # On Windows this usually means the hosts file has its
+            # read-only attribute set or is currently locked by security
+            # software. Give the user an actionable hint instead of a
+            # bare PermissionError traceback.
+            hint = ""
+            if os.name == 'nt':
+                hint = (
+                    "\n\nCommon causes on Windows:\n"
+                    "- The hosts file is set read-only (attrib -R to clear).\n"
+                    "- Security software is holding a lock on the file.\n"
+                    "- An earlier import is still being indexed."
+                )
+            self.update_status(f"{source_description} permission denied: {e}", is_error=True)
+            messagebox.showerror("Permission Denied", f"{source_description} could not write the hosts file:\n{e}{hint}", parent=self.root)
+            return False
         except Exception as e:
             self.update_status(f"{source_description} error: {e}", is_error=True)
             messagebox.showerror("Error", f"{source_description} error: {e}", parent=self.root)
@@ -2364,6 +2785,8 @@ class HostsFileEditor:
 
     # ----------------------- Revert to Backup (Preview + Apply) ----------------
     def revert_to_backup(self):
+        if self._block_during_import("Revert to Backup"):
+            return
         backup_path = self.HOSTS_FILE_PATH + ".bak"
         if not os.path.exists(backup_path):
             self.update_status("No backup is available yet. Save once to create one.", is_error=True)
@@ -2391,6 +2814,11 @@ class HostsFileEditor:
                         "Restoring from backup will replace your current unsaved editor content. Continue?",
                         parent=self.root,
                     ):
+                        # Give the user visible feedback that the whole
+                        # revert flow was cancelled. Without this the
+                        # preview window vanishes silently and it looks
+                        # like the app did nothing.
+                        self.update_status("Restore from backup cancelled.")
                         return
 
                 if self.dry_run_mode.get():
@@ -2418,6 +2846,11 @@ class HostsFileEditor:
     # ----------------------------- Threaded Imports -----------------------------
     
     def _apply_import_mode_filter(self, source_name: str, lines: list[str], import_mode: str) -> list[str]:
+        # Scrub newlines and control characters out of the source name so a
+        # malicious or malformed source label can't inject extra lines into
+        # the generated Start/End markers.
+        safe_name = re.sub(r'[\r\n\t]+', ' ', str(source_name)).strip() or "Imported Source"
+
         if import_mode == "Normalized":
             normalized_lines = []
             seen_entries = set()
@@ -2431,15 +2864,15 @@ class HostsFileEditor:
             if not normalized_lines:
                 return []
 
-            normalized_lines.insert(0, f"# --- Normalized Import Start: {source_name} ---")
-            normalized_lines.append(f"# --- Normalized Import End: {source_name} ---")
+            normalized_lines.insert(0, f"# --- Normalized Import Start: {safe_name} ---")
+            normalized_lines.append(f"# --- Normalized Import End: {safe_name} ---")
             return normalized_lines
         else:
             if not lines:
                 return []
-            raw_lines = [f"# --- Raw Import Start: {source_name} ---"]
+            raw_lines = [f"# --- Raw Import Start: {safe_name} ---"]
             raw_lines.extend(lines)
-            raw_lines.append(f"# --- Raw Import End: {source_name} ---")
+            raw_lines.append(f"# --- Raw Import End: {safe_name} ---")
             return raw_lines
 
     def start_single_import(self, name, url):
@@ -2478,8 +2911,8 @@ class HostsFileEditor:
         self.update_status(f"Preparing {len(sources)} source(s) for import in {mode} mode.")
         self.current_import_thread = threading.Thread(target=self._import_worker_thread, args=(sources, mode), daemon=True)
         self.current_import_thread.start()
-        
-        self.root.after(100, self._check_import_queue)
+
+        self._safe_after(100, self._check_import_queue)
 
     def _summarize_failure_messages(self, failure_messages, limit=6):
         preview_lines = failure_messages[:limit]
@@ -2527,7 +2960,7 @@ class HostsFileEditor:
                          raise urllib.error.HTTPError(url, response.getcode(), f"HTTP {response.getcode()}", response.info(), response.fp)
                     raw_lines = decode_downloaded_lines(
                         url,
-                        response.read(),
+                        read_http_body_limited(response),
                         response.headers.get("Content-Encoding", "")
                     )
                     if looks_like_html_document(raw_lines):
@@ -2551,6 +2984,13 @@ class HostsFileEditor:
         self.import_queue.put(("done", accumulated_lines, total, success_count, failure_messages))
 
     def _check_import_queue(self):
+        # Root may already be destroyed if the user closed the app mid-import.
+        try:
+            if not self.root.winfo_exists():
+                return
+        except tk.TclError:
+            return
+
         try:
             while True:
                 msg = self.import_queue.get_nowait()
@@ -2612,9 +3052,13 @@ class HostsFileEditor:
 
         except queue.Empty:
             pass
-        
+        except tk.TclError:
+            # Widget was destroyed mid-drain (e.g. window closed). Stop
+            # polling so we don't spin forever on a torn-down root.
+            return
+
         if self.is_importing:
-            self.root.after(100, self._check_import_queue)
+            self._safe_after(100, self._check_import_queue)
 
     # ----------------------------- File Imports -------------------
             
@@ -2633,7 +3077,7 @@ class HostsFileEditor:
             extracted_domains = set()
             for line in log_lines:
                 parts = line.strip().split(',')
-                if len(parts) > 2 and ("dnsbl" in parts[0] or "DNSBL" in parts[0]):
+                if len(parts) > 2 and "dnsbl" in parts[0].lower():
                     domain = parts[2].strip()
                     if domain:
                         extracted_domains.add(domain)
@@ -2659,16 +3103,19 @@ class HostsFileEditor:
         filename = os.path.basename(filepath)
         try:
             content = read_text_file_content(filepath).strip()
-            
+            if not content:
+                raise ValueError("The selected CSV file is empty.")
+
             reader = csv.DictReader(io.StringIO(content))
             extracted_domains = set()
-            
-            fieldnames = [name.strip().lower() for name in reader.fieldnames or []]
+
+            raw_fieldnames = reader.fieldnames or []
+            fieldnames = [name.strip().lower() if name else "" for name in raw_fieldnames]
             if 'domain' not in fieldnames or 'status' not in fieldnames:
                 raise ValueError("Missing required CSV columns ('domain', 'status').")
-            
-            domain_key = reader.fieldnames[fieldnames.index('domain')]
-            status_key = reader.fieldnames[fieldnames.index('status')]
+
+            domain_key = raw_fieldnames[fieldnames.index('domain')]
+            status_key = raw_fieldnames[fieldnames.index('status')]
 
             for row in reader:
                 domain = row.get(domain_key, '').strip()
@@ -2858,6 +3305,7 @@ class HostsFileEditor:
         if not filepath:
             return
         if not self._confirm_whitelist_replacement(f"'{os.path.basename(filepath)}'"):
+            self.update_status("Whitelist import cancelled. Existing entries kept.")
             return
         try:
             content = read_text_file_content(filepath)
@@ -2870,26 +3318,45 @@ class HostsFileEditor:
             messagebox.showerror("File Error", f"Could not load whitelist:\n{e}", parent=self.root)
 
     def import_whitelist_from_web(self):
+        if getattr(self, "_whitelist_web_fetch_active", False):
+            self.update_status("A whitelist import is already running.", is_error=True)
+            return
         url = "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/Whitelist.txt"
         if not self._confirm_whitelist_replacement("the HOSTShield web feed"):
+            self.update_status("Whitelist import cancelled. Existing entries kept.")
             return
         self.update_status("Importing whitelist from HOSTShield…")
+
+        self._whitelist_web_fetch_active = True
 
         def _fetch():
             try:
                 req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=15) as response:
-                    lines = decode_downloaded_lines(url, response.read(), response.headers.get("Content-Encoding", ""))
+                    if response.getcode() != 200:
+                        raise urllib.error.HTTPError(
+                            url, response.getcode(), f"HTTP {response.getcode()}",
+                            response.info(), response.fp,
+                        )
+                    lines = decode_downloaded_lines(
+                        url,
+                        read_http_body_limited(response),
+                        response.headers.get("Content-Encoding", ""),
+                    )
                     if looks_like_html_document(lines):
                         raise ValueError("Received HTML instead of a whitelist.")
                     content = '\n'.join(lines)
-                self.root.after(0, lambda: self._apply_whitelist_web_result(content))
+                self._safe_after(0, lambda: self._apply_whitelist_web_result(content))
             except Exception as e:
-                self.root.after(0, lambda: self._apply_whitelist_web_error(e))
+                # Capture the exception by value so the closure doesn't lose it
+                # after the except block exits.
+                error = e
+                self._safe_after(0, lambda: self._apply_whitelist_web_error(error))
 
         threading.Thread(target=_fetch, daemon=True).start()
 
     def _apply_whitelist_web_result(self, content):
+        self._whitelist_web_fetch_active = False
         self.whitelist_text_area.delete('1.0', tk.END)
         self.whitelist_text_area.insert('1.0', content)
         self._update_whitelist_summary()
@@ -2897,6 +3364,7 @@ class HostsFileEditor:
         self._trigger_ui_update()
 
     def _apply_whitelist_web_error(self, error):
+        self._whitelist_web_fetch_active = False
         self.update_status(f"Could not fetch whitelist: {type(error).__name__}", is_error=True)
         messagebox.showerror("Whitelist Import Error", f"Could not fetch whitelist:\n{error}", parent=self.root)
             
@@ -2927,6 +3395,8 @@ class HostsFileEditor:
     # ------------------------------ Utilities & Clean Logic ---------------------------------
     
     def auto_clean(self):
+        if self._block_during_import("Clean"):
+            return
         original = self.get_lines()
         whitelist_set = self._get_whitelist_set()
         
@@ -3049,35 +3519,59 @@ echo ====================================================
 echo You may close this window.
 pause
 """
+        fd = None
+        path = None
         try:
             fd, path = tempfile.mkstemp(suffix=".bat", text=True)
             with os.fdopen(fd, 'w') as f:
                 f.write(bat_content)
-            
+            fd = None  # fd is owned by the context manager now
+
             if os.name == 'nt':
                 os.startfile(path)
             else:
                 subprocess.Popen(['sh', path])
             self.update_status("Launched Emergency Unlock script in new window.", is_error=False)
-            
+
         except Exception as e:
+            # Launch failed — remove the orphaned temp script so it doesn't
+            # linger in %TEMP%. On success we intentionally leave it; the
+            # launched cmd.exe needs it to survive.
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            if path and os.path.exists(path):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
             messagebox.showerror("Error", f"Failed to launch emergency script: {e}", parent=self.root)
 
 
     # ----------------------------- Editor Warnings -------------------------------------
     
     def _apply_inline_warnings(self, lines: list[str]):
-        self.text_area.tag_remove("warning_discard", "1.0", tk.END)
-        self.text_area.tag_remove("warning_transform", "1.0", tk.END)
-        
+        try:
+            if not self.text_area.winfo_exists():
+                return
+            self.text_area.tag_remove("warning_discard", "1.0", tk.END)
+            self.text_area.tag_remove("warning_transform", "1.0", tk.END)
+        except tk.TclError:
+            return
+
+        if not lines:
+            return
+
         whitelist = self._get_whitelist_set()
         seen_normalized = set()
-        
+
         for i, line in enumerate(lines):
             line_number = i + 1
             start_index = f"{line_number}.0"
             end_index = f"{line_number}.end"
-            
+
             stripped = line.strip()
 
             if not stripped or _is_comment_line(stripped):
@@ -3085,31 +3579,35 @@ pause
 
             parsed_entries, transformed = parse_hosts_line_entries(line)
 
-            if not parsed_entries:
-                self.text_area.tag_add("warning_discard", start_index, end_index)
-                continue
-
-            discarded_from_line = False
-            kept_from_line = 0
-
-            for normalized, domain, is_block_entry in parsed_entries:
-                if is_block_entry and (domain in whitelist or domain.lstrip('.') in whitelist):
-                    discarded_from_line = True
+            try:
+                if not parsed_entries:
+                    self.text_area.tag_add("warning_discard", start_index, end_index)
                     continue
 
-                if normalized in seen_normalized:
-                    discarded_from_line = True
+                discarded_from_line = False
+                kept_from_line = 0
+
+                for normalized, domain, is_block_entry in parsed_entries:
+                    if is_block_entry and (domain in whitelist or domain.lstrip('.') in whitelist):
+                        discarded_from_line = True
+                        continue
+
+                    if normalized in seen_normalized:
+                        discarded_from_line = True
+                        continue
+
+                    seen_normalized.add(normalized)
+                    kept_from_line += 1
+
+                if discarded_from_line or kept_from_line == 0:
+                    self.text_area.tag_add("warning_discard", start_index, end_index)
                     continue
 
-                seen_normalized.add(normalized)
-                kept_from_line += 1
-
-            if discarded_from_line or kept_from_line == 0:
-                self.text_area.tag_add("warning_discard", start_index, end_index)
-                continue
-            
-            if transformed:
-                self.text_area.tag_add("warning_transform", start_index, end_index)
+                if transformed:
+                    self.text_area.tag_add("warning_transform", start_index, end_index)
+            except tk.TclError:
+                # Widget torn down during tagging — stop gracefully.
+                return
 
 
     # ----------------------------- Search -------------------------------------
@@ -3133,6 +3631,7 @@ pause
 
         matches = []
         start = "1.0"
+        truncated = False
         while True:
             pos = self.text_area.search(query, start, stopindex=tk.END, nocase=True)
             if not pos:
@@ -3141,9 +3640,12 @@ pause
             self.text_area.tag_add("search_match", pos, end)
             matches.append((pos, end))
             start = end
-            
+            if len(matches) >= SEARCH_MATCH_LIMIT:
+                truncated = True
+                break
+
         self._search_matches = matches
-        
+
         if self._search_matches:
             new_index = 0
             if preserve_index and old_current_match:
@@ -3154,21 +3656,34 @@ pause
                             break
                 except Exception:
                     new_index = 0
-            
+
             self._search_index = new_index
             self._focus_current_match()
-            self.update_status(f"Found {len(self._search_matches)} matches.")
+            if truncated:
+                self.update_status(
+                    f"Found {len(self._search_matches):,}+ matches "
+                    f"(capped at {SEARCH_MATCH_LIMIT:,}). Narrow your query to see the rest."
+                )
+            else:
+                self.update_status(f"Found {len(self._search_matches):,} matches.")
         else:
             self.update_status(f"No matches found for '{query}'.", is_error=True)
 
 
     def _focus_current_match(self):
-        self.text_area.tag_remove("search_current", "1.0", tk.END)
-        if 0 <= self._search_index < len(self._search_matches):
-            pos, end = self._search_matches[self._search_index]
-            self.text_area.tag_add("search_current", pos, end)
-            self.text_area.see(pos)
-            self.update_status(f"Search match {self._search_index + 1} of {len(self._search_matches)}.")
+        try:
+            self.text_area.tag_remove("search_current", "1.0", tk.END)
+            if 0 <= self._search_index < len(self._search_matches):
+                pos, end = self._search_matches[self._search_index]
+                self.text_area.tag_add("search_current", pos, end)
+                self.text_area.see(pos)
+                self.update_status(
+                    f"Search match {self._search_index + 1:,} of {len(self._search_matches):,}."
+                )
+        except tk.TclError:
+            # Text widget torn down (e.g. shutdown during a search cycle) —
+            # quietly give up instead of raising.
+            return
 
     def remove_matching_lines(self):
         query = self.search_var.get().strip()
@@ -3182,20 +3697,35 @@ pause
             self.update_status(f"No removable entries found for '{query}'.", is_error=True)
             return
 
-        dialog = MatchRemovalDialog(
-            self.root,
-            query,
-            [(line_index, current_lines[line_index]) for line_index in matching_indices],
-        )
-        self.root.wait_window(dialog)
-        if not dialog.result:
-            return
+        if len(matching_indices) > MATCH_REMOVAL_DIALOG_LIMIT:
+            proceed = messagebox.askyesno(
+                "Too Many Matches",
+                f"Your search matched {len(matching_indices):,} lines. "
+                f"Building an individual checkbox for each would freeze the UI.\n\n"
+                f"Remove ALL {len(matching_indices):,} matching lines in one step instead? "
+                f"(A preview will still be shown before the editor is changed.)",
+                parent=self.root,
+            )
+            if not proceed:
+                return
+            selected_indices = set(matching_indices)
+        else:
+            dialog = MatchRemovalDialog(
+                self.root,
+                query,
+                [(line_index, current_lines[line_index]) for line_index in matching_indices],
+            )
+            self.root.wait_window(dialog)
+            if not dialog.result:
+                return
+            selected_indices = dialog.result
 
-        updated_lines = remove_lines_by_indices(current_lines, dialog.result)
+        updated_lines = remove_lines_by_indices(current_lines, selected_indices)
+        removed_count = len(selected_indices)
 
         def apply_to_editor(approved_lines):
             self.set_text(approved_lines)
-            self.update_status(f"Removed {len(dialog.result)} matching line(s) for '{query}'.")
+            self.update_status(f"Removed {removed_count:,} matching line(s) for '{query}'.")
 
         PreviewWindow(
             self,

@@ -1,5 +1,5 @@
 #
-# Hosts File Management Tool - Automated Launcher
+# Hosts File Get - Automated Launcher
 #
 # Description:
 # This script downloads and runs the latest hosts editor with a small launcher UI.
@@ -16,6 +16,18 @@ $EditorUrl = "https://raw.githubusercontent.com/SysAdminDoc/HostsFileGet/refs/he
 $EditorCacheBase = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
 $EditorCacheRoot = Join-Path $EditorCacheBase $AppSlug
 $EditorPath = Join-Path $EditorCacheRoot "hosts_editor.py"
+$LogPath = Join-Path $EditorCacheRoot "launcher.log"
+
+# Persist a transcript so unattended launches (scheduled tasks, helpdesk
+# remote sessions) leave a forensic trail. Failures here are non-fatal.
+try {
+    if (-not (Test-Path -LiteralPath $EditorCacheRoot)) {
+        New-Item -ItemType Directory -Path $EditorCacheRoot -Force | Out-Null
+    }
+    Start-Transcript -Path $LogPath -Append -Force -ErrorAction Stop | Out-Null
+} catch {
+    # Non-fatal: continue without transcript.
+}
 
 # ==========================================================
 # 1. SETUP WPF SPLASH ENVIRONMENT
@@ -74,10 +86,10 @@ try {
 }
 
 # Helper to update UI and keep it responsive
-function Log-Status {
+function Write-LauncherStatus {
     param([string]$Message)
-    
-    Write-Host "[HostsLauncher] $Message" -ForegroundColor Gray
+
+    Write-Host "[$AppName Launcher] $Message" -ForegroundColor Gray
 
     if ($window) {
         $statusBlock.Text = $Message
@@ -85,7 +97,7 @@ function Log-Status {
     }
 }
 
-function Ensure-Directory {
+function Initialize-CacheDirectory {
     param([string]$Path)
 
     if (-not (Test-Path -LiteralPath $Path)) {
@@ -142,11 +154,18 @@ function Get-WingetInstallScriptPath {
     return $null
 }
 
-# Force TLS 1.2 for all downloads
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+# Allow TLS 1.2 and (where available) TLS 1.3 for all downloads. Older
+# Windows PowerShell 5.1 / Server 2016 lack the Tls13 enum value — the
+# fallback assignment keeps TLS 1.2 in that case.
+try {
+    [Net.ServicePointManager]::SecurityProtocol = `
+        [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+} catch {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+}
 
 # Helper function to download files with multiple methods
-function Download-File {
+function Invoke-FileDownload {
     param(
         [string]$Uri,
         [string]$OutFile
@@ -190,7 +209,7 @@ function Download-File {
 # 2. WINGET INSTALLATION LOGIC
 # ==========================================================
 function Install-Winget {
-    Log-Status "Installing WinGet via PSGallery script..."
+    Write-LauncherStatus "Installing WinGet via PSGallery script..."
     
     try {
         Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
@@ -198,10 +217,10 @@ function Install-Winget {
         # Install NuGet provider (required for PSGallery)
         Install-PackageProvider -Name NuGet -Force -ErrorAction Stop | Out-Null
         
-        Log-Status "Downloading winget-install script..."
+        Write-LauncherStatus "Downloading winget-install script..."
         Install-Script -Name winget-install -Force -Scope CurrentUser -ErrorAction Stop
         
-        Log-Status "Running winget-install..."
+        Write-LauncherStatus "Running winget-install..."
         $wingetInstallScriptPath = Get-WingetInstallScriptPath
         if ($wingetInstallScriptPath) {
             & $wingetInstallScriptPath
@@ -209,12 +228,12 @@ function Install-Winget {
             throw "winget-install script was installed but could not be located in PATH."
         }
         
-        Log-Status "WinGet installed successfully!"
+        Write-LauncherStatus "WinGet installed successfully!"
         Start-Sleep -Seconds 2
         return $true
         
     } catch {
-        Log-Status "ERROR: $($_.Exception.Message)"
+        Write-LauncherStatus "ERROR: $($_.Exception.Message)"
         return $false
     }
 }
@@ -222,38 +241,38 @@ function Install-Winget {
 # ==========================================================
 # 3. PYTHON INSTALLATION LOGIC
 # ==========================================================
-function Ensure-PythonInstalled {
+function Initialize-PythonRuntime {
     $pythonInfo = Get-PythonLaunchInfo
     if ($pythonInfo) {
-        Log-Status "Using existing Python runtime."
+        Write-LauncherStatus "Using existing Python runtime."
         return $pythonInfo
     }
 
-    Log-Status "Installing Python via winget..."
+    Write-LauncherStatus "Installing Python via winget..."
     
     try {
         $wingetResult = winget install --id Python.Python.3.14 --exact --source winget --silent --accept-package-agreements --accept-source-agreements 2>&1
         
-        Log-Status "Reloading environment variables..."
+        Write-LauncherStatus "Reloading environment variables..."
         
         # Refresh PATH in the current session
         $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ";" + [System.Environment]::GetEnvironmentVariable('Path', 'User')
 
-        Log-Status "Verifying Python installation..."
+        Write-LauncherStatus "Verifying Python installation..."
         Start-Sleep -Milliseconds 500
         
         $pythonInfo = Get-PythonLaunchInfo
         if ($pythonInfo) {
-            Log-Status "Python is ready!"
+            Write-LauncherStatus "Python is ready!"
             return $pythonInfo
         }
 
-        Log-Status "Python installed but could not be located in PATH."
+        Write-LauncherStatus "Python installed but could not be located in PATH."
         Write-Host $wingetResult
         return $null
     }
     catch {
-        Log-Status "ERROR: Failed to install Python"
+        Write-LauncherStatus "ERROR: Failed to install Python"
         return $null
     }
 }
@@ -268,6 +287,12 @@ function Test-ValidEditorFile {
     try {
         $item = Get-Item -LiteralPath $Path -ErrorAction Stop
         if ($item.Length -lt 1000) {
+            return $false
+        }
+        # Upper bound: the current editor is under 200 KB. A 20 MB file in
+        # this slot is either a MITM-substituted payload or a download that
+        # picked up a generic landing page we didn't catch. Refuse it.
+        if ($item.Length -gt 20MB) {
             return $false
         }
 
@@ -285,13 +310,13 @@ function Test-ValidEditorFile {
 # ==========================================================
 # 4. DOWNLOAD AND RUN EDITOR
 # ==========================================================
-function Download-And-Run-Editor {
+function Invoke-EditorBootstrap {
     param([Parameter(Mandatory = $true)]$PythonInfo)
 
-    Log-Status "Downloading Hosts Editor..."
+    Write-LauncherStatus "Downloading Hosts Editor..."
     
     try {
-        Ensure-Directory -Path $EditorCacheRoot
+        Initialize-CacheDirectory -Path $EditorCacheRoot
         $temporaryDownloadPath = Join-Path $EditorCacheRoot "hosts_editor.download.py"
         $editorPathToLaunch = $EditorPath
 
@@ -299,21 +324,21 @@ function Download-And-Run-Editor {
             Remove-Item -LiteralPath $temporaryDownloadPath -Force -ErrorAction SilentlyContinue
         }
 
-        if (Download-File -Uri $EditorUrl -OutFile $temporaryDownloadPath) {
+        if (Invoke-FileDownload -Uri $EditorUrl -OutFile $temporaryDownloadPath) {
             if (-not (Test-ValidEditorFile -Path $temporaryDownloadPath)) {
                 throw "Downloaded editor file appears truncated."
             }
 
             Move-Item -LiteralPath $temporaryDownloadPath -Destination $EditorPath -Force
-            Log-Status "Download complete!"
+            Write-LauncherStatus "Download complete!"
         } elseif (Test-ValidEditorFile -Path $EditorPath) {
-            Log-Status "Download failed. Using cached editor copy."
+            Write-LauncherStatus "Download failed. Using cached editor copy."
         } else {
             throw "Download failed and no valid cached editor is available."
         }
     }
     catch {
-        Log-Status "ERROR: Failed to prepare editor"
+        Write-LauncherStatus "ERROR: Failed to prepare editor"
         Start-Sleep -Seconds 3
         return $false
     }
@@ -323,16 +348,22 @@ function Download-And-Run-Editor {
         }
     }
 
-    Log-Status "Launching Hosts Editor..."
+    Write-LauncherStatus "Launching Hosts Editor..."
     Start-Sleep -Milliseconds 500
-    
+
     try {
-        $launchArguments = @($PythonInfo.Arguments + @("`"$editorPathToLaunch`""))
+        # Start-Process handles quoting internally when given an array of
+        # arguments. Wrapping the path in embedded double-quotes previously
+        # produced arguments like `""C:\...path..."""` if the cache path
+        # contained spaces, which fails on some PowerShell hosts.
+        $launchArguments = @()
+        $launchArguments += $PythonInfo.Arguments
+        $launchArguments += $editorPathToLaunch
         Start-Process -FilePath $PythonInfo.FilePath -ArgumentList $launchArguments
         return $true
     }
     catch {
-        Log-Status "ERROR: Failed to launch script"
+        Write-LauncherStatus "ERROR: Failed to launch script"
         Start-Sleep -Seconds 3
         return $false
     }
@@ -342,20 +373,20 @@ function Download-And-Run-Editor {
 # 5. MAIN EXECUTION
 # ==========================================================
 $window.Show()
-Log-Status "Initializing..."
+Write-LauncherStatus "Initializing..."
 Start-Sleep -Milliseconds 500
 
 try {
     # Step 1: Check if winget is installed
-    Log-Status "Checking for winget..."
+    Write-LauncherStatus "Checking for winget..."
     $wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
     
     if (-not $wingetCmd) {
-        Log-Status "Winget not found. Installing..."
+        Write-LauncherStatus "Winget not found. Installing..."
         Start-Sleep -Milliseconds 300
         
         if (-not (Install-Winget)) {
-            Log-Status "Failed to install winget!"
+            Write-LauncherStatus "Failed to install winget!"
             Start-Sleep -Seconds 5
             $window.Close()
             exit 1
@@ -364,36 +395,42 @@ try {
         $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ";" + [System.Environment]::GetEnvironmentVariable('Path', 'User')
         $wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
         if (-not $wingetCmd) {
-            Log-Status "WinGet install completed, but the command is still unavailable in this session."
+            Write-LauncherStatus "WinGet install completed, but the command is still unavailable in this session."
             Start-Sleep -Seconds 5
             $window.Close()
             exit 1
         }
     } else {
-        Log-Status "Winget is available"
+        Write-LauncherStatus "Winget is available"
         Start-Sleep -Milliseconds 300
     }
     
     # Step 2: Ensure Python is available
-    $pythonInfo = Ensure-PythonInstalled
+    $pythonInfo = Initialize-PythonRuntime
     if (-not $pythonInfo) {
-        Log-Status "Python installation failed!"
+        Write-LauncherStatus "Python installation failed!"
         Start-Sleep -Seconds 5
         $window.Close()
         exit 1
     }
     
     # Step 3: Download and run the editor
-    if (Download-And-Run-Editor -PythonInfo $pythonInfo) {
-        Log-Status "Success! Closing launcher..."
+    if (Invoke-EditorBootstrap -PythonInfo $pythonInfo) {
+        Write-LauncherStatus "Success! Closing launcher..."
         Start-Sleep -Seconds 2
     }
     
 } catch {
-    Log-Status "Critical Error: $($_.Exception.Message)"
+    Write-LauncherStatus "Critical Error: $($_.Exception.Message)"
     Write-Host "`nFull error details:" -ForegroundColor Red
     Write-Host $_.Exception | Format-List -Force
     Start-Sleep -Seconds 10
 }
 
 $window.Close()
+
+try {
+    Stop-Transcript | Out-Null
+} catch {
+    # No transcript was running; nothing to flush.
+}
