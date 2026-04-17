@@ -2,6 +2,77 @@
 
 All notable changes to HostsFileGet will be documented in this file.
 
+## [v2.11.0] - 2026-04-16
+
+**Correctness & safety**
+- Fixed hard-coded `C:\Windows\...\hosts` path. The editor now resolves the real Windows location from `%SystemRoot%`, so installations on D:/E: drives, WinPE images, and forensic mounts work correctly.
+- Added a 50 MB hard cap on every feed download (both compressed and decompressed) to prevent runaway servers or gzip bombs from OOMing the GUI process.
+- Source labels that contain newlines or tabs are scrubbed before being written into generated Start/End import markers. Prevents a malformed source name from injecting extra lines into the hosts output.
+- Emergency DNS recovery script now cleans up its orphan `.bat` file in `%TEMP%` if the launch itself fails.
+
+**Performance**
+- Preview dialog falls back to a compact unified diff above 10,000 lines. `difflib.ndiff` is O(n*m) and was previously hanging the Preview window for tens of seconds on large editors.
+- Match-removal dialog now caps at 2,000 individual checkboxes. Above that, the user is offered a single-confirmation "remove all matches" path (still previewed) instead of Tk hanging while packing 10K+ widgets.
+
+**Reliability**
+- Concurrent whitelist web import is now blocked — clicking the Import from Web button twice while a fetch is in flight shows a warning instead of spawning a second thread.
+- Background threads that post results back to the Tk main loop now use a guarded `_safe_after` wrapper so a fetch that finishes after the window is closed no longer raises `TclError` on exit.
+- All pending `after()` jobs (UI update, source filter, status reset) are cancelled when the window closes, preventing orphan callbacks from firing against destroyed widgets.
+- `_check_import_queue` handles `TclError` and a destroyed root gracefully (previously it could spin forever if the user closed the app mid-import).
+- `_apply_inline_warnings` and `_on_text_modified_handler` are guarded against widget destruction mid-run.
+- `_apply_window_branding` now falls back to a sane 1280×800 when the OS reports zero/negative screen dimensions (remote desktop/headless edge cases).
+- `on_closing` never blocks on a config save failure — shutdown always completes.
+
+**Parsing robustness**
+- pfSense log importer now matches `dnsbl` case-insensitively so mixed-case log formats (`Dnsbl`, `DnsBL`, etc.) work.
+- NextDNS CSV importer rejects empty files up front and handles a missing/empty header row without a confusing attribute error.
+
+**UX & polish**
+- Preview window geometry clamps to the available screen so it no longer overflows on 1366x768 and smaller displays.
+- Preview window accepts **Enter** to apply changes and focuses the primary action button on open (better keyboard + screen-reader flow).
+- Whitelist widget no longer flashes a transient "Unsaved changes are pending" label during initial config load.
+- Stat panel numbers now render with thousand separators (e.g., `152,847` instead of `152847`) for readability on very large hosts files.
+- Status bar messages are collapsed to a single line and truncated to 220 characters so long exception strings can't distort the layout.
+- Added a **Help → Open Config Folder** menu entry so users can inspect or back up `hosts_editor_config.json` without hunting through %LOCALAPPDATA%.
+- Config loader now distinguishes corrupt JSON from OS read errors and surfaces the actual error message in the status bar.
+
+**PowerShell launcher**
+- Fixed argument quoting that broke when the editor cache path contained spaces; updated header comment from the old project name.
+- Renamed internal helper functions to use approved PowerShell verbs (`Write-LauncherStatus`, `Initialize-CacheDirectory`, `Invoke-FileDownload`, `Initialize-PythonRuntime`, `Invoke-EditorBootstrap`).
+- Added `Start-Transcript` logging to `%LOCALAPPDATA%\HostsFileGet\launcher.log` so unattended / helpdesk launches leave a forensic trail.
+
+**Concurrency & data safety**
+- Added `_block_during_import` guard. Save Raw, Save Cleaned, Refresh, Revert to Backup, and Clean now refuse to run while a batch import is in flight, with a clear status message explaining why. Previously these could run mid-import and write an inconsistent snapshot.
+- `save_config` now handles TclError from torn-down widgets, so shutdown during import no longer surfaces a stray traceback.
+
+**File integrity**
+- `write_text_file_atomic` now terminates written files with a trailing newline (POSIX-standard convention). Hash round-trip verified by a new regression test so the terminator doesn't flag saved files as "unsaved".
+
+**UX**
+- Text editor now scrolls back to the top after a bulk insert (load / import / clean). Previously the view jumped to end-of-file, hiding what was loaded.
+- Escape inside the Source Catalog filter clears it and restores the full list.
+- Manual and whitelist summary labels now use thousand separators on large counts.
+- Canceling the unsaved-changes prompt during Revert to Backup, or the replacement prompt during a whitelist import, now shows explicit "cancelled" status feedback instead of vanishing silently.
+
+**Tests**
+- Added regression tests for the download size cap, gzip bomb rejection, SystemRoot-derived hosts path, source-name sanitization, status-message truncation, the worker's oversize-response handling, import-guard behavior, and the atomic-write trailing-newline + hash round-trip.
+
+**Hardened validation (late additions)**
+- Custom sources: name now capped at 120 chars, URL at 2083 chars. Any entry containing tab, newline, or other control bytes is rejected — both in the Add-Source dialog and when loading a malformed legacy config.
+- Config saved-state hashes: now strictly validated as 64-char lowercase hex. Anything else is discarded so a corrupted config cannot poison the "Unsaved Changes" / "Saved Cleaned Snapshot" badges.
+- `_execute_save` produces an actionable hint for Windows `PermissionError` (read-only attribute, AV lock, indexer hold) instead of a bare traceback in the error dialog.
+- In-editor search is capped at 50,000 match highlights so a common query against a multi-megabyte hosts file can't freeze Tk while tagging hundreds of thousands of ranges.
+- Legacy config files are deleted after successful migration to `%LOCALAPPDATA%\HostsFileGet\`.
+
+**Pass 5 additions**
+- **DPI awareness**: calls `SetProcessDpiAwareness(2)` at startup (falls back to `SetProcessDPIAware` on older Windows). Fixes blurry fonts on 125%+ scaled displays, which is the default for most modern laptops.
+- **ToolTip UX**: 450ms hover delay (no more flashing tooltips on transient mouse-overs); hides immediately on click or keypress; `<Destroy>` / `TclError` guards around every Tk call so a widget torn down mid-hover no longer raises.
+- **Status helpers hardened**: `_reset_status_color` and `_set_status_hint` now swallow `TclError` — harmless on normal runs, prevents stderr noise on shutdown.
+- **Launcher TLS**: allows TLS 1.3 where the runtime supports it, falls back to TLS 1.2-only on PS 5.1 / older Windows.
+- **Launcher integrity**: editor download now rejects files above 20 MB (no legitimate editor script approaches this — MITM/captive-portal guard).
+
+42 tests total, all passing.
+
 ## [v2.10.0] - 2026-04-15
 
 - Threaded whitelist web import so the GUI no longer freezes for up to 15 seconds during download.
