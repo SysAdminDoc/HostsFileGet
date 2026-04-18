@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # Hosts File Get
 
 import tkinter as tk
@@ -53,6 +53,13 @@ BACKUP_RETENTION = 5
 SOURCE_PREVIEW_MAX_BYTES = 96 * 1024
 SOURCE_PREVIEW_MAX_LINES = 80
 
+# The imported-source corpus cache powers "Check Domain" and "Sources Report".
+# Keep it bounded so a marathon import session does not quietly accumulate tens
+# of megabytes of text in RAM.
+SOURCE_CORPUS_CACHE_MAX_ENTRY_BYTES = 2 * 1024 * 1024
+SOURCE_CORPUS_CACHE_MAX_TOTAL_BYTES = 16 * 1024 * 1024
+SOURCE_CORPUS_CACHE_MAX_ENTRIES = 24
+
 # Loopback / block-style IPs that the "change block target" tool treats as
 # equivalent and will rewrite to the user's chosen sink. :: is the IPv6 null
 # address used by some DoH-aware stubs; ::1 is IPv6 loopback.
@@ -103,27 +110,36 @@ def _enable_windows_dpi_awareness() -> None:
 
 _enable_windows_dpi_awareness()
 
-# ----------------------------- Theme (Catppuccin Mocha) ----------------------
+# ----------------------------- Theme -----------------------------------------
+# A restrained palette keeps the interface calm and scannable. We still use
+# color for priority and state, but most surfaces stay close together so the
+# eye lands on structure and content instead of decoration.
 PALETTE = {
-    "base": "#1e1e2e",    # window background
-    "mantle": "#181825",  # very dark panels
-    "crust": "#11111b",   # darkest
-    "text": "#cdd6f4",
-    "subtext": "#a6adc8",
-    "surface0": "#313244",  # panel inner
-    "surface1": "#45475a",
-    "overlay0": "#6c7086",
-    "overlay1": "#7f849c",
-    "blue": "#89b4fa",
-    "green": "#a6e3a1",
-    "green_hover": "#b6f3b1",
-    "green_press": "#8dcf87",
-    "red": "#f38ba8",
-    "red_hover": "#ff9fb5",
-    "red_press": "#d9778f",
-    "yellow": "#f9e2af",
-    "yellow_ink": "#3b2f13",
-    "accent": "#b4befe",
+    "base": "#0f1318",
+    "mantle": "#141a20",
+    "panel": "#171e26",
+    "panel_alt": "#1b2430",
+    "crust": "#0c1117",
+    "text": "#edf2f7",
+    "subtext": "#a0acb8",
+    "surface0": "#202935",
+    "surface1": "#293444",
+    "surface2": "#354255",
+    "overlay0": "#5d6977",
+    "overlay1": "#7d8896",
+    "border": "#273241",
+    "focus": "#7ea8ff",
+    "blue": "#8fb2ff",
+    "blue_hover": "#a5c1ff",
+    "green": "#8fc4a1",
+    "green_hover": "#a4d0b3",
+    "green_press": "#72b387",
+    "red": "#e8a1aa",
+    "red_hover": "#efb0b8",
+    "red_press": "#d38993",
+    "yellow": "#d8c08b",
+    "yellow_ink": "#2e2410",
+    "accent": "#8fb2ff",
 }
 
 # ----------------------------- Tooltip Helper --------------------------------
@@ -240,14 +256,24 @@ class PreviewWindow(tk.Toplevel):
             screen_w, screen_h = 900, 650
         width = min(900, max(640, screen_w - 80))
         height = min(650, max(420, screen_h - 120))
-        self.geometry(f"{width}x{height}")
-        self.configure(bg=PALETTE["base"])
-        self.transient(parent.root)
+        if hasattr(parent, "_configure_modal_window"):
+            parent._configure_modal_window(
+                self,
+                title=title,
+                size=f"{width}x{height}",
+                min_size=(640, 420),
+            )
+        else:
+            self.title(title)
+            self.geometry(f"{width}x{height}")
+            self.configure(bg=PALETTE["base"])
+            self.transient(parent.root)
         self.grab_set()
 
-        header_frame = ttk.Frame(self, padding=(14, 14, 14, 0))
+        header_frame = ttk.Frame(self, padding=(16, 16, 16, 0))
         header_frame.pack(fill='x', side=tk.TOP)
-        ttk.Label(header_frame, text=title, font=("Segoe UI Semibold", 14)).pack(anchor='w')
+        ttk.Label(header_frame, text="Preview changes", style="Eyebrow.TLabel").pack(anchor='w')
+        ttk.Label(header_frame, text=title, font=("Segoe UI Semibold", 14)).pack(anchor='w', pady=(4, 0))
         ttk.Label(
             header_frame,
             text="Review the exact before-and-after output before applying it to the editor or disk.",
@@ -261,16 +287,18 @@ class PreviewWindow(tk.Toplevel):
             self._add_stat_banner(stats_frame)
         
         top_padding = 4 if self.stats else 12
-        text_frame = ttk.Frame(self, padding=(14, top_padding, 14, 0))
+        text_frame = ttk.Frame(self, padding=(16, top_padding, 16, 0))
         text_frame.pack(expand=True, fill='both')
         self.preview_text = scrolledtext.ScrolledText(
-            text_frame, wrap=tk.WORD, font=("Consolas", 11),
-            bg=PALETTE["crust"], fg=PALETTE["text"], insertbackground=PALETTE["text"],
-            selectbackground=PALETTE["blue"], relief="flat"
+            text_frame, wrap=tk.NONE, font=("Consolas", 11),
         )
+        if hasattr(parent, "_style_code_surface"):
+            parent._style_code_surface(self.preview_text, font_spec=("Consolas", 11))
         self.preview_text.pack(expand=True, fill='both')
 
-        button_frame = ttk.Frame(self, padding=10)
+        ttk.Separator(self, orient="horizontal").pack(fill="x", pady=(12, 0))
+
+        button_frame = ttk.Frame(self, padding=(16, 12, 16, 14))
         button_frame.pack(fill=tk.X, side=tk.BOTTOM)
 
         legend_frame = ttk.Frame(button_frame)
@@ -280,12 +308,13 @@ class PreviewWindow(tk.Toplevel):
         self.preview_legend_label = ttk.Label(legend_frame, text="", foreground=PALETTE["overlay1"])
         self.preview_legend_label.pack(anchor='w', pady=(2, 0))
 
-        self.apply_button = ttk.Button(button_frame, text=apply_label, command=self.apply_changes, style="Accent.TButton")
+        self.apply_button = ttk.Button(button_frame, text=apply_label, command=self.apply_changes, style="Action.TButton")
         self.apply_button.pack(side=tk.RIGHT, padx=6)
         ttk.Button(button_frame, text=cancel_label, command=self.destroy, style="Secondary.TButton").pack(side=tk.RIGHT, padx=6)
 
         self.preview_text.tag_config('added', foreground="#89D68D")
         self.preview_text.tag_config('removed', foreground=PALETTE["red"])
+        self.preview_text.tag_config('header', foreground=PALETTE["blue"])
         self.display_diff(original_lines, new_lines)
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.bind("<Escape>", lambda _event: self.destroy(), add="+")
@@ -358,7 +387,7 @@ class PreviewWindow(tk.Toplevel):
 
         # difflib.ndiff is O(n*m). For very large editors (hundreds of
         # thousands of lines) it can hang the preview dialog for tens of
-        # seconds. Fall back to unified_diff above the threshold — it still
+        # seconds. Fall back to unified_diff above the threshold - it still
         # classifies every line as added/removed/context, just without the
         # character-level hint lines.
         use_ndiff = max(len(original), len(new)) <= NDIFF_LINE_LIMIT
@@ -379,7 +408,7 @@ class PreviewWindow(tk.Toplevel):
                 if line.startswith("+++") or line.startswith("---"):
                     continue
                 if line.startswith('@@'):
-                    self.preview_text.insert(tk.END, line + '\n')
+                    self.preview_text.insert(tk.END, line + '\n', 'header')
                     continue
                 if line.startswith('+'):
                     self._added_lines += 1
@@ -414,38 +443,88 @@ class PreviewWindow(tk.Toplevel):
         except Exception as e:
             self._is_applying = False
             self.apply_button.configure(state="normal")
-            messagebox.showerror("Apply Failed", f"Could not apply preview changes:\n{e}", parent=self)
+            self.parent_editor._show_notice_dialog(
+                "Could not apply preview changes",
+                "The approved preview could not be applied to the editor.",
+                tone="error",
+                details=str(e),
+            )
             return
 
         self.destroy()
 
 # -------------------------- Add Custom Source Dialog --------------------------
 class AddSourceDialog(simpledialog.Dialog):
-    def __init__(self, parent, initial_name="", initial_url=""):
+    def __init__(self, editor, initial_name="", initial_url=""):
+        self.editor = editor
         self.initial_name = initial_name
         self.initial_url = initial_url
-        super().__init__(parent)
+        self.feedback_var = tk.StringVar(value="")
+        super().__init__(editor.root)
 
     def body(self, master):
         self.title("Add Custom Blocklist Source")
+        self.configure(bg=PALETTE["base"])
         master.columnconfigure(1, weight=1)
+        try:
+            master.configure(padx=18, pady=16)
+        except tk.TclError:
+            pass
         ttk.Label(
             master,
-            text="Save a reusable feed so it appears in Custom Sources for one-click imports.",
+            text="Save a reusable feed so it appears in Saved Sources for one-click imports later.",
             foreground=PALETTE["subtext"],
             wraplength=360,
             justify="left"
         ).grid(row=0, column=0, columnspan=2, sticky='w', pady=(0, 10))
-        ttk.Label(master, text="Display Name:").grid(row=1, sticky='w', pady=5)
-        ttk.Label(master, text="Source URL:").grid(row=2, sticky='w', pady=5)
+        ttk.Label(master, text="Display Name").grid(row=1, sticky='w', pady=5)
+        ttk.Label(master, text="Source URL").grid(row=2, sticky='w', pady=5)
         self.name_entry = ttk.Entry(master, width=40)
         self.url_entry = ttk.Entry(master, width=40)
         self.name_entry.grid(row=1, column=1, padx=5, sticky="ew")
         self.url_entry.grid(row=2, column=1, padx=5, sticky="ew")
+        ttk.Label(
+            master,
+            text="Use a short, recognizable label such as the publisher or use case.",
+            foreground=PALETTE["overlay1"],
+            wraplength=360,
+            justify="left",
+        ).grid(row=3, column=1, sticky="w", padx=5, pady=(0, 6))
+        ttk.Label(
+            master,
+            text="Only direct `http://` or `https://` feed URLs are accepted.",
+            foreground=PALETTE["overlay1"],
+            wraplength=360,
+            justify="left",
+        ).grid(row=4, column=1, sticky="w", padx=5, pady=(0, 0))
+        self.feedback_shell = tk.Frame(
+            master,
+            bg=PALETTE["panel_alt"],
+            highlightthickness=1,
+            highlightbackground=PALETTE["border"],
+            highlightcolor=PALETTE["focus"],
+            bd=0,
+        )
+        self.feedback_shell.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        self.feedback_label = tk.Label(
+            self.feedback_shell,
+            textvariable=self.feedback_var,
+            bg=PALETTE["panel_alt"],
+            fg=PALETTE["yellow"],
+            justify="left",
+            wraplength=360,
+            anchor="w",
+            padx=12,
+            pady=10,
+        )
+        self.feedback_label.pack(fill="x")
+        self.feedback_shell.grid_remove()
         if self.initial_name:
             self.name_entry.insert(0, self.initial_name)
         if self.initial_url:
             self.url_entry.insert(0, self.initial_url)
+        self.name_entry.bind("<KeyRelease>", lambda _event: self._clear_feedback(), add="+")
+        self.url_entry.bind("<KeyRelease>", lambda _event: self._clear_feedback(), add="+")
         return self.name_entry
 
     # Upper bound on any custom source URL. 2083 is the practical browser
@@ -454,10 +533,30 @@ class AddSourceDialog(simpledialog.Dialog):
     _URL_MAX_LEN = 2083
     _NAME_MAX_LEN = 120
 
+    def _set_feedback(self, message: str, *, tone: str = "warning"):
+        accent = {
+            "warning": PALETTE["yellow"],
+            "error": PALETTE["red"],
+        }.get(tone, PALETTE["yellow"])
+        self.feedback_var.set(message)
+        self.feedback_label.configure(fg=accent)
+        self.feedback_shell.configure(highlightbackground=accent, highlightcolor=accent)
+        self.feedback_shell.grid()
+        self.bell()
+
+    def _clear_feedback(self):
+        if hasattr(self, "feedback_shell"):
+            self.feedback_var.set("")
+            self.feedback_shell.grid_remove()
+
     def validate(self):
+        self._clear_feedback()
         name, url = self.name_entry.get().strip(), self.url_entry.get().strip()
         if not name or not url:
-            messagebox.showwarning("Input Required", "Both name and URL are required.", parent=self)
+            self._set_feedback(
+                "Enter both a display name and a direct feed URL before saving this source.",
+                tone="warning",
+            )
             if not name:
                 self.name_entry.focus_set()
             else:
@@ -465,10 +564,9 @@ class AddSourceDialog(simpledialog.Dialog):
             return False
 
         if len(name) > self._NAME_MAX_LEN:
-            messagebox.showerror(
-                "Name Too Long",
-                f"Display names are capped at {self._NAME_MAX_LEN} characters.",
-                parent=self,
+            self._set_feedback(
+                f"Display names are capped at {self._NAME_MAX_LEN} characters so the saved-sources list stays readable.",
+                tone="error",
             )
             self.name_entry.focus_set()
             return False
@@ -477,37 +575,33 @@ class AddSourceDialog(simpledialog.Dialog):
             # Embedded tabs / newlines / control bytes would corrupt the
             # sidebar display and the sanitized marker comments. Reject
             # rather than silently stripping.
-            messagebox.showerror(
-                "Invalid Characters",
-                "Name and URL must not contain tabs, newlines, or control characters.",
-                parent=self,
+            self._set_feedback(
+                "Display names and URLs cannot contain tabs, newlines, or other control characters.",
+                tone="error",
             )
-            self.url_entry.focus_set()
+            (self.url_entry if any(ord(ch) < 32 for ch in url) else self.name_entry).focus_set()
             return False
 
         if not url.lower().startswith(('http://', 'https://')):
-            messagebox.showerror("Invalid URL", "URL must start with http:// or https://", parent=self)
+            self._set_feedback(
+                "Use a direct http:// or https:// URL for the feed you want to save.",
+                tone="error",
+            )
             self.url_entry.focus_set()
             self.url_entry.selection_range(0, tk.END)
             return False
 
         if len(url) > self._URL_MAX_LEN:
-            messagebox.showerror(
-                "URL Too Long",
-                f"URLs are capped at {self._URL_MAX_LEN} characters.",
-                parent=self,
+            self._set_feedback(
+                f"Feed URLs are capped at {self._URL_MAX_LEN} characters.",
+                tone="error",
             )
             self.url_entry.focus_set()
             return False
 
-        try:
-            parsed = urllib.parse.urlsplit(url)
-        except ValueError:
-            messagebox.showerror("Invalid URL", "URL could not be parsed.", parent=self)
-            self.url_entry.focus_set()
-            return False
-        if not parsed.netloc:
-            messagebox.showerror("Invalid URL", "URL is missing a host name.", parent=self)
+        parsed = _parse_valid_http_source_url(url)
+        if parsed is None:
+            self._set_feedback("That URL could not be parsed. Double-check the address and try again.", tone="error")
             self.url_entry.focus_set()
             return False
 
@@ -518,136 +612,257 @@ class AddSourceDialog(simpledialog.Dialog):
         name, url = self.name_entry.get().strip(), self.url_entry.get().strip()
         self.result = (name, url)
 
+    def buttonbox(self):
+        box = ttk.Frame(self)
+        box.configure(padding=(18, 8, 18, 18))
+        ttk.Button(box, text="Cancel", width=14, command=self.cancel, style="Secondary.TButton").pack(side="right", padx=(0, 8))
+        ttk.Button(box, text="Save Source", width=14, command=self.ok, style="Action.TButton").pack(side="right")
+        self.bind("<Return>", self.ok)
+        self.bind("<Escape>", self.cancel)
+        box.pack(fill="x")
+
 # -------------------------- Bulk Selection Dialog (New in v2.8.5) ----------------
 class BulkSelectionDialog(tk.Toplevel):
-    def __init__(self, parent, blocklist_sources, custom_sources):
-        super().__init__(parent)
-        self.title("Select Lists to Import")
-        self.geometry("600x700")
-        self.configure(bg=PALETTE["base"])
-        self.transient(parent)
+    def __init__(self, editor, blocklist_sources, custom_sources):
+        self.editor = editor
+        super().__init__(editor.root)
+        editor._configure_modal_window(
+            self,
+            title="Select Lists to Import",
+            size="700x760",
+            min_size=(620, 560),
+        )
         self.grab_set()
-        self.bind("<Escape>", lambda _event: self.destroy(), add="+")
-        
+
         self.result = None
-        self.checkbox_vars = [] # List of tuples: (name, url, tk.BooleanVar)
-        
-        # --- Header ---
-        header_frame = ttk.Frame(self, padding=(14, 14, 14, 0))
-        header_frame.pack(fill='x')
-        ttk.Label(header_frame, text="Choose the sources you want to import in this batch.", font=("Segoe UI Semibold", 12)).pack(anchor='w')
+        self.filter_var = tk.StringVar()
+        self.filter_var.trace_add("write", lambda *_args: self._rebuild_source_rows())
+        self._all_sources: list[tuple[str, str, str, str]] = []
+        self._selection_state: dict[tuple[str, str], bool] = {}
+        for category, sources in blocklist_sources.items():
+            for name, url, tooltip in sources:
+                self._all_sources.append((category, name, url, tooltip))
+                self._selection_state[(name, url)] = True
+        for src in custom_sources:
+            name = src["name"]
+            url = src["url"]
+            self._all_sources.append(("Custom Sources", name, url, "Custom source"))
+            self._selection_state[(name, url)] = True
+        self._visible_source_keys: list[tuple[str, str]] = []
+
+        header_frame = ttk.Frame(self, padding=(18, 18, 18, 0))
+        header_frame.pack(fill="x")
+        ttk.Label(header_frame, text="Batch import", style="Eyebrow.TLabel").pack(anchor="w")
+        ttk.Label(header_frame, text="Choose the sources you want to import together.", font=("Segoe UI Semibold", 13)).pack(anchor="w", pady=(4, 0))
         ttk.Label(
             header_frame,
             text="Selections are downloaded one at a time so progress, failures, and cancellation stay predictable.",
             foreground=PALETTE["subtext"],
-            wraplength=540,
-            justify="left"
-        ).pack(anchor='w', pady=(4, 0))
+            wraplength=640,
+            justify="left",
+        ).pack(anchor="w", pady=(4, 0))
         self.selection_summary_label = ttk.Label(header_frame, foreground=PALETTE["overlay1"])
-        self.selection_summary_label.pack(anchor='w', pady=(6, 0))
-        
-        # --- Scrollable Area ---
-        container = ttk.Frame(self)
-        container.pack(fill='both', expand=True, padx=10, pady=5)
-        
-        canvas = tk.Canvas(container, bg=PALETTE["mantle"], highlightthickness=0)
+        self.selection_summary_label.pack(anchor="w", pady=(8, 0))
+        self.feedback_label = ttk.Label(
+            header_frame,
+            text="",
+            foreground=PALETTE["yellow"],
+            wraplength=640,
+            justify="left",
+        )
+        self.feedback_label.pack(anchor="w", pady=(6, 0))
+
+        filter_row = ttk.Frame(self, padding=(18, 14, 18, 0))
+        filter_row.pack(fill="x")
+        ttk.Label(filter_row, text="Filter", style="SectionTitle.TLabel").pack(side="left")
+        self.filter_entry = ttk.Entry(filter_row, textvariable=self.filter_var)
+        self.filter_entry.pack(side="left", fill="x", expand=True, padx=(10, 0))
+        self.filter_entry.bind("<Escape>", lambda _event: (self.filter_var.set(""), "break")[-1])
+
+        container = ttk.Frame(self, padding=(18, 14, 18, 0))
+        container.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(container, bg=PALETTE["base"], highlightthickness=0, bd=0)
         scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
-        self.scrollable_frame = ttk.Frame(canvas)
-        
+        self.scrollable_frame = ttk.Frame(canvas, padding=(0, 0, 2, 0))
+
         self.scrollable_frame.bind(
             "<Configure>",
             lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
-        
-        # Mousewheel scrolling
+
         def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
         canvas.bind("<Enter>", lambda _event: canvas.bind_all("<MouseWheel>", _on_mousewheel))
         canvas.bind("<Leave>", lambda _event: canvas.unbind_all("<MouseWheel>"))
         self.bind("<Destroy>", lambda _event: canvas.unbind_all("<MouseWheel>"), add="+")
-        
-        canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure("bulk-frame", width=e.width))
+        canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw", width=652, tags=("bulk-frame",))
         canvas.configure(yscrollcommand=scrollbar.set)
-        
+
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-        
-        # --- Populate Lists ---
-        # 1. Standard Sources
-        for category, sources in blocklist_sources.items():
-            self._add_category_header(category)
+        self.empty_state_label = None
+
+        btn_frame = ttk.Frame(self, padding=(18, 14, 18, 18))
+        btn_frame.pack(fill="x", side="bottom")
+
+        left_btns = ttk.Frame(btn_frame)
+        left_btns.pack(side="left")
+        ttk.Button(left_btns, text="Select All Shown", command=self.select_all).pack(side="left", padx=(0, 6))
+        ttk.Button(left_btns, text="Clear Shown", command=self.select_none).pack(side="left")
+
+        right_btns = ttk.Frame(btn_frame)
+        right_btns.pack(side="right")
+        ttk.Button(right_btns, text="Import Selected Sources", command=self.confirm, style="Action.TButton").pack(side="left", padx=5)
+        ttk.Button(right_btns, text="Cancel", command=self.destroy, style="Secondary.TButton").pack(side="left")
+
+        self.filter_entry.focus_set()
+        self._rebuild_source_rows()
+
+    def _rebuild_source_rows(self):
+        for child in self.scrollable_frame.winfo_children():
+            child.destroy()
+        self.empty_state_label = None
+        self._clear_feedback()
+
+        query = self.filter_var.get().strip().lower()
+        self._visible_source_keys.clear()
+        grouped: dict[str, list[tuple[str, str, str]]] = {}
+        for category, name, url, tooltip in self._all_sources:
+            haystack = f"{category} {name} {url} {tooltip}".lower()
+            if query and query not in haystack:
+                continue
+            grouped.setdefault(category, []).append((name, url, tooltip))
+
+        if not grouped:
+            self.empty_state_label = ttk.Label(
+                self.scrollable_frame,
+                text="No sources match the current filter.",
+                style="SectionBody.TLabel",
+                wraplength=600,
+                justify="left",
+            )
+            self.empty_state_label.pack(anchor="w", pady=(6, 0))
+            self._update_selection_summary()
+            return
+
+        for category, sources in grouped.items():
+            self._add_category_header(category, len(sources))
             for name, url, tooltip in sources:
                 self._add_checkbox(name, url, tooltip)
-                
-        # 2. Custom Sources
-        if custom_sources:
-            self._add_category_header("Custom Sources")
-            for src in custom_sources:
-                self._add_checkbox(src['name'], src['url'], "Custom Source")
-                
-        # --- Footer Buttons ---
-        btn_frame = ttk.Frame(self, padding=10)
-        btn_frame.pack(fill='x', side='bottom')
-        
-        left_btns = ttk.Frame(btn_frame)
-        left_btns.pack(side='left')
-        ttk.Button(left_btns, text="Select All", command=self.select_all).pack(side='left', padx=2)
-        ttk.Button(left_btns, text="Select None", command=self.select_none).pack(side='left', padx=2)
-        
-        right_btns = ttk.Frame(btn_frame)
-        right_btns.pack(side='right')
-        ttk.Button(right_btns, text="Import Selected", command=self.confirm, style="Accent.TButton").pack(side='left', padx=5)
-        ttk.Button(right_btns, text="Keep Current", command=self.destroy, style="Secondary.TButton").pack(side='left')
         self._update_selection_summary()
 
-    def _add_category_header(self, text):
-        f = ttk.Frame(self.scrollable_frame, padding=(5, 10, 5, 2))
-        f.pack(fill='x')
-        ttk.Label(f, text=text, font=("Segoe UI", 10, "bold"), foreground=PALETTE["blue"]).pack(anchor='w')
-        ttk.Separator(f, orient='horizontal').pack(fill='x')
+    def _add_category_header(self, text, count):
+        shell = tk.Frame(
+            self.scrollable_frame,
+            bg=PALETTE["panel"],
+            highlightthickness=1,
+            highlightbackground=PALETTE["border"],
+            highlightcolor=PALETTE["focus"],
+            bd=0,
+        )
+        shell.pack(fill="x", pady=(0, 6))
+        inner = ttk.Frame(shell, style="Section.TFrame", padding=(14, 10, 14, 10))
+        inner.pack(fill="both", expand=True)
+        ttk.Label(inner, text=text, style="SectionTitle.TLabel").pack(side="left")
+        ttk.Label(inner, text=f"{count} shown", style="SectionBody.TLabel").pack(side="right")
 
     def _add_checkbox(self, name, url, tooltip):
-        var = tk.BooleanVar(value=True) # Default to checked
-        frame = ttk.Frame(self.scrollable_frame, padding=(15, 2, 5, 2))
-        frame.pack(fill='x')
-        
-        cb = ttk.Checkbutton(frame, text=name, variable=var, command=self._update_selection_summary)
-        cb.pack(side='left', fill='x', expand=True)
+        key = (name, url)
+        var = tk.BooleanVar(value=self._selection_state.get(key, True))
+        shell = tk.Frame(
+            self.scrollable_frame,
+            bg=PALETTE["panel_alt"],
+            highlightthickness=1,
+            highlightbackground=PALETTE["border"],
+            highlightcolor=PALETTE["focus"],
+            bd=0,
+        )
+        shell.pack(fill="x", pady=(0, 6))
+        frame = ttk.Frame(shell, style="Inset.TFrame", padding=(12, 10, 12, 10))
+        frame.pack(fill="both", expand=True)
+
+        row = ttk.Frame(frame, style="Inset.TFrame")
+        row.pack(fill="x")
+        cb = ttk.Checkbutton(
+            row,
+            text=name,
+            variable=var,
+            command=lambda k=key, v=var: self._toggle_selection(k, v),
+        )
+        cb.pack(side="left", fill="x", expand=True)
         source_host = urllib.parse.urlparse(url).netloc or url
-        ttk.Label(frame, text=source_host, foreground=PALETTE["subtext"]).pack(side='right', padx=(8, 0))
-        
-        # Determine tooltip text
-        url_short = (url[:50] + '..') if len(url) > 50 else url
-        tip_text = f"{tooltip}\nURL: {url_short}"
-        ToolTip(cb, tip_text)
-        
-        self.checkbox_vars.append((name, url, var))
+        ttk.Label(row, text=source_host, foreground=PALETTE["subtext"]).pack(side="right", padx=(8, 0))
+        ttk.Label(
+            frame,
+            text=tooltip,
+            style="SectionBody.TLabel",
+            wraplength=600,
+            justify="left",
+        ).pack(anchor="w", pady=(6, 0))
+
+        url_short = (url[:72] + "..") if len(url) > 72 else url
+        ToolTip(cb, f"{tooltip}\nURL: {url_short}")
+
+        self._visible_source_keys.append(key)
+
+    def _toggle_selection(self, key, var):
+        self._selection_state[key] = bool(var.get())
+        self._clear_feedback()
+        self._update_selection_summary()
+
+    def _set_feedback(self, message: str):
+        self.feedback_label.config(text=message)
+        self.bell()
+
+    def _clear_feedback(self):
+        self.feedback_label.config(text="")
 
     def _update_selection_summary(self):
-        total = len(self.checkbox_vars)
-        selected_count = sum(1 for _, _, var in self.checkbox_vars if var.get())
-        self.selection_summary_label.config(text=f"{selected_count} of {total} source(s) selected")
+        total = len(self._all_sources)
+        shown = len(self._visible_source_keys)
+        selected_count = sum(1 for selected in self._selection_state.values() if selected)
+        visible_selected = sum(1 for key in self._visible_source_keys if self._selection_state.get(key))
+        if shown == total:
+            self.selection_summary_label.config(text=f"{selected_count} of {total} source(s) selected.")
+        else:
+            self.selection_summary_label.config(
+                text=f"{selected_count} of {total} selected overall. {visible_selected} of {shown} currently shown."
+            )
 
     def select_all(self):
-        for _, _, var in self.checkbox_vars:
-            var.set(True)
-        self._update_selection_summary()
+        targets = self._visible_source_keys if self._visible_source_keys else (
+            [] if self.filter_var.get().strip() else list(self._selection_state.keys())
+        )
+        for key in targets:
+            self._selection_state[key] = True
+        self._clear_feedback()
+        self._rebuild_source_rows()
 
     def select_none(self):
-        for _, _, var in self.checkbox_vars:
-            var.set(False)
-        self._update_selection_summary()
+        targets = self._visible_source_keys if self._visible_source_keys else (
+            [] if self.filter_var.get().strip() else list(self._selection_state.keys())
+        )
+        for key in targets:
+            self._selection_state[key] = False
+        self._clear_feedback()
+        self._rebuild_source_rows()
 
     def confirm(self):
-        selected = []
-        for name, url, var in self.checkbox_vars:
-            if var.get():
-                selected.append((name, url))
-        
+        selected = [
+            (name, url)
+            for (_category, name, url, _tooltip) in self._all_sources
+            if self._selection_state.get((name, url))
+        ]
+
         if not selected:
-            messagebox.showwarning("Selection Empty", "Please select at least one list to import.", parent=self)
+            self._set_feedback("Select at least one source before starting a batch import.")
             return
-            
+
+        self._clear_feedback()
         self.result = selected
         self.destroy()
 
@@ -664,41 +879,54 @@ SEARCH_MATCH_LIMIT = 50_000
 
 
 class MatchRemovalDialog(tk.Toplevel):
-    def __init__(self, parent, query: str, matching_lines: list[tuple[int, str]]):
-        super().__init__(parent)
-        self.title(f"Remove Matches for '{query}'")
-        self.geometry("760x620")
-        self.configure(bg=PALETTE["base"])
-        self.transient(parent)
+    def __init__(self, editor, query: str, matching_lines: list[tuple[int, str]]):
+        self.editor = editor
+        super().__init__(editor.root)
+        editor._configure_modal_window(
+            self,
+            title=f"Remove Matches for '{query}'",
+            size="820x680",
+            min_size=(700, 520),
+        )
         self.grab_set()
-        self.bind("<Escape>", lambda _event: self.destroy(), add="+")
 
         self.result = None
         self.checkbox_vars = []
 
-        header_frame = ttk.Frame(self, padding=(14, 14, 14, 0))
+        header_frame = ttk.Frame(self, padding=(18, 18, 18, 0))
         header_frame.pack(fill="x")
+        ttk.Label(header_frame, text="Selective removal", style="Eyebrow.TLabel").pack(anchor="w")
         ttk.Label(
             header_frame,
             text=f"Review which matches to remove for '{query}'.",
-            font=("Segoe UI Semibold", 12)
-        ).pack(anchor="w")
+            font=("Segoe UI Semibold", 13)
+        ).pack(anchor="w", pady=(4, 0))
         self.selection_summary_label = ttk.Label(
             header_frame,
             text="",
             foreground=PALETTE["subtext"]
         )
-        self.selection_summary_label.pack(anchor="w", pady=(4, 0))
+        self.selection_summary_label.pack(anchor="w", pady=(6, 0))
+        self.feedback_label = ttk.Label(
+            header_frame,
+            text="",
+            foreground=PALETTE["yellow"],
+            wraplength=760,
+            justify="left",
+        )
+        self.feedback_label.pack(anchor="w", pady=(6, 0))
         ttk.Label(
             header_frame,
-            text="Unchecked lines stay in the editor.",
-            foreground=PALETTE["overlay1"]
+            text="Unchecked lines stay in the editor. You'll still get a full preview before anything changes.",
+            foreground=PALETTE["overlay1"],
+            wraplength=760,
+            justify="left",
         ).pack(anchor="w", pady=(4, 0))
 
-        container = ttk.Frame(self)
-        container.pack(fill="both", expand=True, padx=10, pady=5)
+        container = ttk.Frame(self, padding=(18, 14, 18, 0))
+        container.pack(fill="both", expand=True)
 
-        canvas = tk.Canvas(container, bg=PALETTE["mantle"], highlightthickness=0)
+        canvas = tk.Canvas(container, bg=PALETTE["base"], highlightthickness=0, bd=0)
         scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
         self.scrollable_frame = ttk.Frame(canvas)
 
@@ -713,8 +941,9 @@ class MatchRemovalDialog(tk.Toplevel):
         canvas.bind("<Enter>", lambda _event: canvas.bind_all("<MouseWheel>", _on_mousewheel))
         canvas.bind("<Leave>", lambda _event: canvas.unbind_all("<MouseWheel>"))
         self.bind("<Destroy>", lambda _event: canvas.unbind_all("<MouseWheel>"), add="+")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure("match-frame", width=e.width))
 
-        canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw", tags=("match-frame",))
         canvas.configure(yscrollcommand=scrollbar.set)
 
         canvas.pack(side="left", fill="both", expand=True)
@@ -722,32 +951,49 @@ class MatchRemovalDialog(tk.Toplevel):
 
         for line_index, line in matching_lines:
             var = tk.BooleanVar(value=True)
-            frame = ttk.Frame(self.scrollable_frame, padding=(10, 4))
-            frame.pack(fill="x")
-
-            cb = ttk.Checkbutton(
-                frame,
-                text=f"Line {line_index + 1}: {line}",
-                variable=var,
-                command=self._update_selection_summary,
-                wraplength=690,
-                justify="left"
+            shell = tk.Frame(
+                self.scrollable_frame,
+                bg=PALETTE["panel_alt"],
+                highlightthickness=1,
+                highlightbackground=PALETTE["border"],
+                highlightcolor=PALETTE["focus"],
+                bd=0,
             )
-            cb.pack(side="left", fill="x", expand=True)
+            shell.pack(fill="x", pady=(0, 6))
+            frame = ttk.Frame(shell, style="Inset.TFrame", padding=(12, 10, 12, 10))
+            frame.pack(fill="both", expand=True)
+
+            row = ttk.Frame(frame, style="Inset.TFrame")
+            row.pack(fill="x")
+            cb = ttk.Checkbutton(
+                row,
+                text=f"Line {line_index + 1:,}",
+                variable=var,
+                command=self._on_selection_changed,
+            )
+            cb.pack(side="left")
+            ttk.Label(row, text=f"{len(line):,} chars", style="SectionBody.TLabel").pack(side="right")
+            ttk.Label(
+                frame,
+                text=line,
+                style="SectionBody.TLabel",
+                wraplength=740,
+                justify="left",
+            ).pack(anchor="w", pady=(8, 0))
             self.checkbox_vars.append((line_index, var))
 
-        btn_frame = ttk.Frame(self, padding=10)
+        btn_frame = ttk.Frame(self, padding=(18, 14, 18, 18))
         btn_frame.pack(fill="x", side="bottom")
 
         left_btns = ttk.Frame(btn_frame)
         left_btns.pack(side="left")
-        ttk.Button(left_btns, text="Select All", command=self.select_all).pack(side="left", padx=2)
-        ttk.Button(left_btns, text="Select None", command=self.select_none).pack(side="left", padx=2)
+        ttk.Button(left_btns, text="Select All", command=self.select_all).pack(side="left", padx=(0, 6))
+        ttk.Button(left_btns, text="Select None", command=self.select_none).pack(side="left")
 
         right_btns = ttk.Frame(btn_frame)
         right_btns.pack(side="right")
         ttk.Button(right_btns, text="Remove Selected", command=self.confirm, style="Danger.TButton").pack(side="left", padx=5)
-        ttk.Button(right_btns, text="Keep Remaining", command=self.destroy, style="Secondary.TButton").pack(side="left")
+        ttk.Button(right_btns, text="Cancel", command=self.destroy, style="Secondary.TButton").pack(side="left")
         self._update_selection_summary()
 
     def _update_selection_summary(self):
@@ -755,22 +1001,36 @@ class MatchRemovalDialog(tk.Toplevel):
         selected_count = sum(1 for _, var in self.checkbox_vars if var.get())
         self.selection_summary_label.config(text=f"{selected_count} of {total} removable line(s) currently selected")
 
+    def _set_feedback(self, message: str):
+        self.feedback_label.config(text=message)
+        self.bell()
+
+    def _clear_feedback(self):
+        self.feedback_label.config(text="")
+
+    def _on_selection_changed(self):
+        self._clear_feedback()
+        self._update_selection_summary()
+
     def select_all(self):
         for _, var in self.checkbox_vars:
             var.set(True)
+        self._clear_feedback()
         self._update_selection_summary()
 
     def select_none(self):
         for _, var in self.checkbox_vars:
             var.set(False)
+        self._clear_feedback()
         self._update_selection_summary()
 
     def confirm(self):
         selected_indices = {line_index for line_index, var in self.checkbox_vars if var.get()}
         if not selected_indices:
-            messagebox.showwarning("Selection Empty", "Select at least one matching line to remove.", parent=self)
+            self._set_feedback("Select at least one matching line before continuing.")
             return
 
+        self._clear_feedback()
         self.result = selected_indices
         self.destroy()
 
@@ -1063,6 +1323,67 @@ def write_text_file_atomic(path: str, content: str):
             os.unlink(temp_path)
         raise
 
+
+def _allocate_unique_sibling_temp_path(target_path: str, suffix: str) -> str:
+    """Reserve a unique temp path next to ``target_path`` and return it."""
+    directory = os.path.dirname(target_path) or "."
+    prefix = os.path.basename(target_path) + "."
+    fd, temp_path = tempfile.mkstemp(prefix=prefix, suffix=suffix, dir=directory)
+    os.close(fd)
+    try:
+        os.unlink(temp_path)
+    except OSError:
+        pass
+    return temp_path
+
+
+def disable_hosts_file_transactionally(hosts_path: str, disabled_path: str, minimal_content: str) -> None:
+    """Disable the hosts file without leaving a stale disabled marker on failure."""
+    had_existing_hosts = os.path.exists(hosts_path)
+    staged_disabled_path = None
+
+    try:
+        if had_existing_hosts:
+            staged_disabled_path = _allocate_unique_sibling_temp_path(disabled_path, ".pending")
+            shutil.copy2(hosts_path, staged_disabled_path)
+
+        write_text_file_atomic(hosts_path, minimal_content)
+
+        if staged_disabled_path:
+            os.replace(staged_disabled_path, disabled_path)
+    except Exception:
+        if staged_disabled_path and os.path.exists(staged_disabled_path):
+            if had_existing_hosts:
+                try:
+                    shutil.copy2(staged_disabled_path, hosts_path)
+                except OSError:
+                    pass
+            try:
+                os.unlink(staged_disabled_path)
+            except OSError:
+                pass
+        raise
+
+
+def enable_hosts_file_transactionally(hosts_path: str, disabled_path: str) -> None:
+    """Re-enable the hosts file without leaving ``.disabled`` behind on success."""
+    staged_restore_path = _allocate_unique_sibling_temp_path(disabled_path, ".restore")
+    os.replace(disabled_path, staged_restore_path)
+
+    try:
+        shutil.copy2(staged_restore_path, hosts_path)
+        try:
+            os.unlink(staged_restore_path)
+        except OSError:
+            pass
+    except Exception:
+        if os.path.exists(staged_restore_path) and not os.path.exists(disabled_path):
+            try:
+                os.replace(staged_restore_path, disabled_path)
+            except OSError:
+                pass
+        raise
+
 def read_http_body_limited(response, max_bytes: int = MAX_DOWNLOAD_BYTES) -> bytes:
     """Read an HTTP response with a hard ceiling on total bytes.
 
@@ -1144,6 +1465,21 @@ def get_primary_config_path(config_filename: str) -> str:
 def _roaming_config_path(config_filename: str) -> str:
     return os.path.join(get_app_config_dir(), config_filename)
 
+
+def _parse_valid_http_source_url(url: str):
+    """Return a parsed URL only when it is a direct http(s) URL with a host."""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError:
+        return None
+
+    if parsed.scheme.lower() not in ("http", "https"):
+        return None
+    if not parsed.hostname:
+        return None
+    return parsed
+
+
 def normalize_custom_source_url(url: str) -> str:
     candidate = url.strip()
     if not candidate:
@@ -1192,6 +1528,8 @@ def sanitize_custom_sources(custom_sources) -> list[dict[str, str]]:
 
         # Cap sizes defensively; see AddSourceDialog for rationale.
         if len(name) > 120 or len(url) > 2083:
+            continue
+        if _parse_valid_http_source_url(url) is None:
             continue
 
         normalized_name = name.lower()
@@ -1248,7 +1586,7 @@ def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
     source_last_fetched: dict[str, str] = {}
     if isinstance(raw_last_fetched, dict):
         for url, stamp in raw_last_fetched.items():
-            if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            if not isinstance(url, str) or _parse_valid_http_source_url(url) is None:
                 continue
             if not isinstance(stamp, str) or len(stamp) > 64:
                 continue
@@ -1396,7 +1734,7 @@ def scan_suspicious_redirects(lines: list[str]) -> list[tuple[int, str, str]]:
 
         if ip_token.startswith(private_prefixes):
             # 172.16.0.0/12 is the classic RFC1918 block, but we can't tell
-            # from a prefix alone — treat the full 172.x as private-ish to
+            # from a prefix alone - treat the full 172.x as private-ish to
             # avoid false positives on home LAN mappings.
             if ip_token.startswith("172."):
                 try:
@@ -1416,19 +1754,30 @@ def scan_suspicious_redirects(lines: list[str]) -> list[tuple[int, str, str]]:
     return findings
 
 
-def find_sources_containing_domain(domain: str, source_corpus: dict[str, str]) -> list[str]:
-    """Return the names of sources whose corpus contains ``domain``.
+def find_sources_containing_domain(domain: str, source_corpus: dict[str, object]) -> list[str]:
+    """Return source names whose cached corpus contains ``domain``.
 
-    ``source_corpus`` maps a display name to the raw text of a previously
-    fetched blocklist. Match is exact-suffix (``example.com`` also matches
-    ``sub.example.com``) so that aggregate lists surface correctly.
+    ``source_corpus`` may be either the legacy ``{name: text}`` shape or the
+    newer ``{cache_key: {"name": name, "text": text}}`` shape used to avoid
+    collisions between sources that share the same display label.
     """
     target = domain.strip().lower().lstrip('.')
     if not target:
         return []
 
+    needle = re.compile(
+        rf'(?:^|[\s\t,/|^=])(?:\*\.)?(?:[a-z0-9][a-z0-9-]*\.)*{re.escape(target)}(?:$|[\s\t,/|^#$])',
+        re.IGNORECASE | re.MULTILINE,
+    )
     matches: list[str] = []
-    for name, text in source_corpus.items():
+    seen_names: set[str] = set()
+    for cache_key, payload in source_corpus.items():
+        if isinstance(payload, dict):
+            name = str(payload.get("name") or cache_key)
+            text = payload.get("text", "")
+        else:
+            name = str(cache_key)
+            text = payload
         if not text:
             continue
         lowered = text.lower()
@@ -1436,24 +1785,90 @@ def find_sources_containing_domain(domain: str, source_corpus: dict[str, str]) -
         # pass so we don't hit "notexample.com" when searching "example.com".
         if target not in lowered:
             continue
-        needle = re.compile(
-            rf'(?:^|[\s\t,/|^=])(?:\*\.)?(?:[a-z0-9][a-z0-9-]*\.)*{re.escape(target)}(?:$|[\s\t,/|^#$])',
-            re.IGNORECASE | re.MULTILINE,
-        )
-        if needle.search(text):
+        if needle.search(text) and name not in seen_names:
+            seen_names.add(name)
             matches.append(name)
     return matches
+
+
+SCHEDULE_WEEKDAYS = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
+SCHEDULE_WEEKDAY_LABELS = {
+    "MON": "Monday",
+    "TUE": "Tuesday",
+    "WED": "Wednesday",
+    "THU": "Thursday",
+    "FRI": "Friday",
+    "SAT": "Saturday",
+    "SUN": "Sunday",
+}
+
+
+def normalize_scheduler_start_time(value: str, default: str = "03:30") -> str:
+    candidate = (value or "").strip()
+    if not candidate:
+        candidate = default
+
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})", candidate)
+    if not match:
+        raise ValueError("Use a valid 24-hour time in HH:MM format.")
+
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ValueError("Time must be between 00:00 and 23:59.")
+
+    return f"{hour:02d}:{minute:02d}"
+
+
+def build_schtasks_create_command(
+    task_name: str,
+    task_command: str,
+    frequency: str,
+    *,
+    start_time: str = "03:30",
+    weekday: str = "MON",
+) -> tuple[list[str], str]:
+    task_name = (task_name or "").strip()
+    task_command = (task_command or "").strip()
+    frequency = (frequency or "").strip().upper()
+
+    if not task_name:
+        raise ValueError("Task name is required.")
+    if not task_command:
+        raise ValueError("Task command is required.")
+    if frequency not in {"DAILY", "WEEKLY", "ONLOGON"}:
+        raise ValueError("Unsupported schedule frequency.")
+
+    args = [
+        "schtasks", "/Create", "/TN", task_name, "/TR", task_command,
+        "/SC", frequency, "/RL", "HIGHEST", "/F",
+    ]
+
+    if frequency == "ONLOGON":
+        return args, "Runs at sign-in."
+
+    normalized_time = normalize_scheduler_start_time(start_time)
+    args += ["/ST", normalized_time]
+
+    if frequency == "WEEKLY":
+        normalized_weekday = (weekday or "").strip().upper()
+        if normalized_weekday not in SCHEDULE_WEEKDAYS:
+            raise ValueError("Choose a weekday for weekly schedules.")
+        args += ["/D", normalized_weekday]
+        return args, f"Runs every {SCHEDULE_WEEKDAY_LABELS[normalized_weekday]} at {normalized_time}."
+
+    return args, f"Runs daily at {normalized_time}."
 
 
 def export_lines_as_format(lines: list[str], export_format: str) -> str:
     """Convert cleaned hosts lines to one of the supported export formats.
 
     Supported formats:
-        hosts       — as-is hosts file content (what Cleaned Save writes)
-        domains     — one domain per line, no IP
-        adblock     — ``||domain^`` uBlock/AdGuard syntax
-        dnsmasq     — ``address=/domain/0.0.0.0``
-        pihole      — pi-hole gravity-style plain domain list (same as domains)
+        hosts       - as-is hosts file content (what Cleaned Save writes)
+        domains     - one domain per line, no IP
+        adblock     - ``||domain^`` uBlock/AdGuard syntax
+        dnsmasq     - ``address=/domain/0.0.0.0``
+        pihole      - pi-hole gravity-style plain domain list (same as domains)
     """
     export_format = (export_format or "").strip().lower()
     if export_format == "hosts":
@@ -1516,7 +1931,7 @@ def strip_lines_by_category(
 ) -> tuple[list[str], dict[str, int]]:
     """Return ``lines`` with selected noise categories removed, plus counts.
 
-    Unlike the full Cleaned Save, this is surgical — the caller picks which
+    Unlike the full Cleaned Save, this is surgical - the caller picks which
     category to remove and nothing else. Normalization and deduplication are
     intentionally skipped. Returned stats:
         ``{"removed_comments": int, "removed_blanks": int, "removed_invalid": int}``
@@ -1616,7 +2031,7 @@ def summarize_source_contributions(lines: list[str]) -> list[dict]:
 def fuzzy_score(query: str, target: str) -> int:
     """Score a target string against a query, higher = better match.
 
-    Ordered-subsequence scorer — every query character must appear in the
+    Ordered-subsequence scorer - every query character must appear in the
     target in order. Consecutive matches and matches at word boundaries are
     weighted higher. Returns -1 on no match.
     """
@@ -1647,7 +2062,7 @@ def discover_import_sections(lines: list[str]) -> list[dict]:
 
     Returns a list of ``{"name", "mode", "start", "end"}`` (inclusive indices).
     Unmatched start markers are skipped silently so a malformed editor can't
-    crash the UI — the caller just won't see that block as a whole section.
+    crash the UI - the caller just won't see that block as a whole section.
     """
     sections: list[dict] = []
     pending: dict | None = None
@@ -1916,7 +2331,12 @@ class HostsFileEditor:
         self._apply_window_branding()
 
         self.default_font = font.Font(family="Segoe UI", size=10)
-        self.title_font = font.Font(family="Segoe UI", size=11, weight="bold")
+        self.title_font = font.Font(family="Segoe UI Semibold", size=11)
+        self.subtitle_font = font.Font(family="Segoe UI", size=9)
+        self.hero_font = font.Font(family="Segoe UI Semibold", size=21)
+        self.metric_font = font.Font(family="Segoe UI Semibold", size=16)
+        self.mono_font = font.Font(family="Consolas", size=11)
+        self.mono_small_font = font.Font(family="Consolas", size=10)
         self.custom_sources = []
         self._custom_source_widgets = {} 
         
@@ -1941,14 +2361,13 @@ class HostsFileEditor:
         self.config_path = get_primary_config_path(self.CONFIG_FILENAME)
         self.last_open_dir = os.path.expanduser("~")
 
-        # Per-session cache of raw source text (keyed by display name) used
-        # by the "Check Domain" cross-reference so the user can ask which
-        # curated sources contain a given domain without re-fetching.
-        # Capped per entry to keep memory sane on aggregate lists.
-        self._source_corpus_cache: dict[str, str] = {}
-        # Persisted across sessions: URL → ISO timestamp of last successful
+        # Per-session cache of fetched source text keyed by URL so custom
+        # sources cannot collide with curated sources that share a label.
+        self._source_corpus_cache: dict[str, dict[str, str]] = {}
+        # Persisted across sessions: URL -> ISO timestamp of last successful
         # fetch. Lets source tooltips surface how stale a feed is.
         self.source_last_fetched: dict[str, str] = {}
+        self._source_metadata_dirty = False
         self._preferred_block_sink = "0.0.0.0"
         self._backup_retention = BACKUP_RETENTION
         self._has_completed_first_run = False
@@ -1963,7 +2382,7 @@ class HostsFileEditor:
         self._init_menubar()
         
         # 1. Initialize Status Bar FIRST
-        self.default_status_hint = "Ctrl+S Save Cleaned   Ctrl+Shift+S Save Raw   F5 Reload"
+        self.default_status_hint = "Ctrl+S Cleaned Save   Ctrl+Shift+S Raw Save   F5 Reload"
         status_frame = ttk.Frame(root, padding=(10, 6, 10, 10))
         status_frame.pack(side=tk.BOTTOM, fill=tk.X)
         self.status_label = ttk.Label(status_frame, text="Loading...", font=self.default_font, foreground=PALETTE["subtext"])
@@ -1976,6 +2395,9 @@ class HostsFileEditor:
         self.status_hint_label.pack(side=tk.LEFT, padx=(18, 0))
         
         # Progress Bar
+        self.progress_status_label = ttk.Label(status_frame, text="", style="StatusMeta.TLabel")
+        self.progress_status_label.pack(side=tk.RIGHT, padx=(0, 8))
+        self.progress_status_label.pack_forget()
         self.progress_bar = ttk.Progressbar(status_frame, orient="horizontal", mode="determinate", length=300)
         self.progress_bar.pack(side=tk.RIGHT, padx=10)
         self.progress_bar.pack_forget() # Hide initially
@@ -1989,19 +2411,28 @@ class HostsFileEditor:
         if not self.check_admin_privileges():
              sys.exit()
 
-        # Root layout: Sidebar (fixed width) + Editor
-        root_container = ttk.Frame(root, padding=8)
+        # Root layout: resizable sidebar + primary editor workspace
+        root_container = ttk.Frame(root, padding=(10, 0, 10, 10))
         root_container.pack(fill="both", expand=True)
+        layout_pane = ttk.Panedwindow(root_container, orient="horizontal", style="Workspace.TPanedwindow")
+        layout_pane.pack(fill="both", expand=True)
 
         # Sidebar setup
-        sidebar_outer = ttk.Frame(root_container)
-        sidebar_outer.pack(side="left", fill="y")
+        sidebar_outer = ttk.Frame(layout_pane)
         sidebar_outer.configure(width=self.SIDEBAR_WIDTH)
         sidebar_outer.pack_propagate(False)
+        layout_pane.add(sidebar_outer, weight=0)
 
-        sidebar_canvas = tk.Canvas(sidebar_outer, bg=PALETTE["mantle"], highlightthickness=0, bd=0, relief="flat", yscrollincrement=10)
+        sidebar_canvas = tk.Canvas(
+            sidebar_outer,
+            bg=PALETTE["base"],
+            highlightthickness=0,
+            bd=0,
+            relief="flat",
+            yscrollincrement=10,
+        )
         sidebar_vscroll = ttk.Scrollbar(sidebar_outer, orient="vertical", command=sidebar_canvas.yview)
-        self.sidebar_inner = ttk.Frame(sidebar_canvas, padding=(0, 0, 10, 0)) 
+        self.sidebar_inner = ttk.Frame(sidebar_canvas, padding=(0, 4, 10, 4)) 
         self.sidebar_inner.bind(
             "<Configure>",
             lambda e: sidebar_canvas.configure(scrollregion=sidebar_canvas.bbox("all"))
@@ -2021,45 +2452,82 @@ class HostsFileEditor:
         sidebar_vscroll.pack(side="right", fill="y")
         
         # Right editor area
-        right_area = ttk.Frame(root_container, padding=(8, 0, 0, 0))
-        right_area.pack(side="left", fill="both", expand=True)
+        right_area = ttk.Frame(layout_pane, padding=(10, 0, 0, 0))
+        layout_pane.add(right_area, weight=1)
 
-        hero_frame = ttk.Frame(right_area, padding=(18, 16), style="Panel.TFrame")
+        hero_frame = ttk.Frame(right_area, padding=(18, 16, 18, 14), style="Panel.TFrame")
         hero_frame.pack(fill="x", pady=(0, 8))
 
-        hero_copy = ttk.Frame(hero_frame, style="Panel.TFrame")
+        hero_top = ttk.Frame(hero_frame, style="Panel.TFrame")
+        hero_top.pack(fill="x")
+
+        hero_copy = ttk.Frame(hero_top, style="Panel.TFrame")
         hero_copy.pack(side="left", fill="x", expand=True)
-        ttk.Label(hero_copy, text=APP_NAME, font=("Segoe UI Semibold", 20), style="Panel.TLabel").pack(anchor='w')
+        ttk.Label(hero_copy, text=APP_NAME, font=self.hero_font, style="PanelHero.TLabel").pack(anchor='w')
         ttk.Label(
             hero_copy,
-            text="Cleaner imports, safer saves, and live visibility into what will change before you touch the system hosts file.",
-            wraplength=760,
+            text="Edit the hosts file, import trusted sources, and save with a cleaned default.",
+            wraplength=700,
             style="PanelMuted.TLabel"
         ).pack(anchor='w', pady=(4, 0))
         ttk.Label(hero_copy, text=self.HOSTS_FILE_PATH, style="PanelSubtle.TLabel").pack(anchor='w', pady=(8, 0))
 
-        hero_badges = ttk.Frame(hero_frame, style="Panel.TFrame")
-        hero_badges.pack(side="right", anchor='n', padx=(20, 0))
-        self.admin_badge_label = tk.Label(hero_badges, font=("Segoe UI", 9, "bold"), padx=10, pady=5, bd=0)
-        self.admin_badge_label.pack(anchor='e', pady=(0, 6))
-        self.editor_state_badge_label = tk.Label(hero_badges, font=("Segoe UI", 9, "bold"), padx=10, pady=5, bd=0)
-        self.editor_state_badge_label.pack(anchor='e', pady=(0, 6))
-        self.mode_badge_label = tk.Label(hero_badges, font=("Segoe UI", 9, "bold"), padx=10, pady=5, bd=0)
-        self.mode_badge_label.pack(anchor='e', pady=(0, 6))
-        self.dry_run_badge_label = tk.Label(hero_badges, font=("Segoe UI", 9, "bold"), padx=10, pady=5, bd=0)
-        self.dry_run_badge_label.pack(anchor='e')
+        hero_actions = ttk.Frame(hero_top, style="Panel.TFrame")
+        hero_actions.pack(side="right", anchor="n", padx=(16, 0))
+        self._btn(
+            hero_actions,
+            "Save Cleaned",
+            self.save_cleaned_file,
+            "Apply whitelist filtering, cleanup, and deduplication before saving.",
+            style="Action.TButton",
+        ).pack(side="left", padx=(0, 6))
+        self._btn(
+            hero_actions,
+            "Refresh",
+            self.load_file,
+            "Reload the current hosts file from disk.",
+            style="Secondary.TButton",
+        ).pack(side="left", padx=(0, 6))
+        self._btn(
+            hero_actions,
+            "Check Domain",
+            self.show_check_domain,
+            "Check whether a domain is blocked, whitelisted, or present in fetched sources.",
+            style="Accent.TButton",
+        ).pack(side="left", padx=(0, 6))
+        self._btn(
+            hero_actions,
+            "Import Sources",
+            self.start_import_all,
+            "Open the curated picker and import one or more sources.",
+            style="Secondary.TButton",
+        ).pack(side="left")
+
+        hero_status = ttk.Frame(hero_frame, style="Panel.TFrame")
+        hero_status.pack(fill="x", pady=(12, 0))
+        self.admin_badge_label = tk.Label(hero_status, font=("Segoe UI Semibold", 9), padx=10, pady=4, bd=0, anchor="w")
+        self.admin_badge_label.pack(side="left", padx=(0, 6))
+        self.editor_state_badge_label = tk.Label(hero_status, font=("Segoe UI Semibold", 9), padx=10, pady=4, bd=0, anchor="w")
+        self.editor_state_badge_label.pack(side="left", padx=(0, 6))
+        self.mode_badge_label = tk.Label(hero_status, font=("Segoe UI Semibold", 9), padx=10, pady=4, bd=0, anchor="w")
+        self.mode_badge_label.pack(side="left", padx=(0, 6))
+        self.dry_run_badge_label = tk.Label(hero_status, font=("Segoe UI Semibold", 9), padx=10, pady=4, bd=0, anchor="w")
+        self.dry_run_badge_label.pack(side="left")
 
         # --- Sidebar Content Starts Here ---
         
-        # File Ops (Top)
-        file_ops = ttk.LabelFrame(self.sidebar_inner, text="File Operations")
-        file_ops.pack(fill="x", padx=8, pady=(8, 4))
+        # Workspace actions
+        file_ops, _ = self._create_sidebar_card(
+            self.sidebar_inner,
+            "Save & Refresh",
+            "Use Cleaned Save by default, or write the editor exactly as shown.",
+        )
         
         # Dry-Run Toggle
         dry_run_frame = ttk.Frame(file_ops)
-        dry_run_frame.pack(fill="x", pady=(0, 4))
-        self.chk_dry_run = ttk.Checkbutton(dry_run_frame, text="Dry-run only (NO disk writes)", variable=self.dry_run_mode)
-        self.chk_dry_run.pack(side=tk.LEFT, padx=8)
+        dry_run_frame.pack(fill="x", pady=(0, 6))
+        self.chk_dry_run = ttk.Checkbutton(dry_run_frame, text="Dry-run only", variable=self.dry_run_mode)
+        self.chk_dry_run.pack(side=tk.LEFT)
         ToolTip(self.chk_dry_run, "If checked, 'Save Raw' and 'Save Cleaned' perform previews and compute stats but DO NOT write to disk.")
 
         # Save Buttons (Split)
@@ -2073,29 +2541,25 @@ class HostsFileEditor:
         self.btn_save_cleaned = self._btn(save_btns_frame, "Save Cleaned", self.save_cleaned_file, 
                                           "Applies Whitelist, Normalization, Cleaning, and Deduplication before saving.", style="Action.TButton")
         self.btn_save_cleaned.pack(side=tk.LEFT, fill="x", expand=True, padx=(4, 0))
-        ttk.Label(
-            file_ops,
-            text="Cleaned Save is the safer default. Raw Save writes the editor exactly as shown.",
-            style="Hint.TLabel",
-            wraplength=360,
-            justify="left"
-        ).pack(fill="x", padx=8, pady=(0, 8))
 
-        self._btn(file_ops, "Refresh", self.load_file, "Reload hosts file from disk.").pack(fill="x", pady=4)
-        self._btn(file_ops, "Revert to Backup", self.revert_to_backup, "Preview and restore from .bak if available.", style="Danger.TButton").pack(fill="x", pady=4)
+        self._btn(file_ops, "Refresh", self.load_file, "Reload hosts file from disk.").pack(fill="x", pady=(0, 4))
+        self._btn(file_ops, "Revert to Backup", self.revert_to_backup, "Preview and restore from .bak if available.", style="Danger.TButton").pack(fill="x")
         
         # Utilities
-        utilities_frame = ttk.LabelFrame(self.sidebar_inner, text="Utilities")
-        utilities_frame.pack(fill="x", padx=8, pady=4)
+        utilities_frame, _ = self._create_sidebar_card(
+            self.sidebar_inner,
+            "Repair",
+            "Cleanup, DNS tools, and the last-resort recovery path.",
+        )
         util_row = ttk.Frame(utilities_frame)
-        util_row.pack(fill="x", padx=8, pady=(8, 4))
+        util_row.pack(fill="x", pady=(0, 6))
         self._btn(util_row, "Clean", self.auto_clean, "Clean and format hosts file (removes ALL comments/headers).").pack(side="left", expand=True, fill="x", padx=(0, 6))
-        self._btn(util_row, "Normalize & Deduplicate", self.deduplicate, "Standardize entries and remove duplicates across the full editor.", style="Action.TButton").pack(side="left", expand=True, fill="x", padx=6)
+        self._btn(util_row, "Normalize", self.deduplicate, "Standardize entries and remove duplicates across the full editor.", style="Action.TButton").pack(side="left", expand=True, fill="x", padx=6)
         self._btn(util_row, "Flush DNS", self.flush_dns, "Flush Windows DNS cache.", style="Accent.TButton").pack(side="left", expand=True, fill="x", padx=(6, 0))
 
         # --- Emergency DNS Unlock Button ---
         emerg_row = ttk.Frame(utilities_frame)
-        emerg_row.pack(fill="x", padx=8, pady=(0, 8))
+        emerg_row.pack(fill="x", pady=(2, 0))
         ttk.Label(emerg_row, text="Recovery", foreground=PALETTE["red"], font=("Segoe UI", 9, "bold")).pack(anchor='w', pady=(0, 4))
         ttk.Label(
             emerg_row,
@@ -2108,79 +2572,101 @@ class HostsFileEditor:
 
 
         # Search / Filter / Warnings
-        search_frame = ttk.LabelFrame(self.sidebar_inner, text="Search / Filter / Warnings")
-        search_frame.pack(fill="x", padx=8, pady=4)
+        search_frame, _ = self._create_sidebar_card(
+            self.sidebar_inner,
+            "Find",
+            "Locate domains fast, then step through or remove exact matches.",
+        )
         self.search_var = tk.StringVar()
         self.search_entry = ttk.Entry(search_frame, textvariable=self.search_var)
-        self.search_entry.pack(fill="x", padx=8, pady=(8, 4))
-        ttk.Label(
-            search_frame,
-            text="Find a term, step through every hit, or review matched active entries before removing them.",
-            style="Hint.TLabel",
-            wraplength=360,
-            justify="left"
-        ).pack(fill="x", padx=8, pady=(0, 6))
+        self.search_entry.pack(fill="x", pady=(0, 6))
         self.search_entry.bind("<Return>", lambda event: self.search_find())
         btns = ttk.Frame(search_frame)
-        btns.pack(fill="x", padx=8, pady=(0, 8))
+        btns.pack(fill="x", pady=(0, 8))
         self._btn(btns, "Find", self.search_find, "Find first match (case-insensitive).").pack(side="left", expand=True, fill="x", padx=(0, 4))
         self._btn(btns, "Prev", self.search_prev, "Find previous match.").pack(side="left", expand=True, fill="x", padx=4)
         self._btn(btns, "Next", self.search_next, "Find next match.").pack(side="left", expand=True, fill="x", padx=4)
         self._btn(btns, "Remove", self.remove_matching_lines, "Remove matching non-comment entries with a selection preview.", style="Danger.TButton").pack(side="left", expand=True, fill="x", padx=4)
         self._btn(btns, "Clear", self.search_clear, "Clear highlights.").pack(side="left", expand=True, fill="x", padx=(4, 0))
         
-        self.warning_status_label = ttk.Label(
+        self.warning_status_label = tk.Label(
             search_frame,
-            text="Cleaned Save is already aligned. No removals or normalization are pending.",
-            style="Hint.TLabel",
-            foreground=PALETTE["green"]
+            text="No cleanup changes are pending.",
+            font=("Segoe UI", 9),
+            justify="left",
+            wraplength=340,
+            anchor="w",
+            bg=PALETTE["panel"],
+            fg=PALETTE["overlay1"],
+            padx=0,
+            pady=0,
         )
-        self.warning_status_label.pack(fill="x", padx=8, pady=(4, 8))
-        self._btn(search_frame, "Re-scan Warnings", self._trigger_ui_update, "Recompute which lines will be discarded or transformed by Cleaned Save.").pack(fill="x", padx=8, pady=(0, 8))
+        self.warning_status_label.pack(fill="x", pady=(0, 8))
+        self._btn(search_frame, "Re-scan Warnings", self._trigger_ui_update, "Recompute which lines will be discarded or transformed by Cleaned Save.").pack(fill="x")
 
 
         # Import Blacklists
-        import_frame = ttk.LabelFrame(self.sidebar_inner, text="Import Blacklists")
-        import_frame.pack(fill="x", padx=8, pady=4)
-        ttk.Label(
-            import_frame,
-            text="Bring in curated feeds, local logs, or pasted content without leaving the editor.",
-            style="Hint.TLabel",
-            wraplength=360,
-            justify="left"
-        ).pack(fill="x", padx=8, pady=(8, 0))
+        import_frame, _ = self._create_sidebar_card(
+            self.sidebar_inner,
+            "Import",
+            "Browse curated feeds, local logs, and saved URLs.",
+        )
         
         # Import Mode Selector
-        mode_frame = ttk.LabelFrame(import_frame, text="Import Mode")
-        mode_frame.pack(fill="x", padx=8, pady=(4, 8))
-        mode_row = ttk.Frame(mode_frame)
-        mode_row.pack(fill="x", padx=8, pady=8)
-        
-        self.radio_raw = ttk.Radiobutton(mode_row, text="Raw", variable=self.import_mode, value="Raw",
-                        command=lambda: self._set_import_mode_status("Raw"))
-        self.radio_raw.pack(side=tk.LEFT, padx=15)
+        mode_frame, _ = self._create_inset_section_card(
+            import_frame,
+            "Import Mode",
+            "Choose whether imports should preserve their original structure or be normalized into a cleaner hosts format.",
+            accent=PALETTE["blue"],
+        )
+        mode_row = ttk.Frame(mode_frame, style="Inset.TFrame")
+        mode_row.pack(fill="x")
+
+        self.radio_raw = ttk.Radiobutton(
+            mode_row,
+            text="Raw",
+            variable=self.import_mode,
+            value="Raw",
+            command=lambda: self._set_import_mode_status("Raw"),
+        )
+        self.radio_raw.pack(side=tk.LEFT, padx=(0, 18))
         self._register_import_widget(self.radio_raw)
-        self.radio_normalized = ttk.Radiobutton(mode_row, text="Normalized", variable=self.import_mode, value="Normalized",
-                        command=lambda: self._set_import_mode_status("Normalized"))
-        self.radio_normalized.pack(side=tk.LEFT, padx=15)
+        self.radio_normalized = ttk.Radiobutton(
+            mode_row,
+            text="Normalized",
+            variable=self.import_mode,
+            value="Normalized",
+            command=lambda: self._set_import_mode_status("Normalized"),
+        )
+        self.radio_normalized.pack(side=tk.LEFT)
         self._register_import_widget(self.radio_normalized)
-        ttk.Label(
+        self.import_mode_detail_label = ttk.Label(
             mode_frame,
-            text="Normalized converts domains into standard 0.0.0.0 entries. Raw keeps the original formatting and comments.",
             style="Hint.TLabel",
-            wraplength=340,
-            justify="left"
-        ).pack(fill="x", padx=8, pady=(0, 8))
+            wraplength=320,
+            justify="left",
+        )
+        self.import_mode_detail_label.pack(fill="x", pady=(10, 0))
+        self._refresh_import_mode_detail()
         
         # --- Import All Lists Button ---
-        self.btn_import_all = self._btn(import_frame, "Batch Import from Sources", self.start_import_all, 
-                  "Open dialog to select and sequentially download multiple blocklists.", style="Accent.TButton")
-        self.btn_import_all.pack(fill="x", padx=8, pady=(4, 8))
+        self.btn_import_all = self._btn(
+            import_frame,
+            "Browse Sources",
+            self.start_import_all,
+            "Open a curated picker and import multiple sources in one controlled run.",
+            style="Accent.TButton",
+        )
+        self.btn_import_all.pack(fill="x", pady=(0, 10))
         self._register_import_widget(self.btn_import_all)
 
         # Local Import
-        local_import_frame = ttk.LabelFrame(import_frame, text="Import From File")
-        local_import_frame.pack(fill="x", padx=8, pady=(8, 4))
+        local_import_frame, _ = self._create_inset_section_card(
+            import_frame,
+            "Import From File",
+            "Turn exported DNS logs into hosts entries.",
+            accent=PALETTE["green"],
+        )
         self._register_import_widget(
             self._btn(local_import_frame, "From pfSense Log", self.import_pfsense_log, "Import domains from pfSense DNSBL log.")
         ).pack(fill="x", pady=2)
@@ -2188,12 +2674,16 @@ class HostsFileEditor:
             self._btn(local_import_frame, "From NextDNS Log (CSV)", self.import_nextdns_log, "Import blocked domains from a NextDNS Query Log CSV.")
         ).pack(fill="x", pady=2)
 
-        source_catalog = ttk.LabelFrame(import_frame, text="Source Catalog")
-        source_catalog.pack(fill="x", padx=8, pady=4)
-        ttk.Label(source_catalog, text="Filter by name, category, or feed URL", style="Hint.TLabel").pack(anchor='w', padx=8, pady=(8, 4))
+        source_catalog, _ = self._create_inset_section_card(
+            import_frame,
+            "Source Catalog",
+            "Filter curated feeds, then preview or import.",
+            accent=PALETTE["accent"],
+        )
+        ttk.Label(source_catalog, text="Filter by name, category, or feed URL", style="Hint.TLabel").pack(anchor='w', pady=(0, 4))
         self.source_filter_entry = ttk.Entry(source_catalog, textvariable=self.source_filter_var)
-        self.source_filter_entry.pack(fill="x", padx=8, pady=(0, 6))
-        # Escape clears the filter while focus is inside the entry — quick
+        self.source_filter_entry.pack(fill="x", pady=(0, 6))
+        # Escape clears the filter while focus is inside the entry - quick
         # way to reset back to the full catalog without mouse travel.
         self.source_filter_entry.bind(
             "<Escape>",
@@ -2201,57 +2691,55 @@ class HostsFileEditor:
         )
         self._register_import_widget(self.source_filter_entry)
         self.catalog_summary_label = ttk.Label(source_catalog, text="", style="Hint.TLabel")
-        self.catalog_summary_label.pack(anchor='w', padx=8, pady=(0, 6))
-        self.web_catalog_frame = ttk.Frame(source_catalog)
-        self.web_catalog_frame.pack(fill="x", padx=8, pady=(0, 8))
+        self.catalog_summary_label.pack(anchor='w', pady=(0, 6))
+        self.web_catalog_frame = ttk.Frame(source_catalog, style="Inset.TFrame")
+        self.web_catalog_frame.pack(fill="x")
         self._populate_blocklist_source_buttons()
         
         # Custom Sources
-        self.custom_sources_frame = ttk.LabelFrame(self.sidebar_inner, text="Custom Blacklists (Persistent)")
-        self.custom_sources_frame.pack(fill="x", padx=8, pady=4)
+        self.custom_sources_frame, _ = self._create_sidebar_card(
+            self.sidebar_inner,
+            "Saved Feeds",
+            "Keep your trusted URLs ready for future imports.",
+        )
         self.custom_sources_help_label = ttk.Label(
             self.custom_sources_frame,
-            text="Save your own feeds here for one-click imports later.",
+            text="Saved feeds stay available across sessions.",
             style="Hint.TLabel",
             wraplength=340,
             justify="left"
         )
-        self.custom_sources_help_label.pack(fill="x", padx=8, pady=(8, 2))
+        self.custom_sources_help_label.pack(fill="x", pady=(0, 2))
         self.custom_sources_summary_label = ttk.Label(
             self.custom_sources_frame,
-            text="0 saved sources ready for import.",
+            text="0 saved feeds.",
             style="Hint.TLabel",
         )
-        self.custom_sources_summary_label.pack(fill="x", padx=8, pady=(0, 2))
+        self.custom_sources_summary_label.pack(fill="x", pady=(0, 2))
         self.custom_sources_empty_label = ttk.Label(
             self.custom_sources_frame,
-            text="No custom sources saved yet. Add a trusted blocklist URL to keep it ready for future sessions.",
+            text="No saved feeds yet.",
             style="Hint.TLabel",
             wraplength=340,
             justify="left"
         )
-        self.custom_sources_empty_label.pack(fill="x", padx=8, pady=(0, 6))
+        self.custom_sources_empty_label.pack(fill="x", pady=(0, 6))
         
-        self.btn_add_custom = self._btn(self.custom_sources_frame, "+ Add Custom Source", self.show_add_source_dialog, "Add a new custom URL source.", style="Accent.TButton")
+        self.btn_add_custom = self._btn(self.custom_sources_frame, "Add Feed", self.show_add_source_dialog, "Add a new custom URL source.", style="Accent.TButton")
         self.btn_add_custom.pack(fill=tk.X, pady=2, side=tk.BOTTOM)
         self._register_import_widget(self.btn_add_custom)
 
         # Manual Input
-        manual_frame = ttk.LabelFrame(self.sidebar_inner, text="Manual List Input (Paste Hosts)")
-        manual_frame.pack(fill="x", padx=8, pady=4)
-        ttk.Label(
-            manual_frame,
-            text="Paste hosts lines, domains, or feed fragments. They will follow the currently selected import mode when appended.",
-            style="Hint.TLabel",
-            wraplength=360,
-            justify="left"
-        ).pack(fill="x", padx=8, pady=(8, 0))
-        self.manual_text_area = scrolledtext.ScrolledText(
-            manual_frame, wrap=tk.WORD, height=10, font=("Consolas", 10),
-            bg=PALETTE["crust"], fg=PALETTE["text"], insertbackground=PALETTE["text"],
-            selectbackground=PALETTE["blue"], relief="flat"
+        manual_frame, _ = self._create_sidebar_card(
+            self.sidebar_inner,
+            "Paste",
+            "Append pasted domains or hosts lines using the current import mode.",
         )
-        self.manual_text_area.pack(fill="x", padx=8, pady=(8, 4))
+        self.manual_text_area = scrolledtext.ScrolledText(
+            manual_frame, wrap=tk.WORD, height=8, font=self.mono_small_font
+        )
+        self._style_code_surface(self.manual_text_area, font_spec=self.mono_small_font)
+        self.manual_text_area.pack(fill="x", pady=(10, 4))
         self.manual_summary_label = ttk.Label(
             manual_frame,
             text="0 non-empty lines ready to append.",
@@ -2259,71 +2747,105 @@ class HostsFileEditor:
             wraplength=360,
             justify="left"
         )
-        self.manual_summary_label.pack(fill="x", padx=8, pady=(0, 6))
+        self.manual_summary_label.pack(fill="x", pady=(0, 6))
         self._register_import_widget(self.manual_text_area)
         self._register_import_widget(
-            self._btn(manual_frame, "Append Manual List to Editor", self.append_manual_list, 
+            self._btn(manual_frame, "Append to Editor", self.append_manual_list, 
                       "Append the content from the text area to the main hosts file.", style="Action.TButton")
-        ).pack(fill="x", padx=8, pady=(0, 8))
+        ).pack(fill="x")
 
         # Whitelist
-        whitelist_frame = ttk.LabelFrame(self.sidebar_inner, text="Persistent Whitelist (Auto-Applied)")
-        whitelist_frame.pack(fill="both", padx=8, pady=(4, 8))
+        whitelist_frame, _ = self._create_sidebar_card(
+            self.sidebar_inner,
+            "Allowlist",
+            "Domains here stay unblocked when you use Cleaned Save.",
+        )
         ttk.Label(
             whitelist_frame,
-            text="One entry per line. Cleaned Save removes matching blocking entries and previews the result before writing.",
+            text="One entry per line.",
             style="Hint.TLabel",
             wraplength=360,
             justify="left"
-        ).pack(fill="x", padx=8, pady=(8, 0))
+        ).pack(fill="x", pady=(0, 0))
         self.whitelist_text_area = scrolledtext.ScrolledText(
-            whitelist_frame, wrap=tk.WORD, height=10, font=("Consolas", 10),
-            bg=PALETTE["crust"], fg=PALETTE["text"], insertbackground=PALETTE["text"],
-            selectbackground=PALETTE["blue"], relief="flat"
+            whitelist_frame, wrap=tk.WORD, height=8, font=self.mono_small_font
         )
-        self.whitelist_text_area.pack(fill="both", expand=True, padx=8, pady=(8, 4))
+        self._style_code_surface(self.whitelist_text_area, font_spec=self.mono_small_font)
+        self.whitelist_text_area.pack(fill="both", expand=True, pady=(10, 4))
         self.whitelist_summary_label = ttk.Label(
             whitelist_frame,
-            text="0 whitelist entries. Saved copy matches the editor.",
+            text="0 allowlist entries. Saved.",
             style="Hint.TLabel",
             wraplength=360,
             justify="left"
         )
-        self.whitelist_summary_label.pack(fill="x", padx=8, pady=(0, 6))
+        self.whitelist_summary_label.pack(fill="x", pady=(0, 6))
         w_btns = ttk.Frame(whitelist_frame)
-        w_btns.pack(fill="x", padx=8, pady=(0, 8))
+        w_btns.pack(fill="x")
         self._btn(w_btns, "Load from File", self.load_whitelist_from_file, "Load whitelist from a text file.").pack(side="left", expand=True, fill="x", padx=(0, 6))
-        self._btn(w_btns, "Import from Web", self.import_whitelist_from_web, "Import default HOSTShield whitelist.", style="Accent.TButton").pack(side="left", expand=True, fill="x", padx=(6, 0))
+        self._btn(w_btns, "Import Web", self.import_whitelist_from_web, "Import default HOSTShield whitelist.", style="Accent.TButton").pack(side="left", expand=True, fill="x", padx=(6, 0))
 
         # ---- Editor (Right) ----
         editor_panel = ttk.Frame(right_area)
         editor_panel.pack(fill="both", expand=True)
         
         # Diff Stats Panel
-        self.stats_panel = ttk.LabelFrame(editor_panel, text="Current Content Stats")
-        self.stats_panel.pack(fill="x", padx=4, pady=(0, 4))
+        self.stats_panel = ttk.Frame(editor_panel, style="Panel.TFrame", padding=(16, 14, 16, 14))
+        self.stats_panel.pack(fill="x", pady=(0, 8))
         self._init_stats_panel(self.stats_panel)
 
-        editor_container = ttk.Frame(editor_panel)
-        editor_container.pack(expand=True, fill='both', padx=4, pady=(0, 4))
+        editor_shell = tk.Frame(
+            editor_panel,
+            bg=PALETTE["panel"],
+            highlightthickness=1,
+            highlightbackground=PALETTE["border"],
+            highlightcolor=PALETTE["focus"],
+            bd=0,
+        )
+        editor_shell.pack(expand=True, fill='both')
+
+        editor_toolbar = ttk.Frame(editor_shell, style="Metric.TFrame", padding=(16, 12, 16, 10))
+        editor_toolbar.pack(fill="x")
+        editor_toolbar_copy = ttk.Frame(editor_toolbar, style="Metric.TFrame")
+        editor_toolbar_copy.pack(side="left", fill="x", expand=True)
+        ttk.Label(editor_toolbar_copy, text="Editor", style="SectionTitle.TLabel").pack(anchor="w")
+        ttk.Label(
+            editor_toolbar_copy,
+            text="Edit directly, then save either the exact file or the cleaned result.",
+            style="ToolbarMeta.TLabel",
+            wraplength=720,
+            justify="left",
+        ).pack(anchor="w", pady=(4, 0))
+        editor_toolbar_actions = ttk.Frame(editor_toolbar, style="Metric.TFrame")
+        editor_toolbar_actions.pack(side="right", anchor="n")
+        self._btn(editor_toolbar_actions, "Goto Anything", self.show_goto_anything, "Jump to a domain, source, or editor line.", style="Secondary.TButton").pack(side="left", padx=(0, 6))
+        self._btn(editor_toolbar_actions, "Export Cleaned", self.show_export_dialog, "Export the cleaned hosts view in another format.", style="Secondary.TButton").pack(side="left", padx=(0, 6))
+        self._btn(editor_toolbar_actions, "Sources Report", self.show_sources_report, "See which imported sources contribute the most blocking entries.", style="TButton").pack(side="left")
+        ttk.Separator(editor_shell, orient="horizontal").pack(fill="x")
+
+        editor_container = ttk.Frame(editor_shell, style="Metric.TFrame", padding=(14, 0, 14, 14))
+        editor_container.pack(expand=True, fill='both')
 
         self.line_gutter = tk.Canvas(
-            editor_container, width=52, bg=PALETTE["mantle"],
+            editor_container, width=58, bg=PALETTE["mantle"],
             highlightthickness=0, bd=0, relief="flat",
         )
         self.line_gutter.pack(side="left", fill="y")
 
         editor_scroll = ttk.Scrollbar(editor_container, orient="vertical")
         editor_scroll.pack(side="right", fill="y")
+        editor_scroll_x = ttk.Scrollbar(editor_container, orient="horizontal")
+        editor_scroll_x.pack(side="bottom", fill="x", padx=(8, 0))
 
         self.text_area = tk.Text(
-            editor_container, wrap=tk.WORD, font=("Consolas", 12),
-            bg=PALETTE["crust"], fg=PALETTE["text"], insertbackground=PALETTE["text"],
-            selectbackground=PALETTE["blue"], relief="flat",
+            editor_container, wrap=tk.NONE, font=self.mono_font,
             yscrollcommand=lambda first, last: self._on_editor_scroll(editor_scroll, first, last),
+            xscrollcommand=editor_scroll_x.set,
         )
         self.text_area.pack(side="left", expand=True, fill='both')
         editor_scroll.config(command=self.text_area.yview)
+        editor_scroll_x.config(command=self.text_area.xview)
+        self._style_code_surface(self.text_area, font_spec=self.mono_font)
 
         self._gutter_last_line_count = -1
         self._gutter_redraw_job = None
@@ -2371,7 +2893,12 @@ class HostsFileEditor:
         try:
             self.load_config()
         except Exception as e:
-            messagebox.showerror("Configuration Error", f"Failed to load or initialize configuration. Application will launch without custom settings.\nError: {e}", parent=self.root)
+            self._show_notice_dialog(
+                "Configuration could not be loaded",
+                "The app will continue with safe defaults for this session because the saved configuration could not be loaded cleanly.",
+                tone="error",
+                details=str(e),
+            )
             self.custom_sources = []
             self.whitelist_text_area.delete('1.0', tk.END)
         
@@ -2417,8 +2944,294 @@ class HostsFileEditor:
             # Branding assets should never block the editor from launching.
             self._icon_image = None
 
+    def _configure_modal_window(
+        self,
+        dialog: tk.Toplevel,
+        *,
+        title: str,
+        size: str,
+        min_size: tuple[int, int] | None = None,
+    ) -> tk.Toplevel:
+        """Apply consistent chrome to in-app dialogs."""
+        dialog.title(title)
+        dialog.configure(bg=PALETTE["base"])
+        dialog.transient(self.root)
+        dialog.geometry(size)
+        if min_size:
+            dialog.minsize(*min_size)
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        return dialog
+
+    def _create_sidebar_card(
+        self,
+        parent,
+        title: str,
+        description: str | None = None,
+        *,
+        accent: str | None = None,
+    ):
+        """Create a compact sidebar section with a short header and body."""
+        shell = tk.Frame(
+            parent,
+            bg=PALETTE["panel"],
+            highlightthickness=1,
+            highlightbackground=PALETTE["border"],
+            highlightcolor=PALETTE["focus"],
+            bd=0,
+        )
+        shell.pack(fill="x", padx=10, pady=(0, 8))
+
+        inner = ttk.Frame(shell, style="Section.TFrame", padding=(14, 12, 14, 14))
+        inner.pack(fill="both", expand=True)
+
+        header = ttk.Frame(inner, style="Section.TFrame")
+        header.pack(fill="x", pady=(0, 8))
+        ttk.Label(header, text=title, style="SectionTitle.TLabel").pack(anchor="w")
+        if description:
+            ttk.Label(
+                header,
+                text=description,
+                style="SectionBody.TLabel",
+                wraplength=320,
+                justify="left",
+            ).pack(anchor="w", pady=(4, 0))
+
+        body = ttk.Frame(inner, style="Section.TFrame")
+        body.pack(fill="both", expand=True)
+        return body, shell
+
+    def _create_inset_section_card(
+        self,
+        parent,
+        title: str,
+        description: str | None = None,
+        *,
+        accent: str | None = None,
+    ):
+        """Create a compact grouped section inside a larger sidebar card."""
+        shell = tk.Frame(
+            parent,
+            bg=PALETTE["panel_alt"],
+            highlightthickness=1,
+            highlightbackground=PALETTE["border"],
+            highlightcolor=PALETTE["focus"],
+            bd=0,
+        )
+        shell.pack(fill="x", pady=(0, 6))
+
+        inner = ttk.Frame(shell, style="Inset.TFrame", padding=(12, 10, 12, 12))
+        inner.pack(fill="both", expand=True)
+
+        header = ttk.Frame(inner, style="Inset.TFrame")
+        header.pack(fill="x", pady=(0, 8))
+        ttk.Label(header, text=title, style="InsetTitle.TLabel").pack(anchor="w")
+        if description:
+            ttk.Label(
+                header,
+                text=description,
+                style="InsetBody.TLabel",
+                wraplength=320,
+                justify="left",
+            ).pack(anchor="w", pady=(4, 0))
+
+        body = ttk.Frame(inner, style="Inset.TFrame")
+        body.pack(fill="both", expand=True)
+        return body, shell
+
+    def _style_code_surface(self, widget, *, font_spec=None):
+        """Give editable text surfaces a calmer, higher-contrast treatment."""
+        widget.configure(
+            bg=PALETTE["crust"],
+            fg=PALETTE["text"],
+            insertbackground=PALETTE["text"],
+            insertwidth=2,
+            selectbackground=PALETTE["blue"],
+            selectforeground=PALETTE["crust"],
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=1,
+            highlightbackground=PALETTE["border"],
+            highlightcolor=PALETTE["focus"],
+            padx=10,
+            pady=10,
+        )
+        if font_spec is not None:
+            widget.configure(font=font_spec)
+
+    def _style_listbox_surface(self, widget, *, font_spec=None):
+        """Apply the same contrast and focus language to list surfaces."""
+        widget.configure(
+            bg=PALETTE["crust"],
+            fg=PALETTE["text"],
+            selectbackground=PALETTE["blue"],
+            selectforeground=PALETTE["crust"],
+            relief="flat",
+            highlightthickness=1,
+            highlightbackground=PALETTE["border"],
+            highlightcolor=PALETTE["focus"],
+            borderwidth=0,
+            activestyle="none",
+        )
+        if font_spec is not None:
+            widget.configure(font=font_spec)
+
+    def _create_metric_tile(self, parent, title, var, row, col, color=PALETTE["text"]):
+        card = tk.Frame(
+            parent,
+            bg=PALETTE["panel_alt"],
+            highlightthickness=1,
+            highlightbackground=PALETTE["border"],
+            highlightcolor=PALETTE["focus"],
+            bd=0,
+        )
+        card.grid(row=row, column=col, sticky="nsew", padx=4, pady=4)
+        ttk.Frame(card, style="Inset.TFrame", padding=(12, 10, 12, 10)).pack(fill="both", expand=True)
+        inner = card.winfo_children()[0]
+        ttk.Label(inner, text=title, style="MetricLabel.TLabel", wraplength=150, justify="left").pack(anchor="w")
+        ttk.Label(inner, textvariable=var, style="MetricValue.TLabel", foreground=color).pack(anchor="w", pady=(6, 0))
+        return card
+
+    def _dialog_accent_for_tone(self, tone: str) -> str:
+        return {
+            "info": PALETTE["blue"],
+            "success": PALETTE["green"],
+            "warning": PALETTE["yellow"],
+            "error": PALETTE["red"],
+        }.get(tone, PALETTE["blue"])
+
+    def _show_notice_dialog(
+        self,
+        title: str,
+        message: str,
+        *,
+        tone: str = "info",
+        details: str | None = None,
+        width: int = 560,
+        height: int | None = None,
+        action_text: str = "Close",
+    ) -> None:
+        dialog = tk.Toplevel(self.root)
+        body_height = height or (520 if details else 320)
+        self._configure_modal_window(
+            dialog,
+            title=title,
+            size=f"{width}x{body_height}",
+            min_size=(min(width, 520), 280 if not details else 420),
+        )
+        intro, _ = self._create_sidebar_card(
+            dialog,
+            title,
+            message,
+            accent=self._dialog_accent_for_tone(tone),
+        )
+        if details:
+            details_box = scrolledtext.ScrolledText(dialog, wrap=tk.WORD)
+            self._style_code_surface(details_box, font_spec=self.mono_small_font)
+            details_box.pack(expand=True, fill="both", padx=20, pady=(0, 12))
+            details_box.insert(tk.END, details)
+            details_box.configure(state="disabled")
+
+        footer = ttk.Frame(dialog)
+        footer.pack(fill="x", padx=20, pady=(0, 20))
+        ttk.Button(footer, text=action_text, command=dialog.destroy, style="Action.TButton").pack(side="right")
+        dialog.grab_set()
+        self.root.wait_window(dialog)
+
+    def _confirm_dialog(
+        self,
+        title: str,
+        message: str,
+        *,
+        tone: str = "warning",
+        confirm_text: str = "Continue",
+        cancel_text: str = "Cancel",
+        details: str | None = None,
+        width: int = 580,
+    ) -> bool:
+        dialog = tk.Toplevel(self.root)
+        body_height = 520 if details else 320
+        self._configure_modal_window(
+            dialog,
+            title=title,
+            size=f"{width}x{body_height}",
+            min_size=(min(width, 540), 280 if not details else 420),
+        )
+        result = {"value": False}
+        intro, _ = self._create_sidebar_card(
+            dialog,
+            title,
+            message,
+            accent=self._dialog_accent_for_tone(tone),
+        )
+        ttk.Label(
+            intro,
+            text="Review the impact before you continue.",
+            style="SectionBody.TLabel",
+            wraplength=max(420, width - 80),
+            justify="left",
+        ).pack(anchor="w")
+
+        if details:
+            details_box = scrolledtext.ScrolledText(dialog, wrap=tk.WORD)
+            self._style_code_surface(details_box, font_spec=self.mono_small_font)
+            details_box.pack(expand=True, fill="both", padx=20, pady=(0, 12))
+            details_box.insert(tk.END, details)
+            details_box.configure(state="disabled")
+
+        footer = ttk.Frame(dialog)
+        footer.pack(fill="x", padx=20, pady=(0, 20))
+
+        def accept():
+            result["value"] = True
+            dialog.destroy()
+
+        ttk.Button(footer, text=cancel_text, command=dialog.destroy, style="Secondary.TButton").pack(side="right")
+        ttk.Button(
+            footer,
+            text=confirm_text,
+            command=accept,
+            style="Danger.TButton" if tone in {"warning", "error"} else "Action.TButton",
+        ).pack(side="right", padx=(0, 8))
+        dialog.grab_set()
+        self.root.wait_window(dialog)
+        return result["value"]
+
+    def _show_text_report_dialog(
+        self,
+        title: str,
+        intro_text: str,
+        body_text: str,
+        *,
+        tone: str = "info",
+        width: int = 720,
+        height: int = 560,
+    ) -> None:
+        dialog = tk.Toplevel(self.root)
+        self._configure_modal_window(
+            dialog,
+            title=title,
+            size=f"{width}x{height}",
+            min_size=(min(width, 620), min(height, 460)),
+        )
+        intro, _ = self._create_sidebar_card(
+            dialog,
+            title,
+            intro_text,
+            accent=self._dialog_accent_for_tone(tone),
+        )
+        ttk.Label(intro, text="Details", style="SectionTitle.TLabel").pack(anchor="w")
+        text_box = scrolledtext.ScrolledText(dialog, wrap=tk.WORD)
+        self._style_code_surface(text_box, font_spec=self.mono_small_font)
+        text_box.pack(expand=True, fill="both", padx=20, pady=(0, 12))
+        text_box.insert(tk.END, body_text)
+        text_box.configure(state="disabled")
+        footer = ttk.Frame(dialog)
+        footer.pack(fill="x", padx=20, pady=(0, 20))
+        ttk.Button(footer, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
+        dialog.grab_set()
+
     def _init_stats_panel(self, parent):
-        # StringVars let us format large counts with thousand separators —
+        # StringVars let us format large counts with thousand separators -
         # hosts files with 150K+ entries were previously shown as an
         # unreadable wall of digits.
         self.stat_vars = {
@@ -2431,35 +3244,28 @@ class HostsFileEditor:
             "removed_whitelist": tk.StringVar(value="0"),
         }
 
-        ttk.Label(
-            parent,
-            text="Live preview of what Cleaned Save will keep, normalize, or remove.",
-            style="Hint.TLabel"
-        ).pack(anchor='w', padx=8, pady=(8, 0))
-        
-        grid_frame = ttk.Frame(parent, padding=5)
-        grid_frame.pack(fill='x')
-        
-        # Row 1
-        self._create_stat_label(grid_frame, "Total Input Lines:", self.stat_vars["total"], row=0, col=0)
-        self._create_stat_label(grid_frame, "Removed During Clean:", self.stat_vars["total_discarded"], row=0, col=2, color=PALETTE["red"])
-        self._create_stat_label(grid_frame, "Final Active Entries:", self.stat_vars["final_active"], row=0, col=4, color=PALETTE["green"])
-        
-        # Row 2
-        self._create_stat_label(grid_frame, "Duplicate Entries Removed:", self.stat_vars["removed_duplicates"], row=1, col=0, color=PALETTE["red"])
-        self._create_stat_label(grid_frame, "Whitelisted Entries Removed:", self.stat_vars["removed_whitelist"], row=1, col=2, color=PALETTE["blue"])
-        self._create_stat_label(grid_frame, "Lines Normalized:", self.stat_vars["transformed"], row=1, col=4, color="#ffd700")
+        header = ttk.Frame(parent, style="Panel.TFrame")
+        header.pack(fill="x")
+        ttk.Label(header, text="Cleanup summary", style="SectionTitle.TLabel").pack(anchor="w")
+        self.clean_overview_label = ttk.Label(
+            header,
+            text="Cleaned Save tracks the main changes live while you edit.",
+            style="SectionBody.TLabel",
+            wraplength=920,
+            justify="left",
+        )
+        self.clean_overview_label.pack(anchor="w", pady=(4, 0))
 
-        # Row 3
-        self._create_stat_label(grid_frame, "Comment / Blank Lines Removed:", self.stat_vars["removed_comments"], row=2, col=0)
-        
-        grid_frame.grid_columnconfigure(1, weight=1)
-        grid_frame.grid_columnconfigure(3, weight=1)
-        grid_frame.grid_columnconfigure(5, weight=1)
+        grid_frame = ttk.Frame(parent, style="Panel.TFrame")
+        grid_frame.pack(fill="x", pady=(10, 0))
 
-    def _create_stat_label(self, parent, text, var, row, col, color=PALETTE["text"]):
-        ttk.Label(parent, text=text).grid(row=row, column=col, sticky='w', padx=(10, 2), pady=2)
-        ttk.Label(parent, textvariable=var, foreground=color, font=("Segoe UI", 10, "bold")).grid(row=row, column=col+1, sticky='w', padx=(0, 10), pady=2)
+        self._create_metric_tile(grid_frame, "Input lines", self.stat_vars["total"], row=0, col=0)
+        self._create_metric_tile(grid_frame, "Final active", self.stat_vars["final_active"], row=0, col=1, color=PALETTE["green"])
+        self._create_metric_tile(grid_frame, "Will remove", self.stat_vars["total_discarded"], row=0, col=2, color=PALETTE["red"])
+        self._create_metric_tile(grid_frame, "Will normalize", self.stat_vars["transformed"], row=0, col=3, color=PALETTE["yellow"])
+
+        for column in range(4):
+            grid_frame.grid_columnconfigure(column, weight=1)
 
     def _refresh_mode_badges(self, _lines=None, _current_hash=None):
         if not hasattr(self, "admin_badge_label"):
@@ -2470,56 +3276,104 @@ class HostsFileEditor:
         import_mode = self.import_mode.get()
 
         self.admin_badge_label.config(
-            text="Admin Ready" if admin_ready else "Read-Only Session",
-            bg=PALETTE["green"] if admin_ready else PALETTE["red"],
-            fg="#0b1020" if admin_ready else "#1b0e13"
+            text="Administrator" if admin_ready else "Read-only",
+            bg=PALETTE["panel_alt"],
+            fg=PALETTE["green"] if admin_ready else PALETTE["red"]
         )
-        editor_state_text = "Session Ready"
-        editor_state_bg = PALETTE["surface1"]
-        editor_state_fg = PALETTE["text"]
+        editor_state_text = "Editor ready"
+        editor_state_bg = PALETTE["panel_alt"]
+        editor_state_fg = PALETTE["overlay1"]
         if hasattr(self, "text_area"):
             lines = _lines if _lines is not None else self.get_lines()
             has_content = any(line.strip() for line in lines)
             current_hash = _current_hash if _current_hash is not None else self._hash_lines(lines)
             if self._has_unsaved_changes(_lines=lines, _current_hash=current_hash):
-                editor_state_text = "Unsaved Editor Changes"
-                editor_state_bg = PALETTE["yellow"]
-                editor_state_fg = PALETTE["yellow_ink"]
+                editor_state_text = "Unsaved changes"
+                editor_state_fg = PALETTE["yellow"]
             elif self._last_applied_cleaned_hash is not None and current_hash == self._last_applied_cleaned_hash:
-                editor_state_text = "Saved Cleaned Snapshot"
-                editor_state_bg = PALETTE["green"]
-                editor_state_fg = "#0b1020"
+                editor_state_text = "Matches cleaned save"
+                editor_state_fg = PALETTE["green"]
             elif self._last_applied_raw_hash is not None and current_hash == self._last_applied_raw_hash:
-                editor_state_text = "Matches Disk Copy"
-                editor_state_bg = PALETTE["surface1"]
-                editor_state_fg = PALETTE["text"]
+                editor_state_text = "Matches disk copy"
+                editor_state_fg = PALETTE["overlay1"]
             elif not has_content:
-                editor_state_text = "Empty Editor"
-                editor_state_bg = PALETTE["surface0"]
-                editor_state_fg = PALETTE["text"]
+                editor_state_text = "Editor is empty"
+                editor_state_fg = PALETTE["overlay1"]
         self.editor_state_badge_label.config(
             text=editor_state_text,
             bg=editor_state_bg,
             fg=editor_state_fg
         )
         self.mode_badge_label.config(
-            text=f"Import Mode: {import_mode}",
-            bg=PALETTE["blue"],
-            fg="#0b1020"
+            text=f"Mode: {import_mode}",
+            bg=PALETTE["panel_alt"],
+            fg=PALETTE["blue"]
         )
         self.dry_run_badge_label.config(
-            text="Dry-Run Enabled" if dry_run else "Disk Writes Enabled",
-            bg=PALETTE["accent"] if dry_run else PALETTE["surface1"],
-            fg="#0b1020" if dry_run else PALETTE["text"]
+            text="Dry-run enabled" if dry_run else "Disk writes enabled",
+            bg=PALETTE["panel_alt"],
+            fg=PALETTE["blue"] if dry_run else PALETTE["overlay1"]
         )
 
     def _set_import_mode_status(self, mode):
         self._refresh_mode_badges()
+        self._refresh_import_mode_detail()
         self._update_manual_summary()
         if mode == "Raw":
-            self.update_status("Import mode set to Raw. Original formatting, comments, and markers will be preserved.")
+            self.update_status("Import mode set to Raw.")
         else:
-            self.update_status("Import mode set to Normalized. Domains will be standardized into clean 0.0.0.0 entries.")
+            self.update_status("Import mode set to Normalized.")
+
+    def _refresh_import_mode_detail(self):
+        if not hasattr(self, "import_mode_detail_label"):
+            return
+
+        if self.import_mode.get() == "Raw":
+            text = (
+                "Keeps source formatting, comments, and markers."
+            )
+        else:
+            text = (
+                "Converts entries into clean 0.0.0.0 hosts lines."
+            )
+        self.import_mode_detail_label.config(text=text)
+
+    def _iter_known_sources(self):
+        for category, sources in self.BLOCKLIST_SOURCES.items():
+            for name, url, _tooltip in sources:
+                yield {"name": name, "url": url, "category": category, "kind": "curated"}
+        for entry in self.custom_sources:
+            yield {
+                "name": entry["name"],
+                "url": entry["url"],
+                "category": "Saved Sources",
+                "kind": "saved",
+            }
+
+    def _cache_source_corpus(self, name: str, url: str, raw_lines: list[str]):
+        cache_key = normalize_custom_source_url(url) or url
+        text = '\n'.join(raw_lines)
+        if len(text) > SOURCE_CORPUS_CACHE_MAX_ENTRY_BYTES:
+            text = text[:SOURCE_CORPUS_CACHE_MAX_ENTRY_BYTES]
+
+        if cache_key in self._source_corpus_cache:
+            self._source_corpus_cache.pop(cache_key, None)
+        self._source_corpus_cache[cache_key] = {"name": name, "url": url, "text": text}
+
+        total_bytes = sum(len(entry.get("text", "")) for entry in self._source_corpus_cache.values())
+        while (
+            len(self._source_corpus_cache) > SOURCE_CORPUS_CACHE_MAX_ENTRIES
+            or total_bytes > SOURCE_CORPUS_CACHE_MAX_TOTAL_BYTES
+        ):
+            oldest_key = next(iter(self._source_corpus_cache))
+            removed = self._source_corpus_cache.pop(oldest_key, {})
+            total_bytes -= len(removed.get("text", ""))
+
+    def _persist_source_metadata_if_needed(self):
+        if not getattr(self, "_source_metadata_dirty", False):
+            return
+        if self.save_config():
+            self._source_metadata_dirty = False
 
     def _on_source_filter_changed(self):
         self._cancel_after_job("_source_filter_job")
@@ -2555,40 +3409,63 @@ class HostsFileEditor:
             matched_categories += 1
             matched_sources += len(filtered_sources)
 
-            web_import_frame = ttk.LabelFrame(self.web_catalog_frame, text=category)
-            web_import_frame.pack(fill="x", pady=4)
-            for name, url, tooltip in filtered_sources:
-                row = ttk.Frame(web_import_frame)
-                row.pack(fill="x", pady=2)
+            category_frame = ttk.Frame(self.web_catalog_frame, style="Inset.TFrame", padding=(0, 0, 0, 8))
+            category_frame.pack(fill="x", pady=(0, 8))
+            category_header = ttk.Frame(category_frame, style="Inset.TFrame")
+            category_header.pack(fill="x", pady=(0, 6))
+            ttk.Label(category_header, text=category, style="InsetTitle.TLabel").pack(side="left")
+            ttk.Label(category_header, text=f"{len(filtered_sources)} source(s)", style="InsetBody.TLabel").pack(side="right")
+            ttk.Separator(category_frame, orient="horizontal").pack(fill="x", pady=(0, 4))
+            rows_container = ttk.Frame(category_frame, style="Inset.TFrame")
+            rows_container.pack(fill="x")
+            for index, (name, url, tooltip) in enumerate(filtered_sources):
+                row = ttk.Frame(rows_container, style="Inset.TFrame", padding=(0, 8, 0, 8))
+                row.pack(fill="x")
+
+                copy = ttk.Frame(row, style="Inset.TFrame")
+                copy.pack(side="left", fill="x", expand=True)
                 last_stamp = self.source_last_fetched.get(url, "") if hasattr(self, "source_last_fetched") else ""
                 stamp_hint = format_relative_time(last_stamp)
+                source_host = urllib.parse.urlparse(url).netloc or url
+                freshness = f"Fetched {stamp_hint}" if stamp_hint else "Not fetched yet"
                 tooltip_full = f"{tooltip}\n\nLast fetched: {stamp_hint}" if stamp_hint else tooltip
+                ttk.Label(copy, text=name, style="InsetTitle.TLabel").pack(anchor="w")
+                ttk.Label(copy, text=f"{source_host}  |  {freshness}", style="InsetBody.TLabel", wraplength=260, justify="left").pack(anchor="w", pady=(3, 0))
+                ttk.Label(copy, text=tooltip, style="InsetBody.TLabel", wraplength=250, justify="left").pack(anchor="w", pady=(3, 0))
+
+                action_row = ttk.Frame(row, style="Inset.TFrame")
+                action_row.pack(side="right", padx=(12, 0))
                 import_btn = self._btn(
-                    row, name,
+                    action_row, "Import",
                     lambda u=url, n=name: self.start_single_import(n, u),
                     tooltip_full,
+                    style="Action.TButton",
                 )
                 self._register_import_widget(import_btn)
-                import_btn.pack(side="left", fill="x", expand=True)
+                import_btn.pack(side="left")
                 preview_btn = self._btn(
-                    row, "Peek",
+                    action_row, "Peek",
                     lambda u=url, n=name: self.preview_blocklist_source(n, u),
                     f"Preview the first entries of {name} without importing.",
-                    style="Secondary.TButton",
+                    style="TButton",
                 )
                 self._register_import_widget(preview_btn)
-                preview_btn.pack(side="right", padx=(4, 0))
+                preview_btn.pack(side="left", padx=(6, 0))
+
+                if index < len(filtered_sources) - 1:
+                    ttk.Separator(rows_container, orient="horizontal").pack(fill="x")
 
         if matched_sources == 0:
             ttk.Label(
                 self.web_catalog_frame,
-                text="No sources matched the current filter. Try a broader keyword like ads, malware, or TikTok.",
+                text="No sources matched the current filter.",
                 style="Hint.TLabel",
                 wraplength=340
             ).pack(anchor='w', pady=4)
-            self.catalog_summary_label.config(text="0 sources shown. Clear or broaden the filter to browse everything.")
+            self.catalog_summary_label.config(text="0 sources shown. Clear or broaden the filter.")
         else:
-            self.catalog_summary_label.config(text=f"Showing {matched_sources} sources across {matched_categories} categories")
+            suffix = f" for '{query}'" if query else ""
+            self.catalog_summary_label.config(text=f"Showing {matched_sources} sources across {matched_categories} categories{suffix}.")
 
     def _focus_search_shortcut(self, event=None):
         self.search_entry.focus_set()
@@ -2621,20 +3498,34 @@ class HostsFileEditor:
         discard_count = stats["removed_invalid"] + stats["removed_duplicates"] + stats["removed_whitelist"]
 
         if discard_count > 0:
+            overview_text = (
+                f"Cleaned Save keeps {stats['final_active']:,} active entr"
+                f"{'y' if stats['final_active'] == 1 else 'ies'}, removes {discard_count:,}, "
+                f"and normalizes {stats['transformed']:,} line(s)."
+            )
             self.warning_status_label.config(
-                text=f"Cleaned Save will remove {discard_count:,} entries and normalize {stats['transformed']:,} line(s).",
+                text=f"Will remove {discard_count:,} entries and normalize {stats['transformed']:,} line(s).",
                 foreground=PALETTE["red"]
             )
         elif stats["transformed"] > 0:
+            overview_text = (
+                f"Cleaned Save preserves every entry and standardizes "
+                f"{stats['transformed']:,} line(s)."
+            )
             self.warning_status_label.config(
-                text=f"Cleaned Save will normalize {stats['transformed']:,} line(s). No entries will be removed.",
+                text=f"Will normalize {stats['transformed']:,} line(s). No entries will be removed.",
                 foreground=PALETTE["yellow"]
             )
         else:
+            overview_text = (
+                "The editor already matches the cleaned result."
+            )
             self.warning_status_label.config(
-                text="Cleaned Save is already aligned. No removals or normalization are pending.",
+                text="No cleanup changes are pending.",
                 foreground=PALETTE["green"]
             )
+        if hasattr(self, "clean_overview_label"):
+            self.clean_overview_label.config(text=overview_text)
 
 
     # ----------------------------- Styles & Menus -----------------------------
@@ -2646,76 +3537,131 @@ class HostsFileEditor:
         style.configure(".", background=PALETTE["base"], foreground=PALETTE["text"], fieldbackground=PALETTE["surface0"])
         style.configure("TFrame", background=PALETTE["base"])
         style.configure("TLabel", background=PALETTE["base"], foreground=PALETTE["text"])
+        style.configure("Workspace.TPanedwindow", background=PALETTE["base"])
         style.configure("Panel.TFrame", background=PALETTE["mantle"])
         style.configure("Panel.TLabel", background=PALETTE["mantle"], foreground=PALETTE["text"])
+        style.configure("PanelHero.TLabel", background=PALETTE["mantle"], foreground=PALETTE["text"])
         style.configure("PanelMuted.TLabel", background=PALETTE["mantle"], foreground=PALETTE["subtext"])
         style.configure("PanelSubtle.TLabel", background=PALETTE["mantle"], foreground=PALETTE["overlay1"])
-        style.configure("Hint.TLabel", background=PALETTE["mantle"], foreground=PALETTE["subtext"])
+        style.configure("Hint.TLabel", background=PALETTE["panel"], foreground=PALETTE["overlay1"])
+        style.configure("Section.TFrame", background=PALETTE["panel"])
+        style.configure("SectionTitle.TLabel", background=PALETTE["panel"], foreground=PALETTE["text"], font=self.title_font)
+        style.configure("SectionBody.TLabel", background=PALETTE["panel"], foreground=PALETTE["subtext"])
+        style.configure("Inset.TFrame", background=PALETTE["panel_alt"])
+        style.configure("InsetTitle.TLabel", background=PALETTE["panel_alt"], foreground=PALETTE["text"], font=self.title_font)
+        style.configure("InsetBody.TLabel", background=PALETTE["panel_alt"], foreground=PALETTE["subtext"])
+        style.configure("Metric.TFrame", background=PALETTE["panel"])
+        style.configure("MetricLabel.TLabel", background=PALETTE["panel_alt"], foreground=PALETTE["subtext"], font=self.subtitle_font)
+        style.configure("MetricValue.TLabel", background=PALETTE["panel_alt"], foreground=PALETTE["text"], font=("Segoe UI Semibold", 15))
+        style.configure("ToolbarMeta.TLabel", background=PALETTE["panel"], foreground=PALETTE["subtext"], font=self.subtitle_font)
+        style.configure("Eyebrow.TLabel", background=PALETTE["mantle"], foreground=PALETTE["overlay1"], font=self.subtitle_font)
+        style.configure("EyebrowOnInset.TLabel", background=PALETTE["panel_alt"], foreground=PALETTE["overlay1"], font=self.subtitle_font)
         style.configure("StatusMeta.TLabel", background=PALETTE["base"], foreground=PALETTE["overlay1"])
-        style.configure("TSeparator", background=PALETTE["surface0"])
-        style.configure("TLabelFrame", background=PALETTE["mantle"], foreground=PALETTE["text"], borderwidth=0, relief="flat")
-        style.configure("TLabelframe.Label", background=PALETTE["mantle"], foreground=PALETTE["text"], font=self.title_font)
-        style.configure("TEntry", fieldbackground=PALETTE["crust"], foreground=PALETTE["text"])
+        style.configure("TSeparator", background=PALETTE["border"])
+        style.configure(
+            "TLabelFrame",
+            background=PALETTE["panel_alt"],
+            foreground=PALETTE["text"],
+            borderwidth=1,
+            relief="solid",
+            bordercolor=PALETTE["border"],
+        )
+        style.configure("TLabelframe.Label", background=PALETTE["panel_alt"], foreground=PALETTE["text"], font=self.title_font)
+        style.configure(
+            "TEntry",
+            fieldbackground=PALETTE["crust"],
+            foreground=PALETTE["text"],
+            insertcolor=PALETTE["text"],
+            padding=(9, 7),
+            borderwidth=1,
+            relief="flat",
+        )
         style.map("TEntry",
                   fieldbackground=[("focus", PALETTE["crust"])],
-                  bordercolor=[("focus", PALETTE["blue"])])
+                  bordercolor=[("focus", PALETTE["focus"])])
+        style.configure("TCheckbutton", background=PALETTE["panel"], foreground=PALETTE["text"])
+        style.map("TCheckbutton",
+                  background=[("active", PALETTE["panel"])],
+                  indicatorcolor=[("selected", PALETTE["blue"])])
+        style.configure("TRadiobutton", background=PALETTE["panel_alt"], foreground=PALETTE["text"])
+        style.map("TRadiobutton",
+                  background=[("active", PALETTE["panel_alt"])],
+                  indicatorcolor=[("selected", PALETTE["blue"])])
+        style.configure(
+            "TMenubutton",
+            background=PALETTE["surface0"],
+            foreground=PALETTE["text"],
+            padding=(10, 7),
+            relief="flat",
+            borderwidth=1,
+            arrowcolor=PALETTE["text"],
+        )
+        style.map("TMenubutton", background=[("active", PALETTE["surface1"])])
 
         # Neutral Button
         style.configure("TButton",
                         background=PALETTE["surface0"], foreground=PALETTE["text"],
-                        padding=(10, 6), relief="flat", borderwidth=0, focusthickness=1, focuscolor=PALETTE["blue"])
+                        padding=(10, 7), relief="flat", borderwidth=0, focusthickness=1, focuscolor=PALETTE["focus"])
         style.map("TButton",
                   background=[("active", PALETTE["surface1"])],
                   relief=[("pressed", "sunken")])
 
         style.configure("Secondary.TButton",
                         background=PALETTE["surface1"], foreground=PALETTE["text"],
-                        padding=(10, 6), relief="flat", borderwidth=0)
+                        padding=(10, 7), relief="flat", borderwidth=0)
         style.map("Secondary.TButton",
-                  background=[("active", PALETTE["overlay0"])],
+                  background=[("active", PALETTE["surface2"])],
                   relief=[("pressed", "sunken")])
         
         # Remove Button (Small)
         style.configure("Remove.TButton",
                         background=PALETTE["red"], foreground="#1b0e13",
-                        padding=(4, 2), relief="flat", borderwidth=0, font=("Segoe UI", 8, "bold"))
+                        padding=(6, 3), relief="flat", borderwidth=0, font=("Segoe UI", 8, "bold"))
         style.map("Remove.TButton",
                   background=[("active", PALETTE["red_hover"])],
                   relief=[("pressed", "sunken")])
 
         # Accent Button (blue)
         style.configure("Accent.TButton",
-                        background=PALETTE["blue"], foreground="#0b1020",
-                        padding=(10, 6), relief="flat", borderwidth=0)
+                        background=PALETTE["surface1"], foreground=PALETTE["text"],
+                        padding=(10, 7), relief="flat", borderwidth=0)
         style.map("Accent.TButton",
-                  background=[("active", "#a3c7ff")])
+                  background=[("active", PALETTE["surface2"])])
 
-        # Action Button (green default)
+        # Action Button (primary)
         style.configure("Action.TButton",
-                        background=PALETTE["green"], foreground="#0b1020",
-                        padding=(10, 6), relief="flat", borderwidth=0)
+                        background=PALETTE["blue"], foreground="#0b1020",
+                        padding=(10, 7), relief="flat", borderwidth=0)
         style.map("Action.TButton",
-                  background=[("active", PALETTE["green_hover"])],
+                  background=[("active", PALETTE["blue_hover"])],
                   relief=[("pressed", "sunken")])
 
         style.configure("Saved.TButton",
-                        background=PALETTE["yellow"], foreground=PALETTE["yellow_ink"],
+                        background=PALETTE["green"], foreground="#0b1020",
                         padding=(10, 6), relief="flat", borderwidth=0)
         style.map("Saved.TButton",
-                  background=[("active", "#f5d58b")],
+                  background=[("active", PALETTE["green_hover"])],
                   relief=[("pressed", "sunken")])
 
         # Danger Button (revert, destructive-ish)
         style.configure("Danger.TButton",
                         background=PALETTE["red"], foreground="#1b0e13",
-                        padding=(10, 6), relief="flat", borderwidth=0)
+                        padding=(10, 7), relief="flat", borderwidth=0)
         style.map("Danger.TButton",
                   background=[("active", PALETTE["red_hover"])],
                   relief=[("pressed", "sunken")])
 
         # Scrollbar to better match dark scheme
-        style.configure("Vertical.TScrollbar", background=PALETTE["mantle"], troughcolor=PALETTE["crust"], arrowcolor=PALETTE["text"])
-        style.configure("Horizontal.TScrollbar", background=PALETTE["mantle"], troughcolor=PALETTE["crust"], arrowcolor=PALETTE["text"])
+        style.configure("Vertical.TScrollbar", background=PALETTE["panel"], troughcolor=PALETTE["crust"], arrowcolor=PALETTE["text"])
+        style.configure("Horizontal.TScrollbar", background=PALETTE["panel"], troughcolor=PALETTE["crust"], arrowcolor=PALETTE["text"])
+        style.configure(
+            "Horizontal.TProgressbar",
+            troughcolor=PALETTE["panel_alt"],
+            background=PALETTE["blue"],
+            bordercolor=PALETTE["panel_alt"],
+            lightcolor=PALETTE["blue_hover"],
+            darkcolor=PALETTE["blue"],
+        )
 
         # Menus
         self.root.option_add('*Menu.background', PALETTE["mantle"])
@@ -2736,7 +3682,7 @@ class HostsFileEditor:
         file_menu.add_command(label="Revert to Backup", command=self.revert_to_backup)
         file_menu.add_command(label="Panic Restore (Microsoft default)", command=self.panic_restore_stock)
         file_menu.add_separator()
-        file_menu.add_command(label="Export Cleaned As…", command=self.show_export_dialog)
+        file_menu.add_command(label="Export Cleaned As...", command=self.show_export_dialog)
         file_menu.add_separator()
         file_menu.add_command(label="Disable / Enable Hosts", command=self.toggle_hosts_enabled)
         file_menu.add_separator()
@@ -2755,16 +3701,16 @@ class HostsFileEditor:
         cleanup_menu.add_command(label="Remove Blank Lines Only", command=self.cleanup_blanks_only)
         cleanup_menu.add_command(label="Remove Invalid Lines Only", command=self.cleanup_invalid_only)
         cleanup_menu.add_separator()
-        cleanup_menu.add_command(label="Remove Import Section…", command=self.show_remove_import_section)
+        cleanup_menu.add_command(label="Remove Import Section...", command=self.show_remove_import_section)
         tools_menu.add_cascade(label="Targeted Cleanup", menu=cleanup_menu)
         tools_menu.add_separator()
-        tools_menu.add_command(label="Check Domain…", command=self.show_check_domain)
-        tools_menu.add_command(label="Hosts Health Scan…", command=self.show_health_scan)
-        tools_menu.add_command(label="Sources Report…", command=self.show_sources_report)
-        tools_menu.add_command(label="Goto Anything…", command=self.show_goto_anything)
+        tools_menu.add_command(label="Check Domain...", command=self.show_check_domain)
+        tools_menu.add_command(label="Hosts Health Scan...", command=self.show_health_scan)
+        tools_menu.add_command(label="Sources Report...", command=self.show_sources_report)
+        tools_menu.add_command(label="Goto Anything...", command=self.show_goto_anything)
         tools_menu.add_separator()
-        tools_menu.add_command(label="Schedule Auto-Update…", command=self.show_schedule_wizard)
-        tools_menu.add_command(label="Preferences…", command=self.show_preferences)
+        tools_menu.add_command(label="Schedule Auto-Update...", command=self.show_schedule_wizard)
+        tools_menu.add_command(label="Preferences...", command=self.show_preferences)
         tools_menu.add_separator()
         convert_menu = tk.Menu(tools_menu, tearoff=0, bg=PALETTE["mantle"], fg=PALETTE["text"],
                                activebackground=PALETTE["blue"], activeforeground="#0b1020")
@@ -2839,7 +3785,8 @@ class HostsFileEditor:
             message = ""
         message = str(message).replace("\r", " ").replace("\n", " ")
         if len(message) > self._STATUS_MESSAGE_MAX_LEN:
-            message = message[: self._STATUS_MESSAGE_MAX_LEN - 1] + "…"
+            overflow_suffix = "..."
+            message = message[: self._STATUS_MESSAGE_MAX_LEN - len(overflow_suffix)] + overflow_suffix
         message_lower = message.lower()
         if is_error:
             color = PALETTE["red"]
@@ -2867,7 +3814,12 @@ class HostsFileEditor:
         try:
             os.makedirs(folder, exist_ok=True)
         except OSError as e:
-            messagebox.showerror("Error", f"Could not create config folder:\n{e}", parent=self.root)
+            self._show_notice_dialog(
+                "Could not create config folder",
+                "The app was unable to create the configuration directory needed for local settings.",
+                tone="error",
+                details=str(e),
+            )
             return
 
         try:
@@ -2879,33 +3831,71 @@ class HostsFileEditor:
                 subprocess.Popen(['xdg-open', folder])
             self.update_status(f"Opened config folder: {folder}")
         except Exception as e:
-            messagebox.showerror("Error", f"Could not open config folder:\n{e}", parent=self.root)
+            self._show_notice_dialog(
+                "Could not open config folder",
+                "The configuration directory exists, but the operating system refused to open it in the file manager.",
+                tone="error",
+                details=str(e),
+            )
 
     def show_about_dialog(self):
-        messagebox.showinfo(
-            f"About {APP_NAME}",
-            (
-                f"{APP_NAME} v{APP_VERSION}\n\n"
-                "Windows-first hosts file editing with curated imports, previewed cleaning, safer save flows, and recovery tools.\n\n"
-                "Highlights\n"
-                "- Save Cleaned previews normalization and whitelist filtering before write\n"
-                "- Save Raw preserves the editor exactly as shown\n"
-                "- Batch imports stay sequential so progress and failures are easier to trust\n"
-                "- Dry-run mode lets you validate changes without touching disk\n\n"
-                "Shortcuts\n"
-                "Ctrl+F   Focus search\n"
-                "Ctrl+S   Save Cleaned\n"
-                "Ctrl+Shift+S   Save Raw\n"
-                "F5   Reload from disk"
-            ),
-            parent=self.root,
+        dialog = tk.Toplevel(self.root)
+        self._configure_modal_window(
+            dialog,
+            title=f"About {APP_NAME}",
+            size="620x470",
+            min_size=(560, 420),
         )
+
+        hero, _ = self._create_sidebar_card(
+            dialog,
+            f"{APP_NAME} {APP_VERSION}",
+            "Windows-first hosts file editing with curated imports, previewed cleaning, safer save flows, and recovery tools.",
+            accent=PALETTE["blue"],
+        )
+        ttk.Label(hero, text="Why people trust it", style="SectionTitle.TLabel").pack(anchor="w")
+        for bullet in (
+            "Save Cleaned previews normalization and whitelist filtering before write.",
+            "Save Raw preserves the editor exactly as shown.",
+            "Batch imports stay sequential so progress and failures are easier to trust.",
+            "Dry-run mode lets you validate changes without touching disk.",
+        ):
+            ttk.Label(hero, text=f"- {bullet}", style="SectionBody.TLabel", wraplength=520, justify="left").pack(anchor="w", pady=(6, 0))
+
+        shortcuts, _ = self._create_sidebar_card(
+            dialog,
+            "Keyboard shortcuts",
+            "The fastest path through the workspace.",
+            accent=PALETTE["green"],
+        )
+        for shortcut, label in (
+            ("Ctrl+F", "Focus search"),
+            ("Ctrl+S", "Save Cleaned"),
+            ("Ctrl+Shift+S", "Save Raw"),
+            ("F5", "Reload from disk"),
+            ("Ctrl+P", "Goto Anything"),
+        ):
+            row = ttk.Frame(shortcuts, style="Section.TFrame")
+            row.pack(fill="x", pady=2)
+            ttk.Label(row, text=shortcut, style="SectionTitle.TLabel").pack(side="left")
+            ttk.Label(row, text=label, style="SectionBody.TLabel").pack(side="right")
+
+        footer = ttk.Frame(dialog)
+        footer.pack(fill="x", padx=20, pady=(0, 20))
+        ttk.Button(
+            footer,
+            text="Project on GitHub",
+            command=lambda: webbrowser.open("https://github.com/SysAdminDoc/HostsFileGet"),
+            style="Secondary.TButton",
+        ).pack(side="left")
+        ttk.Button(footer, text="Close", command=dialog.destroy, style="Action.TButton").pack(side="right")
+        dialog.grab_set()
 
     def _on_editor_scroll(self, scrollbar, first, last):
         """Keep the scrollbar and the line-number gutter in sync with the text.
 
         Tk `yscrollcommand` fires whenever the viewport moves, so we hook it
-        to redraw line numbers lazily via ``after_idle`` — redrawing here
+        to redraw line numbers lazily via ``after_idle`` - redrawing here
         directly would flicker badly during rapid paging.
         """
         try:
@@ -2976,14 +3966,37 @@ class HostsFileEditor:
             setattr(self, attr_name, None)
 
     def on_closing(self):
+        confirm_dialog = getattr(self, "_confirm_dialog", None)
+
+        def confirm_close(title, message, *, confirm_text, cancel_text):
+            if callable(confirm_dialog):
+                return confirm_dialog(
+                    title,
+                    message,
+                    tone="warning",
+                    confirm_text=confirm_text,
+                    cancel_text=cancel_text,
+                )
+            return messagebox.askyesno(title, message)
+
         should_cancel_import = False
         if self.is_importing:
-            if not messagebox.askyesno("Close During Import", "A batch import is still running. Close the app and stop that import?", parent=self.root):
+            if not confirm_close(
+                "Close during import?",
+                "A batch import is still running. Closing now will stop it after the current download step.",
+                confirm_text="Close and stop import",
+                cancel_text="Keep app open",
+            ):
                 return
             should_cancel_import = True
 
         if self._has_unsaved_changes():
-            if not messagebox.askyesno("Discard Unsaved Changes", "You have unsaved editor changes. Close without saving them?", parent=self.root):
+            if not confirm_close(
+                "Discard unsaved changes?",
+                "You have unsaved editor changes. Closing now will discard them.",
+                confirm_text="Discard and close",
+                cancel_text="Keep editing",
+            ):
                 return
 
         if should_cancel_import:
@@ -2997,7 +4010,7 @@ class HostsFileEditor:
         try:
             self.save_config()
         except Exception:
-            # Never block shutdown because of a config save failure — the
+            # Never block shutdown because of a config save failure - the
             # user is trying to exit and the error is non-recoverable at
             # this point.
             pass
@@ -3035,10 +4048,11 @@ class HostsFileEditor:
                     if launch_result > 32:
                         return False
                 except Exception as e:
-                    messagebox.showerror(
-                        "Relaunch Failed", 
-                        f"Could not relaunch as administrator. Saving the hosts file will fail due to permission error.\nError: {e}",
-                        parent=self.root,
+                    self._show_notice_dialog(
+                        "Could not relaunch as administrator",
+                        "The app could not restart itself with elevated rights, so saving the real hosts file will fail unless you relaunch it manually as Administrator.",
+                        tone="error",
+                        details=str(e),
                     )
             
             self.root.after(100, lambda: self.update_status("Warning: Not running as Administrator. Saving will fail unless Dry-run is enabled.", is_error=True))
@@ -3055,12 +4069,14 @@ class HostsFileEditor:
 
     # ------------------------- Config Persistence -----------------------------
     def _get_legacy_config_paths(self):
-        script_dir = _EXE_DIR
         candidates = []
-        for base_dir in (os.getcwd(), script_dir):
-            candidate = os.path.join(base_dir, self.CONFIG_FILENAME)
-            if candidate != self.config_path and candidate not in candidates:
-                candidates.append(candidate)
+        # Legacy builds wrote config next to the script / executable. Avoid
+        # probing the current working directory because shortcuts, schedulers,
+        # and shells can set that arbitrarily, which risks adopting an
+        # unrelated ``hosts_editor_config.json`` by accident.
+        candidate = os.path.join(_EXE_DIR, self.CONFIG_FILENAME)
+        if candidate != self.config_path:
+            candidates.append(candidate)
         return candidates
 
     def _write_config_payload(self, config: dict):
@@ -3094,7 +4110,7 @@ class HostsFileEditor:
         try:
             config = json.loads(read_text_file_content(config_source_path))
         except (json.JSONDecodeError, ValueError):
-            self.update_status("Config file is corrupt — using defaults.", is_error=True)
+            self.update_status("Config file is corrupt - using defaults.", is_error=True)
             return
         except OSError as e:
             self.update_status(f"Config read failed: {e}", is_error=True)
@@ -3127,7 +4143,7 @@ class HostsFileEditor:
         if config_source_path != self.config_path:
             self._write_config_payload(sanitized_config)
             # Clean up the legacy file so we don't keep re-reading it on
-            # future launches. Failures here are non-fatal — the primary
+            # future launches. Failures here are non-fatal - the primary
             # path now exists and will be preferred regardless.
             try:
                 os.unlink(config_source_path)
@@ -3158,13 +4174,16 @@ class HostsFileEditor:
         try:
             self._write_config_payload(config)
             self._last_saved_whitelist_text = config["whitelist"]
+            self._source_metadata_dirty = False
             self._update_whitelist_summary()
+            return True
         except OSError as e:
             self.update_status(f"Config save failed: {e}", is_error=True)
+            return False
         except tk.TclError:
-            # Widget torn down between payload write and summary refresh —
+            # Widget torn down between payload write and summary refresh -
             # the config IS on disk, nothing else to do.
-            pass
+            return True
 
     # ----------------------------- File Ops & State Tracking -----------------------------------
     def get_lines(self):
@@ -3270,11 +4289,11 @@ class HostsFileEditor:
 
         count = len(self.custom_sources)
         if count == 0:
-            text = "0 saved sources ready for import."
+            text = "0 saved feeds."
         elif count == 1:
-            text = "1 saved source ready for import."
+            text = "1 saved feed."
         else:
-            text = f"{count} saved sources ready for import."
+            text = f"{count} saved feeds."
         self.custom_sources_summary_label.config(text=text)
 
     def _update_manual_summary(self):
@@ -3284,11 +4303,11 @@ class HostsFileEditor:
         count = count_nonempty_lines(self.manual_text_area.get('1.0', tk.END))
         mode = self.import_mode.get()
         if count == 0:
-            text = "0 non-empty lines ready to append."
+            text = "Nothing ready to append."
         elif count == 1:
-            text = f"1 non-empty line ready to append in {mode} mode."
+            text = f"1 line ready to append in {mode} mode."
         else:
-            text = f"{count:,} non-empty lines ready to append in {mode} mode."
+            text = f"{count:,} lines ready to append in {mode} mode."
         self.manual_summary_label.config(text=text)
 
     def _update_whitelist_summary(self):
@@ -3296,11 +4315,11 @@ class HostsFileEditor:
             return
 
         count = len(self._get_whitelist_set())
-        dirty_suffix = " Unsaved changes are pending." if self._has_unsaved_whitelist_changes() else " Saved copy matches the editor."
+        dirty_suffix = " Unsaved edits." if self._has_unsaved_whitelist_changes() else " Saved."
         if count == 1:
-            text = "1 whitelist entry." + dirty_suffix
+            text = "1 allowlist entry." + dirty_suffix
         else:
-            text = f"{count:,} whitelist entries." + dirty_suffix
+            text = f"{count:,} allowlist entries." + dirty_suffix
         self.whitelist_summary_label.config(text=text)
 
     def _on_manual_modified(self, event=None):
@@ -3330,7 +4349,7 @@ class HostsFileEditor:
         try:
             shutil.copy2(self.HOSTS_FILE_PATH, timestamped)
         except OSError:
-            # Timestamped copy is a convenience layer — the rolling .bak
+            # Timestamped copy is a convenience layer - the rolling .bak
             # is still in place so a failure here is non-fatal.
             return None
 
@@ -3345,7 +4364,7 @@ class HostsFileEditor:
         except OSError:
             return
 
-        # Exclude the rolling latest-copy from timestamped pruning — it
+        # Exclude the rolling latest-copy from timestamped pruning - it
         # matches the same wildcard but is managed separately.
         latest_bak = os.path.normcase(self.HOSTS_FILE_PATH + ".bak")
         timestamped = [
@@ -3398,10 +4417,10 @@ class HostsFileEditor:
         if self._block_during_import("Disable/Enable Hosts"):
             return
         if not self.is_admin:
-            messagebox.showerror(
-                "Administrator Required",
-                "Disabling or re-enabling the hosts file requires Administrator privileges.",
-                parent=self.root,
+            self._show_notice_dialog(
+                "Administrator privileges required",
+                "Disabling or re-enabling the hosts file requires Administrator rights.",
+                tone="error",
             )
             self.update_status("Disable/Enable blocked: Admin rights required.", is_error=True)
             return
@@ -3418,24 +4437,25 @@ class HostsFileEditor:
                     # Preserve the current minimal file as a backup too, so
                     # the user can always get back to "stock Windows".
                     shutil.copy2(self.HOSTS_FILE_PATH, self.HOSTS_FILE_PATH + ".bak")
-                shutil.copy2(disabled_path, self.HOSTS_FILE_PATH)
-                os.unlink(disabled_path)
+                enable_hosts_file_transactionally(self.HOSTS_FILE_PATH, disabled_path)
                 self.update_status("Success: Hosts file re-enabled. Blocklists are active again.")
             else:
-                if not messagebox.askyesno(
-                    "Disable Hosts File",
-                    "Disabling temporarily replaces the hosts file with the minimal Microsoft default so every blocklist is bypassed.\n\n"
-                    "Your current file is preserved alongside it and can be re-enabled from this menu.\n\n"
-                    "Continue?",
-                    parent=self.root,
+                if not self._confirm_dialog(
+                    "Disable hosts file?",
+                    "Disabling temporarily replaces the hosts file with the minimal Microsoft default so every blocklist is bypassed.",
+                    tone="warning",
+                    confirm_text="Disable hosts file",
+                    cancel_text="Keep hosts active",
+                    details=(
+                        "Your current file is preserved alongside it and can be re-enabled later from the same menu.\n\n"
+                        "Use this when you need a quick troubleshooting baseline without losing your current setup."
+                    ),
                 ):
                     return
                 try:
                     self._rotate_backups()
                 except OSError:
                     pass
-                if os.path.exists(self.HOSTS_FILE_PATH):
-                    shutil.copy2(self.HOSTS_FILE_PATH, disabled_path)
                 minimal = (
                     "# Copyright (c) 1993-2009 Microsoft Corp.\n"
                     "#\n"
@@ -3443,14 +4463,19 @@ class HostsFileEditor:
                     "127.0.0.1       localhost\n"
                     "::1             localhost\n"
                 )
-                write_text_file_atomic(self.HOSTS_FILE_PATH, minimal)
+                disable_hosts_file_transactionally(self.HOSTS_FILE_PATH, disabled_path, minimal)
                 self.update_status("Success: Hosts file disabled. Minimal Microsoft template is active.")
             self.flush_dns_silent()
             self.load_file(is_initial_load=False)
             self._refresh_mode_badges()
         except Exception as e:
             self.update_status(f"Disable/Enable error: {e}", is_error=True)
-            messagebox.showerror("Error", f"Could not toggle hosts file:\n{e}", parent=self.root)
+            self._show_notice_dialog(
+                "Could not toggle the hosts file",
+                "The enable or disable operation failed before the new state could be applied.",
+                tone="error",
+                details=str(e),
+            )
 
     def flush_dns_silent(self):
         if os.name != 'nt':
@@ -3491,44 +4516,42 @@ class HostsFileEditor:
         lines = self.get_lines()
         findings = scan_suspicious_redirects(lines)
         dialog = tk.Toplevel(self.root)
-        dialog.title("Hosts Health Scan")
-        dialog.configure(bg=PALETTE["base"])
-        dialog.transient(self.root)
-        dialog.geometry("720x520")
-
-        header = ttk.Label(
+        self._configure_modal_window(
             dialog,
-            text="Hosts Health Scan",
-            font=("Segoe UI Semibold", 14),
+            title="Hosts Health Scan",
+            size="760x560",
+            min_size=(680, 500),
         )
-        header.pack(anchor='w', padx=16, pady=(16, 4))
 
+        intro, _ = self._create_sidebar_card(
+            dialog,
+            "Hosts health scan",
+            "Check the live editor for suspicious redirects to non-loopback, non-private IP addresses.",
+            accent=PALETTE["yellow"],
+        )
         if not findings:
             ttk.Label(
-                dialog,
+                intro,
                 text="No suspicious redirects detected. Every non-loopback mapping is on a private LAN range.",
                 wraplength=660,
                 justify="left",
-                style="Hint.TLabel",
-            ).pack(anchor='w', padx=16, pady=(0, 12))
+                style="SectionBody.TLabel",
+            ).pack(anchor='w')
         else:
             ttk.Label(
-                dialog,
+                intro,
                 text=(
                     f"Found {len(findings)} entr{'y' if len(findings) == 1 else 'ies'} mapping domains to "
-                    "non-loopback, non-LAN IPs. These are a classic malware/hijack indicator — "
-                    "verify each one against a legitimate source before keeping it."
+                    "non-loopback, non-LAN IPs. These are a classic malware or hijack signal, so verify each one before keeping it."
                 ),
                 wraplength=660,
                 justify="left",
                 foreground=PALETTE["yellow"],
-            ).pack(anchor='w', padx=16, pady=(0, 12))
+            ).pack(anchor='w')
 
-        body = scrolledtext.ScrolledText(
-            dialog, wrap=tk.WORD, font=("Consolas", 10),
-            bg=PALETTE["crust"], fg=PALETTE["text"], relief="flat",
-        )
-        body.pack(expand=True, fill='both', padx=16, pady=(0, 12))
+        body = scrolledtext.ScrolledText(dialog, wrap=tk.NONE)
+        self._style_code_surface(body, font_spec=self.mono_small_font)
+        body.pack(expand=True, fill='both', padx=20, pady=(0, 12))
         if findings:
             body.insert(tk.END, "Line    IP                  Domain\n")
             body.insert(tk.END, "-----   -----------------   -----------------------------\n")
@@ -3539,37 +4562,56 @@ class HostsFileEditor:
         body.configure(state="disabled")
 
         btn_row = ttk.Frame(dialog)
-        btn_row.pack(fill="x", padx=16, pady=(0, 16))
+        btn_row.pack(fill="x", padx=20, pady=(0, 20))
+        if findings:
+            ttk.Button(
+                btn_row,
+                text="Jump to first finding",
+                command=lambda line_no=findings[0][0] + 1: (
+                    self.text_area.mark_set('insert', f"{line_no}.0"),
+                    self.text_area.see(f"{line_no}.0"),
+                    dialog.destroy(),
+                ),
+                style="TButton",
+            ).pack(side="left")
         ttk.Button(btn_row, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
         dialog.grab_set()
 
     # ----------------------------- Check Domain ------------------------------
-    def show_check_domain(self):
+    def show_check_domain(self, initial_domain: str | None = None):
         dialog = tk.Toplevel(self.root)
-        dialog.title("Check Domain")
-        dialog.configure(bg=PALETTE["base"])
-        dialog.transient(self.root)
-        dialog.geometry("720x560")
-
-        ttk.Label(dialog, text="Check Domain", font=("Segoe UI Semibold", 14)).pack(anchor='w', padx=16, pady=(16, 2))
-        ttk.Label(
+        self._configure_modal_window(
             dialog,
-            text="Enter a domain to see whether it's blocked by the editor, on your whitelist, and which curated sources we've fetched that contain it.",
-            wraplength=660, justify="left", style="Hint.TLabel",
-        ).pack(anchor='w', padx=16, pady=(0, 10))
+            title="Check Domain",
+            size="780x620",
+            min_size=(700, 540),
+        )
 
-        query_frame = ttk.Frame(dialog)
-        query_frame.pack(fill="x", padx=16)
+        intro, _ = self._create_sidebar_card(
+            dialog,
+            "Check a domain",
+            "See whether a domain is blocked by the current editor, covered by your whitelist, or present in sources already fetched this session.",
+            accent=PALETTE["blue"],
+        )
+        ttk.Label(
+            intro,
+            text="Examples: `ads.example.com`, `telemetry.vendor.com`, `doubleclick.net`",
+            style="SectionBody.TLabel",
+            wraplength=700,
+            justify="left",
+        ).pack(anchor="w")
+
+        query_frame = ttk.Frame(dialog, padding=(20, 0, 20, 0))
+        query_frame.pack(fill="x")
         query_var = tk.StringVar()
         entry = ttk.Entry(query_frame, textvariable=query_var)
         entry.pack(side="left", fill="x", expand=True)
         entry.focus_set()
+        ttk.Button(query_frame, text="Check", command=lambda: run_check(), style="Action.TButton").pack(side="left", padx=(8, 0))
 
-        output = scrolledtext.ScrolledText(
-            dialog, wrap=tk.WORD, font=("Consolas", 10),
-            bg=PALETTE["crust"], fg=PALETTE["text"], relief="flat",
-        )
-        output.pack(expand=True, fill='both', padx=16, pady=12)
+        output = scrolledtext.ScrolledText(dialog, wrap=tk.WORD)
+        self._style_code_surface(output, font_spec=self.mono_small_font)
+        output.pack(expand=True, fill='both', padx=20, pady=12)
         output.configure(state="disabled")
 
         def write_output(text):
@@ -3601,10 +4643,14 @@ class HostsFileEditor:
             )
 
             source_matches = find_sources_containing_domain(domain, self._source_corpus_cache)
+            cached_urls = {
+                normalize_custom_source_url(entry.get("url", "")) or entry.get("url", "")
+                for entry in self._source_corpus_cache.values()
+            }
             not_yet_fetched = [
-                name for category in self.BLOCKLIST_SOURCES.values()
-                for name, _, _ in category
-                if name not in self._source_corpus_cache
+                source["name"]
+                for source in self._iter_known_sources()
+                if (normalize_custom_source_url(source["url"]) or source["url"]) not in cached_urls
             ]
 
             buf = [f"Domain: {domain}", ""]
@@ -3624,17 +4670,19 @@ class HostsFileEditor:
                 for name in source_matches:
                     buf.append(f"  - {name}")
             else:
-                buf.append("Not present in any previously-fetched curated source.")
+                buf.append("Not present in any previously-fetched source.")
             if not_yet_fetched:
                 buf.append("")
-                buf.append(f"({len(not_yet_fetched)} source(s) not yet fetched this session — import them to include in this lookup.)")
+                buf.append(f"({len(not_yet_fetched)} source(s) not yet fetched this session - import them to include in this lookup.)")
             write_output('\n'.join(buf))
 
-        ttk.Button(query_frame, text="Check", command=run_check, style="Action.TButton").pack(side="left", padx=(8, 0))
         entry.bind("<Return>", run_check)
+        if initial_domain:
+            query_var.set(initial_domain)
+            self._safe_after(50, run_check)
 
         btn_row = ttk.Frame(dialog)
-        btn_row.pack(fill="x", padx=16, pady=(0, 16))
+        btn_row.pack(fill="x", padx=20, pady=(0, 20))
         ttk.Button(btn_row, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
         dialog.grab_set()
 
@@ -3642,20 +4690,33 @@ class HostsFileEditor:
     def show_export_dialog(self):
         original = self.get_lines()
         whitelist_set = self._get_whitelist_set()
-        cleaned, _ = _get_canonical_cleaned_output_and_stats(original, whitelist_set)
+        cleaned, stats = _get_canonical_cleaned_output_and_stats(original, whitelist_set)
 
         dialog = tk.Toplevel(self.root)
-        dialog.title("Export Cleaned Hosts")
-        dialog.configure(bg=PALETTE["base"])
-        dialog.transient(self.root)
-        dialog.geometry("460x260")
-
-        ttk.Label(dialog, text="Export Cleaned Hosts", font=("Segoe UI Semibold", 13)).pack(anchor='w', padx=16, pady=(16, 2))
-        ttk.Label(
+        self._configure_modal_window(
             dialog,
-            text="Choose a format to save the cleaned view under. Whitelist and deduplication are applied first.",
-            wraplength=420, justify="left", style="Hint.TLabel",
-        ).pack(anchor='w', padx=16, pady=(0, 10))
+            title="Export Cleaned Hosts",
+            size="560x430",
+            min_size=(520, 380),
+        )
+
+        intro, _ = self._create_sidebar_card(
+            dialog,
+            "Export cleaned output",
+            "Choose a format to save the cleaned view under. Whitelist filtering and deduplication are applied first.",
+            accent=PALETTE["green"],
+        )
+        ttk.Label(
+            intro,
+            text=(
+                f"Preview summary: {stats['final_active']:,} active entr"
+                f"{'y' if stats['final_active'] == 1 else 'ies'} ready for export after removing "
+                f"{stats['total_discarded']:,} line(s)."
+            ),
+            style="SectionBody.TLabel",
+            wraplength=480,
+            justify="left",
+        ).pack(anchor="w")
 
         format_var = tk.StringVar(value="hosts")
         formats = [
@@ -3665,8 +4726,14 @@ class HostsFileEditor:
             ("dnsmasq", "dnsmasq (address=/domain/0.0.0.0)"),
             ("pihole", "Pi-hole gravity (plain domains)"),
         ]
+        options, _ = self._create_sidebar_card(
+            dialog,
+            "Export format",
+            "Pick the shape best suited for the downstream tool you want to feed.",
+            accent=PALETTE["blue"],
+        )
         for value, label in formats:
-            ttk.Radiobutton(dialog, text=label, variable=format_var, value=value).pack(anchor='w', padx=20)
+            ttk.Radiobutton(options, text=label, variable=format_var, value=value).pack(anchor='w', pady=2)
 
         def do_export():
             fmt = format_var.get()
@@ -3690,49 +4757,83 @@ class HostsFileEditor:
                 self.update_status(f"Exported {fmt} format to {path}")
                 dialog.destroy()
             except Exception as e:
-                messagebox.showerror("Export Error", f"Could not export:\n{e}", parent=dialog)
+                self._show_notice_dialog(
+                    "Export failed",
+                    "The cleaned output could not be written to the selected destination.",
+                    tone="error",
+                    details=str(e),
+                )
 
         btn_row = ttk.Frame(dialog)
-        btn_row.pack(fill="x", padx=16, pady=(12, 16))
-        ttk.Button(btn_row, text="Export…", command=do_export, style="Action.TButton").pack(side="right")
+        btn_row.pack(fill="x", padx=20, pady=(6, 20))
+        ttk.Button(btn_row, text="Export...", command=do_export, style="Action.TButton").pack(side="right")
         ttk.Button(btn_row, text="Cancel", command=dialog.destroy, style="Secondary.TButton").pack(side="right", padx=(0, 8))
         dialog.grab_set()
 
     # ----------------------------- Preferences -------------------------------
     def show_preferences(self):
         dialog = tk.Toplevel(self.root)
-        dialog.title("Preferences")
-        dialog.configure(bg=PALETTE["base"])
-        dialog.transient(self.root)
-        dialog.geometry("480x260")
-
-        ttk.Label(dialog, text="Preferences", font=("Segoe UI Semibold", 14)).pack(anchor='w', padx=20, pady=(20, 2))
-        ttk.Label(
+        self._configure_modal_window(
             dialog,
-            text="Settings roam via the persistent config file.",
-            wraplength=440, justify="left", style="Hint.TLabel",
-        ).pack(anchor='w', padx=20, pady=(0, 12))
+            title="Preferences",
+            size="560x390",
+            min_size=(520, 360),
+        )
 
-        row = ttk.Frame(dialog)
-        row.pack(fill='x', padx=20, pady=6)
-        ttk.Label(row, text="Timestamped backup retention (0-50):").pack(side='left')
+        intro, _ = self._create_sidebar_card(
+            dialog,
+            "Preferences",
+            "Tune the default safety rails for backup retention and block-target rewriting. Settings roam with the persistent config file.",
+            accent=PALETTE["blue"],
+        )
+        ttk.Label(intro, text="These defaults shape how future saves and conversion tools behave.", style="SectionBody.TLabel", wraplength=460, justify="left").pack(anchor="w")
+
+        retention_card, _ = self._create_sidebar_card(
+            dialog,
+            "Backups",
+            "Keep a rolling set of timestamped safety snapshots next to the live hosts file.",
+            accent=PALETTE["green"],
+        )
+        row = ttk.Frame(retention_card, style="Section.TFrame")
+        row.pack(fill='x', pady=(0, 6))
+        ttk.Label(row, text="Timestamped backup retention", style="SectionTitle.TLabel").pack(side='left')
         retention_var = tk.IntVar(value=self._backup_retention)
         spin = tk.Spinbox(
             row, from_=0, to=50, textvariable=retention_var, width=6,
             bg=PALETTE["crust"], fg=PALETTE["text"], insertbackground=PALETTE["text"],
-            buttonbackground=PALETTE["surface0"], highlightthickness=0, relief="flat",
+            buttonbackground=PALETTE["surface0"], highlightthickness=1, highlightbackground=PALETTE["border"], relief="flat",
         )
         spin.pack(side='right')
+        ttk.Label(
+            retention_card,
+            text="Set this to 0 if you only want the rolling latest backup. Higher values preserve more history for rollback confidence.",
+            style="SectionBody.TLabel",
+            wraplength=460,
+            justify="left",
+        ).pack(anchor="w")
 
-        row2 = ttk.Frame(dialog)
-        row2.pack(fill='x', padx=20, pady=6)
-        ttk.Label(row2, text="Default block-sink IP:").pack(side='left')
+        sink_card, _ = self._create_sidebar_card(
+            dialog,
+            "Block target",
+            "Choose the default sink used by the Convert Block IPs tool.",
+            accent=PALETTE["yellow"],
+        )
+        row2 = ttk.Frame(sink_card, style="Section.TFrame")
+        row2.pack(fill='x', pady=(0, 6))
+        ttk.Label(row2, text="Default block-sink IP", style="SectionTitle.TLabel").pack(side='left')
         sink_var = tk.StringVar(value=self._preferred_block_sink)
         sink_menu = ttk.OptionMenu(row2, sink_var, self._preferred_block_sink, *sorted(BLOCK_SINK_IPS))
         sink_menu.pack(side='right')
+        ttk.Label(
+            sink_card,
+            text="`0.0.0.0` is the fastest Windows-friendly default for most blocking workflows. Use another target only if you need a specific resolver behavior.",
+            style="SectionBody.TLabel",
+            wraplength=460,
+            justify="left",
+        ).pack(anchor="w")
 
         btn_row = ttk.Frame(dialog)
-        btn_row.pack(fill='x', padx=20, pady=(16, 20))
+        btn_row.pack(fill='x', padx=20, pady=(6, 20))
 
         def do_save():
             try:
@@ -3748,70 +4849,173 @@ class HostsFileEditor:
             self.update_status(f"Preferences saved: retention={new_ret}, sink={self._preferred_block_sink}.")
 
         ttk.Button(btn_row, text="Cancel", command=dialog.destroy, style="Secondary.TButton").pack(side="right", padx=(0, 8))
-        ttk.Button(btn_row, text="Save", command=do_save, style="Action.TButton").pack(side="right")
+        ttk.Button(btn_row, text="Save preferences", command=do_save, style="Action.TButton").pack(side="right")
         dialog.grab_set()
 
     # ----------------------------- Scheduled Auto-Update ---------------------
     def show_schedule_wizard(self):
         if os.name != 'nt':
-            messagebox.showinfo("Not Supported", "Scheduled auto-update uses Windows Task Scheduler.", parent=self.root)
+            self._show_notice_dialog(
+                "Not supported on this OS",
+                "Scheduled auto-update currently depends on Windows Task Scheduler.",
+                tone="info",
+            )
             return
 
         dialog = tk.Toplevel(self.root)
-        dialog.title("Schedule Auto-Update")
-        dialog.configure(bg=PALETTE["base"])
-        dialog.transient(self.root)
-        dialog.geometry("560x340")
-
-        ttk.Label(dialog, text="Schedule Auto-Update", font=("Segoe UI Semibold", 14)).pack(anchor='w', padx=20, pady=(20, 2))
-        ttk.Label(
+        self._configure_modal_window(
             dialog,
-            text=(
-                "Registers a Windows Scheduled Task that runs "
-                f"`{APP_SLUG} --update` at your chosen interval. The task runs with the highest "
-                "privilege level so it can write the hosts file unattended."
-            ),
-            wraplength=520, justify="left", style="Hint.TLabel",
-        ).pack(anchor='w', padx=20, pady=(0, 12))
+            title="Schedule Auto-Update",
+            size="620x430",
+            min_size=(580, 390),
+        )
 
-        freq_frame = ttk.Frame(dialog)
-        freq_frame.pack(fill='x', padx=20, pady=6)
-        ttk.Label(freq_frame, text="Interval:").pack(side='left')
+        intro, _ = self._create_sidebar_card(
+            dialog,
+            "Schedule Auto-Update",
+            (
+                "Register a Windows Scheduled Task that runs "
+                f"`{APP_SLUG} --update` at the interval you choose. "
+                "The task runs with the highest privilege level so unattended updates can still write the hosts file."
+            ),
+            accent=PALETTE["blue"],
+        )
+        ttk.Label(
+            intro,
+            text="Use this when you want a trusted background refresh without opening the editor manually.",
+            style="SectionBody.TLabel",
+            wraplength=520,
+            justify="left",
+        ).pack(anchor="w")
+        ttk.Label(
+            intro,
+            text="If the hosts file is temporarily disabled, scheduled updates now skip safely until you re-enable it.",
+            style="SectionBody.TLabel",
+            wraplength=520,
+            justify="left",
+        ).pack(anchor="w", pady=(8, 0))
+
+        schedule_card, _ = self._create_sidebar_card(
+            dialog,
+            "Task cadence",
+            "Pick how often Windows Task Scheduler should run the updater.",
+            accent=PALETTE["green"],
+        )
+        weekday_default = SCHEDULE_WEEKDAYS[min(datetime.datetime.now().weekday(), len(SCHEDULE_WEEKDAYS) - 1)]
+        freq_frame = ttk.Frame(schedule_card, style="Section.TFrame")
+        freq_frame.pack(fill='x', pady=(0, 8))
+        ttk.Label(freq_frame, text="Interval", style="SectionTitle.TLabel").pack(side='left')
         freq_var = tk.StringVar(value="DAILY")
         ttk.OptionMenu(freq_frame, freq_var, "DAILY", "DAILY", "WEEKLY", "ONLOGON").pack(side='left', padx=(8, 0))
 
-        time_frame = ttk.Frame(dialog)
-        time_frame.pack(fill='x', padx=20, pady=6)
-        ttk.Label(time_frame, text="Time (HH:MM, 24h):").pack(side='left')
+        time_frame = ttk.Frame(schedule_card, style="Section.TFrame")
+        time_frame.pack(fill='x', pady=(0, 6))
+        ttk.Label(time_frame, text="Time (HH:MM, 24h)", style="SectionTitle.TLabel").pack(side='left')
         time_var = tk.StringVar(value="03:30")
-        ttk.Entry(time_frame, textvariable=time_var, width=8).pack(side='left', padx=(8, 0))
+        time_entry = ttk.Entry(time_frame, textvariable=time_var, width=8)
+        time_entry.pack(side='left', padx=(8, 0))
 
-        status = ttk.Label(dialog, text="", style="Hint.TLabel", wraplength=520)
-        status.pack(anchor='w', padx=20, pady=(8, 0))
+        weekday_frame = ttk.Frame(schedule_card, style="Section.TFrame")
+        weekday_frame.pack(fill='x', pady=(0, 8))
+        ttk.Label(weekday_frame, text="Weekday", style="SectionTitle.TLabel").pack(side='left')
+        weekday_var = tk.StringVar(value=weekday_default)
+        weekday_menu = ttk.OptionMenu(weekday_frame, weekday_var, weekday_default, *SCHEDULE_WEEKDAYS)
+        weekday_menu.pack(side='left', padx=(8, 0))
+
+        ttk.Label(
+            schedule_card,
+            text="Daily and weekly tasks use the selected time. On-logon tasks run as soon as you sign in, so the time value is ignored.",
+            style="SectionBody.TLabel",
+            wraplength=520,
+            justify="left",
+        ).pack(anchor="w")
+        cadence_summary_var = tk.StringVar(value="Runs daily at 03:30.")
+        ttk.Label(
+            schedule_card,
+            textvariable=cadence_summary_var,
+            style="StatusMeta.TLabel",
+            wraplength=520,
+            justify="left",
+        ).pack(anchor="w", pady=(10, 0))
+
+        status_card, _ = self._create_sidebar_card(
+            dialog,
+            "Status",
+            "Registration results appear here so you get immediate confirmation or actionable errors.",
+            accent=PALETTE["yellow"],
+        )
+        status = ttk.Label(status_card, text="No task changes yet.", style="SectionBody.TLabel", wraplength=520, justify="left")
+        status.pack(anchor='w')
+
+        def set_status_message(message: str, *, tone: str = "info"):
+            color = {
+                "info": PALETTE["subtext"],
+                "success": PALETTE["green"],
+                "warning": PALETTE["yellow"],
+                "error": PALETTE["red"],
+            }.get(tone, PALETTE["subtext"])
+            status.config(text=message, foreground=color)
+
+        def refresh_schedule_controls(*_args):
+            freq = freq_var.get().strip().upper()
+            uses_time = freq in {"DAILY", "WEEKLY"}
+            uses_weekday = freq == "WEEKLY"
+
+            time_entry.configure(state="normal" if uses_time else "disabled")
+            weekday_menu.configure(state="normal" if uses_weekday else "disabled")
+
+            try:
+                _, summary = build_schtasks_create_command(
+                    "Preview",
+                    "python.exe hosts_editor.py --update",
+                    freq,
+                    start_time=time_var.get(),
+                    weekday=weekday_var.get(),
+                )
+                cadence_summary_var.set(summary)
+            except ValueError as exc:
+                cadence_summary_var.set(str(exc))
+
+        freq_var.trace_add("write", refresh_schedule_controls)
+        time_var.trace_add("write", refresh_schedule_controls)
+        weekday_var.trace_add("write", refresh_schedule_controls)
+        refresh_schedule_controls()
 
         def do_register():
             task_name = "HostsFileGet Auto-Update"
             interpreter = sys.executable
             script = os.path.abspath(sys.argv[0] if not getattr(sys, 'frozen', False) else sys.executable)
             command = f'"{interpreter}" "{script}" --update' if not getattr(sys, 'frozen', False) else f'"{script}" --update'
-            tr = command
             freq = freq_var.get()
-            args = [
-                'schtasks', '/Create', '/TN', task_name, '/TR', tr,
-                '/SC', freq, '/RL', 'HIGHEST', '/F',
-            ]
-            if freq in ("DAILY", "WEEKLY"):
-                args += ['/ST', time_var.get().strip() or "03:30"]
+            try:
+                args, cadence_summary = build_schtasks_create_command(
+                    task_name,
+                    command,
+                    freq,
+                    start_time=time_var.get(),
+                    weekday=weekday_var.get(),
+                )
+            except ValueError as exc:
+                set_status_message(str(exc), tone="error")
+                self.update_status(f"Scheduled auto-update not registered: {exc}", is_error=True)
+                if "weekday" in str(exc).lower():
+                    weekday_menu.focus_set()
+                else:
+                    time_entry.focus_set()
+                    time_entry.selection_range(0, tk.END)
+                return
             try:
                 proc = subprocess.run(args, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
                 if proc.returncode == 0:
-                    status.config(text=f"Task '{task_name}' registered successfully.", foreground=PALETTE["green"])
-                    self.update_status(f"Scheduled auto-update: {freq} @ {time_var.get()}.")
+                    set_status_message(f"Task '{task_name}' registered successfully. {cadence_summary}", tone="success")
+                    self.update_status(f"Scheduled auto-update registered. {cadence_summary}")
                 else:
                     err = (proc.stderr or proc.stdout or "").strip() or f"schtasks exit {proc.returncode}"
-                    status.config(text=err, foreground=PALETTE["red"])
+                    set_status_message(err, tone="error")
+                    self.update_status(f"Scheduled auto-update failed: {err}", is_error=True)
             except Exception as e:
-                status.config(text=f"Failed to register task: {e}", foreground=PALETTE["red"])
+                set_status_message(f"Failed to register task: {e}", tone="error")
+                self.update_status(f"Scheduled auto-update failed: {e}", is_error=True)
 
         def do_unregister():
             task_name = "HostsFileGet Auto-Update"
@@ -3821,14 +5025,23 @@ class HostsFileEditor:
                     capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW,
                 )
                 if proc.returncode == 0:
-                    status.config(text="Task removed.", foreground=PALETTE["yellow"])
+                    set_status_message("Task removed.", tone="warning")
+                    self.update_status("Scheduled auto-update removed.")
                 else:
-                    status.config(text=(proc.stderr or proc.stdout).strip(), foreground=PALETTE["red"])
+                    err = (proc.stderr or proc.stdout or "").strip()
+                    if "cannot find the file specified" in err.lower():
+                        err = "No scheduled auto-update task was registered."
+                        set_status_message(err, tone="warning")
+                        self.update_status(err)
+                    else:
+                        set_status_message(err or "Could not remove the scheduled task.", tone="error")
+                        self.update_status(f"Scheduled auto-update removal failed: {err or 'unknown error'}", is_error=True)
             except Exception as e:
-                status.config(text=f"Failed to remove task: {e}", foreground=PALETTE["red"])
+                set_status_message(f"Failed to remove task: {e}", tone="error")
+                self.update_status(f"Scheduled auto-update removal failed: {e}", is_error=True)
 
         btn_row = ttk.Frame(dialog)
-        btn_row.pack(fill='x', padx=20, pady=(16, 20))
+        btn_row.pack(fill='x', padx=20, pady=(6, 20))
         ttk.Button(btn_row, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
         ttk.Button(btn_row, text="Remove Schedule", command=do_unregister, style="Danger.TButton").pack(side="right", padx=(0, 8))
         ttk.Button(btn_row, text="Register / Replace", command=do_register, style="Action.TButton").pack(side="right", padx=(0, 8))
@@ -3857,27 +5070,46 @@ class HostsFileEditor:
             unique_candidates.append((domain, kind, ln))
         for category, sources in self.BLOCKLIST_SOURCES.items():
             for name, _url, _tooltip in sources:
-                unique_candidates.append((f"{name} — {category}", "curated source", None))
+                unique_candidates.append((f"{name} - {category}", "curated source", None))
         for entry in self.custom_sources:
             unique_candidates.append((entry["name"], "custom source", None))
 
         dialog = tk.Toplevel(self.root)
-        dialog.title("Goto Anything")
-        dialog.configure(bg=PALETTE["base"])
-        dialog.transient(self.root)
-        dialog.geometry("640x440")
+        self._configure_modal_window(
+            dialog,
+            title="Goto Anything",
+            size="700x520",
+            min_size=(620, 420),
+        )
+
+        intro, _ = self._create_sidebar_card(
+            dialog,
+            "Goto Anything",
+            "Jump to a domain in the editor or narrow the source catalog from one fast command palette.",
+            accent=PALETTE["accent"],
+        )
+        ttk.Label(
+            intro,
+            text="Type a few characters to search domains, curated sources, or saved custom sources.",
+            style="SectionBody.TLabel",
+            wraplength=620,
+            justify="left",
+        ).pack(anchor="w")
 
         query_var = tk.StringVar()
-        entry = ttk.Entry(dialog, textvariable=query_var, font=("Segoe UI", 11))
-        entry.pack(fill='x', padx=12, pady=(12, 4))
+        query_row = ttk.Frame(dialog, padding=(20, 0, 20, 0))
+        query_row.pack(fill="x")
+        entry = ttk.Entry(query_row, textvariable=query_var, font=("Segoe UI", 11))
+        entry.pack(fill='x', expand=True, side="left")
         entry.focus_set()
+        summary_label = ttk.Label(dialog, text="", style="StatusMeta.TLabel")
+        summary_label.pack(anchor="w", padx=20, pady=(8, 0))
 
         listbox = tk.Listbox(
-            dialog, bg=PALETTE["crust"], fg=PALETTE["text"],
-            selectbackground=PALETTE["blue"], selectforeground=PALETTE["crust"],
-            font=("Consolas", 10), relief="flat", highlightthickness=0, borderwidth=0, activestyle="none",
+            dialog,
         )
-        listbox.pack(expand=True, fill='both', padx=12, pady=(0, 12))
+        self._style_listbox_surface(listbox, font_spec=self.mono_small_font)
+        listbox.pack(expand=True, fill='both', padx=20, pady=(12, 12))
 
         current_results: list[tuple[str, str, int | None]] = []
 
@@ -3896,6 +5128,7 @@ class HostsFileEditor:
                 suffix = f" (line {ln})" if ln else ""
                 listbox.insert(tk.END, f"[{kind}] {label}{suffix}")
                 current_results.append((label, kind, ln))
+            summary_label.config(text=f"{len(current_results)} result(s) shown.")
 
         def on_enter(_event=None):
             try:
@@ -3910,7 +5143,7 @@ class HostsFileEditor:
                     self.text_area.mark_set('insert', f"{ln}.0")
                     self.text_area.see(f"{ln}.0")
                 elif kind == "curated source":
-                    self.source_filter_var.set(label.split(" — ")[0])
+                    self.source_filter_var.set(label.split(" - ")[0])
                 return "break"
             except (IndexError, tk.TclError):
                 return
@@ -3929,28 +5162,39 @@ class HostsFileEditor:
         lines = self.get_lines()
         buckets = summarize_source_contributions(lines)
         dialog = tk.Toplevel(self.root)
-        dialog.title("Sources Report")
-        dialog.configure(bg=PALETTE["base"])
-        dialog.transient(self.root)
-        dialog.geometry("720x520")
-
-        ttk.Label(dialog, text="Sources Report", font=("Segoe UI Semibold", 14)).pack(anchor='w', padx=16, pady=(16, 2))
-        ttk.Label(
+        self._configure_modal_window(
             dialog,
-            text="Ranked by blocking-entry contribution. Use this to prune bloated or redundant feeds.",
-            wraplength=660, justify="left", style="Hint.TLabel",
-        ).pack(anchor='w', padx=16, pady=(0, 10))
-
-        body = scrolledtext.ScrolledText(
-            dialog, wrap=tk.NONE, font=("Consolas", 10),
-            bg=PALETTE["crust"], fg=PALETTE["text"], relief="flat",
+            title="Sources Report",
+            size="760x580",
+            min_size=(680, 520),
         )
-        body.pack(expand=True, fill='both', padx=16, pady=(0, 12))
+
+        total_blocks = sum(b["blocking_entries"] for b in buckets)
+        intro, _ = self._create_sidebar_card(
+            dialog,
+            "Sources report",
+            "Ranked by blocking-entry contribution so you can spot bloated, redundant, or low-value imports faster.",
+            accent=PALETTE["accent"],
+        )
+        ttk.Label(
+            intro,
+            text=(
+                f"{len(buckets):,} source bucket{'s' if len(buckets) != 1 else ''} detected. "
+                f"{total_blocks:,} blocking entr{'y' if total_blocks == 1 else 'ies'} accounted for in the current editor."
+            ),
+            style="SectionBody.TLabel",
+            wraplength=680,
+            justify="left",
+        ).pack(anchor="w")
+
+        body = scrolledtext.ScrolledText(dialog, wrap=tk.NONE)
+        self._style_code_surface(body, font_spec=self.mono_small_font)
+        body.pack(expand=True, fill='both', padx=20, pady=(0, 12))
 
         if not buckets:
             body.insert(tk.END, "(editor is empty)\n")
         else:
-            total_blocks = sum(b["blocking_entries"] for b in buckets) or 1
+            total_blocks = total_blocks or 1
             body.insert(tk.END, f"{'Source':<50} {'Blocks':>10} {'Lines':>10} {'Share':>8}\n")
             body.insert(tk.END, "-" * 80 + "\n")
             for b in buckets:
@@ -3960,7 +5204,7 @@ class HostsFileEditor:
         body.configure(state="disabled")
 
         btn_row = ttk.Frame(dialog)
-        btn_row.pack(fill="x", padx=16, pady=(0, 16))
+        btn_row.pack(fill="x", padx=20, pady=(0, 20))
         ttk.Button(btn_row, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
         dialog.grab_set()
 
@@ -3996,7 +5240,7 @@ class HostsFileEditor:
         if self._has_completed_first_run:
             return
         # Don't show if user already has an existing whitelist or custom
-        # sources — those signal returning users whose config predated
+        # sources - those signal returning users whose config predated
         # v2.14 where this flag was introduced.
         if self.custom_sources or self._last_saved_whitelist_text.strip():
             self._has_completed_first_run = True
@@ -4006,29 +5250,98 @@ class HostsFileEditor:
 
     def show_first_run_wizard(self):
         dialog = tk.Toplevel(self.root)
-        dialog.title("Welcome to HostsFileGet")
-        dialog.configure(bg=PALETTE["base"])
-        dialog.transient(self.root)
-        dialog.geometry("640x560")
-
-        ttk.Label(dialog, text=f"Welcome to {APP_NAME}", font=("Segoe UI Semibold", 16)).pack(anchor='w', padx=20, pady=(20, 2))
-        ttk.Label(
+        self._configure_modal_window(
             dialog,
-            text=(
-                "Pick the categories you want blocked and we'll import a small curated starter set "
-                "for each one. You can always add more sources later from the sidebar."
-            ),
-            wraplength=600, justify="left", style="Hint.TLabel",
-        ).pack(anchor='w', padx=20, pady=(0, 12))
+            title=f"Welcome to {APP_NAME}",
+            size="700x620",
+            min_size=(660, 560),
+        )
+
+        intro, _ = self._create_sidebar_card(
+            dialog,
+            f"Welcome to {APP_NAME}",
+            "Pick the categories you want blocked and the app will import a small, curated starter set for each one.",
+            accent=PALETTE["blue"],
+        )
+        ttk.Label(
+            intro,
+            text="You can keep the safe defaults, skip for now, or fine-tune sources later from the sidebar. Nothing is written to disk until you save.",
+            style="SectionBody.TLabel",
+            wraplength=560,
+            justify="left",
+        ).pack(anchor="w")
 
         body = ttk.Frame(dialog)
         body.pack(expand=True, fill='both', padx=20)
 
         vars_by_category: dict[str, tk.BooleanVar] = {}
-        for label, default_on, _ in self.FIRST_RUN_BUNDLES:
+        selected_summary = ttk.Label(dialog, text="", style="StatusMeta.TLabel")
+        selected_summary.pack(anchor="w", padx=20, pady=(8, 0))
+
+        def update_summary():
+            selected_categories = [
+                label for label, var in vars_by_category.items()
+                if var.get()
+            ]
+            source_count = sum(
+                len(sources)
+                for label, _, sources in self.FIRST_RUN_BUNDLES
+                if vars_by_category[label].get()
+            )
+            if not selected_categories:
+                selected_summary.config(text="No starter bundles selected yet.")
+            else:
+                selected_summary.config(
+                    text=(
+                        f"{len(selected_categories)} categor"
+                        f"{'y' if len(selected_categories) == 1 else 'ies'} selected, "
+                        f"{source_count} curated source{'s' if source_count != 1 else ''} ready to import."
+                    )
+                )
+
+        for label, default_on, sources in self.FIRST_RUN_BUNDLES:
             var = tk.BooleanVar(value=default_on)
             vars_by_category[label] = var
-            ttk.Checkbutton(body, text=label, variable=var).pack(anchor='w', pady=2)
+            bundle_card = tk.Frame(
+                body,
+                bg=PALETTE["panel"],
+                highlightthickness=1,
+                highlightbackground=PALETTE["border"],
+                highlightcolor=PALETTE["focus"],
+                bd=0,
+            )
+            bundle_card.pack(fill="x", pady=(0, 8))
+            inner = ttk.Frame(bundle_card, style="Section.TFrame", padding=(16, 12, 16, 12))
+            inner.pack(fill="both", expand=True)
+
+            top = ttk.Frame(inner, style="Section.TFrame")
+            top.pack(fill="x")
+            cb = ttk.Checkbutton(top, text=label, variable=var, command=update_summary)
+            cb.pack(side="left")
+            default_text = "Recommended" if default_on else "Optional"
+            tk.Label(
+                top,
+                text=default_text,
+                bg=PALETTE["green"] if default_on else PALETTE["surface1"],
+                fg="#0b1020" if default_on else PALETTE["text"],
+                padx=8,
+                pady=3,
+                font=("Segoe UI Semibold", 8),
+                bd=0,
+            ).pack(side="right")
+
+            preview_names = ", ".join(name for name, _url in sources[:2])
+            if len(sources) > 2:
+                preview_names += f", +{len(sources) - 2} more"
+            ttk.Label(
+                inner,
+                text=f"{len(sources)} starter source{'s' if len(sources) != 1 else ''}: {preview_names}",
+                style="SectionBody.TLabel",
+                wraplength=580,
+                justify="left",
+            ).pack(anchor="w", pady=(6, 0))
+
+        update_summary()
 
         btn_row = ttk.Frame(dialog)
         btn_row.pack(fill="x", padx=20, pady=(12, 20))
@@ -4050,7 +5363,7 @@ class HostsFileEditor:
             dialog.destroy()
 
         ttk.Button(btn_row, text="Skip for now", command=do_skip, style="Secondary.TButton").pack(side="left")
-        ttk.Button(btn_row, text="Import Selected", command=do_apply, style="Action.TButton").pack(side="right")
+        ttk.Button(btn_row, text="Import selected bundles", command=do_apply, style="Action.TButton").pack(side="right")
         dialog.grab_set()
 
     # ----------------------------- Panic Restore -----------------------------
@@ -4058,17 +5371,18 @@ class HostsFileEditor:
         """Replace the editor with the stock Microsoft default hosts.
 
         Unlike ``revert_to_backup`` this does not depend on any user-created
-        snapshot — handy when every backup is also broken or when the user
+        snapshot - handy when every backup is also broken or when the user
         just wants the original Windows baseline back.
         """
         if self._block_during_import("Panic Restore"):
             return
-        if not messagebox.askyesno(
-            "Panic Restore",
-            "Replace the editor with the Microsoft default hosts file?\n\n"
-            "Your current editor content is discarded. Use File > Save Raw "
-            "to commit the stock template to disk.",
-            parent=self.root,
+        if not self._confirm_dialog(
+            "Load Microsoft default hosts?",
+            "This replaces the current editor contents with the stock Microsoft template.",
+            tone="warning",
+            confirm_text="Load default template",
+            cancel_text="Keep current editor",
+            details="Nothing is written to disk yet. Use File > Save Raw afterward if you want to commit the template to the real hosts file.",
         ):
             return
         lines = STOCK_MICROSOFT_HOSTS.splitlines()
@@ -4088,7 +5402,7 @@ class HostsFileEditor:
         )
         total_removed = sum(stats.values())
         if total_removed == 0:
-            self.update_status(f"{label}: nothing to remove — editor is already clean.")
+            self.update_status(f"{label}: nothing to remove - editor is already clean.")
             return
 
         def apply_to_editor(approved_lines):
@@ -4131,34 +5445,76 @@ class HostsFileEditor:
             return
 
         dialog = tk.Toplevel(self.root)
-        dialog.title("Remove Import Section")
-        dialog.configure(bg=PALETTE["base"])
-        dialog.transient(self.root)
-        dialog.geometry("620x480")
-
-        ttk.Label(dialog, text="Remove Import Section", font=("Segoe UI Semibold", 13)).pack(anchor='w', padx=16, pady=(16, 2))
-        ttk.Label(
+        self._configure_modal_window(
             dialog,
-            text="Each row is an imported source block detected in the editor. Removing a section deletes every line between its Start and End markers, including the markers themselves.",
-            wraplength=580, justify="left", style="Hint.TLabel",
-        ).pack(anchor='w', padx=16, pady=(0, 10))
+            title="Remove Import Section",
+            size="760x620",
+            min_size=(680, 520),
+        )
 
-        list_frame = ttk.Frame(dialog)
-        list_frame.pack(expand=True, fill='both', padx=16, pady=(0, 12))
+        intro, _ = self._create_sidebar_card(
+            dialog,
+            "Remove imported sections",
+            "Each row is an imported source block detected in the editor. Removing a section deletes every line between its Start and End markers, including the markers themselves.",
+            accent=PALETTE["red"],
+        )
+        ttk.Label(
+            intro,
+            text=f"{len(sections):,} import section{'s' if len(sections) != 1 else ''} found in the current editor.",
+            style="SectionBody.TLabel",
+            wraplength=680,
+            justify="left",
+        ).pack(anchor="w")
+
+        list_frame = ttk.Frame(dialog, padding=(20, 0, 20, 0))
+        list_frame.pack(expand=True, fill='both')
+
+        canvas = tk.Canvas(list_frame, bg=PALETTE["base"], highlightthickness=0, bd=0)
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
+        content = ttk.Frame(canvas)
+        content.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure("section-frame", width=e.width))
+        canvas.create_window((0, 0), window=content, anchor="nw", tags=("section-frame",))
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
 
         selected = {idx: tk.BooleanVar(value=False) for idx, _ in enumerate(sections)}
         for idx, section in enumerate(sections):
-            label = (
-                f"[{section['mode']}] {section['name']}  "
-                f"(lines {section['start']+1:,} - {section['end']+1:,}, "
-                f"{section['end'] - section['start'] + 1:,} lines)"
+            shell = tk.Frame(
+                content,
+                bg=PALETTE["panel_alt"],
+                highlightthickness=1,
+                highlightbackground=PALETTE["border"],
+                highlightcolor=PALETTE["focus"],
+                bd=0,
             )
-            ttk.Checkbutton(list_frame, text=label, variable=selected[idx]).pack(anchor='w', padx=4, pady=2)
+            shell.pack(fill="x", pady=(0, 6))
+            inner = ttk.Frame(shell, style="Inset.TFrame", padding=(12, 10, 12, 10))
+            inner.pack(fill="both", expand=True)
+
+            top = ttk.Frame(inner, style="Inset.TFrame")
+            top.pack(fill="x")
+            ttk.Checkbutton(
+                top,
+                text=f"{section['name']} [{section['mode']}]",
+                variable=selected[idx],
+            ).pack(side="left")
+            ttk.Label(
+                top,
+                text=f"{section['end'] - section['start'] + 1:,} lines",
+                style="SectionBody.TLabel",
+            ).pack(side="right")
+            ttk.Label(
+                inner,
+                text=f"Lines {section['start'] + 1:,} to {section['end'] + 1:,}",
+                style="SectionBody.TLabel",
+            ).pack(anchor="w", pady=(6, 0))
 
         def do_remove():
             targets = [sections[i] for i, var in selected.items() if var.get()]
             if not targets:
-                dialog.destroy()
+                self.update_status("No import sections selected.", is_error=True)
                 return
             # Delete in reverse index order so later sections' indices stay valid.
             new_lines = list(lines)
@@ -4183,7 +5539,7 @@ class HostsFileEditor:
             )
 
         btn_row = ttk.Frame(dialog)
-        btn_row.pack(fill="x", padx=16, pady=(0, 16))
+        btn_row.pack(fill="x", padx=20, pady=(12, 20))
         ttk.Button(btn_row, text="Remove Selected", command=do_remove, style="Danger.TButton").pack(side="right")
         ttk.Button(btn_row, text="Cancel", command=dialog.destroy, style="Secondary.TButton").pack(side="right", padx=(0, 8))
         dialog.grab_set()
@@ -4198,13 +5554,19 @@ class HostsFileEditor:
         try:
             infos = socket.getaddrinfo(domain, None)
         except socket.gaierror as e:
-            messagebox.showinfo("Resolve Domain", f"{domain}\n\nResolution failed: {e}", parent=self.root)
+            self._show_notice_dialog(
+                f"Resolve domain: {domain}",
+                "DNS resolution failed for this domain.",
+                tone="warning",
+                details=str(e),
+            )
             return
         addrs = sorted({info[4][0] for info in infos})
-        messagebox.showinfo(
-            "Resolve Domain",
-            f"{domain}\n\n" + "\n".join(addrs) if addrs else f"{domain}\n\n(no addresses)",
-            parent=self.root,
+        self._show_text_report_dialog(
+            f"Resolve domain: {domain}",
+            "Live DNS resolution from the current machine.",
+            "\n".join(addrs) if addrs else "(no addresses)",
+            tone="info",
         )
 
     def _ctx_ping_domain(self):
@@ -4226,10 +5588,19 @@ class HostsFileEditor:
                 output = proc.stdout.strip() or proc.stderr.strip() or "(no output)"
             except Exception as e:
                 output = f"Ping failed: {e}"
-            self._safe_after(0, lambda o=output: messagebox.showinfo(f"Ping {domain}", o, parent=self.root))
+            self._safe_after(
+                0,
+                lambda o=output: self._show_text_report_dialog(
+                    f"Ping {domain}",
+                    "Live network reachability output from the current machine.",
+                    o,
+                    tone="info",
+                    height=520,
+                ),
+            )
 
         threading.Thread(target=worker, daemon=True).start()
-        self.update_status(f"Pinging {domain}…")
+        self.update_status(f"Pinging {domain}...")
 
     # ----------------------------- Editor Context Menu -----------------------
     def _build_editor_context_menu(self):
@@ -4247,7 +5618,7 @@ class HostsFileEditor:
         menu.add_command(label="Resolve domain (real DNS)", command=self._ctx_resolve_domain)
         menu.add_command(label="Ping domain", command=self._ctx_ping_domain)
         menu.add_separator()
-        menu.add_command(label="Check this domain…", command=self._ctx_check_domain)
+        menu.add_command(label="Check this domain...", command=self._ctx_check_domain)
         self._editor_context_menu = menu
 
     def _ctx_line_info(self):
@@ -4303,16 +5674,7 @@ class HostsFileEditor:
 
     def _ctx_check_domain(self):
         _, _, domain = self._ctx_line_info()
-        self.show_check_domain()
-        # Best-effort: prefill the dialog's query. We rely on it being the
-        # topmost Toplevel that just opened.
-        if domain:
-            try:
-                top = self.root.tk.call('winfo', 'children', '.')
-                # Can't reliably prefill without refactoring the dialog to
-                # return its entry. Status message is the minimum signal.
-            except tk.TclError:
-                pass
+        self.show_check_domain(initial_domain=domain)
 
     def toggle_selection_comment(self, _event=None):
         try:
@@ -4367,24 +5729,34 @@ class HostsFileEditor:
         if not url:
             return
         dialog = tk.Toplevel(self.root)
-        dialog.title(f"Preview Source: {name}")
-        dialog.configure(bg=PALETTE["base"])
-        dialog.transient(self.root)
-        dialog.geometry("760x540")
-
-        ttk.Label(dialog, text=f"Preview: {name}", font=("Segoe UI Semibold", 13)).pack(anchor='w', padx=16, pady=(16, 2))
-        ttk.Label(
+        self._configure_modal_window(
             dialog,
-            text=f"{url}\nFirst ~{SOURCE_PREVIEW_MAX_LINES} lines fetched below. This does NOT import; use the source button to import.",
-            wraplength=720, justify="left", style="Hint.TLabel",
-        ).pack(anchor='w', padx=16, pady=(0, 8))
-
-        body = scrolledtext.ScrolledText(
-            dialog, wrap=tk.NONE, font=("Consolas", 10),
-            bg=PALETTE["crust"], fg=PALETTE["text"], relief="flat",
+            title=f"Preview Source: {name}",
+            size="820x620",
+            min_size=(720, 540),
         )
-        body.pack(expand=True, fill='both', padx=16, pady=(0, 12))
-        body.insert(tk.END, "Fetching…\n")
+
+        intro, _ = self._create_sidebar_card(
+            dialog,
+            f"Preview source: {name}",
+            "Fetch a small snippet so you can inspect the feed before importing it into the editor.",
+            accent=PALETTE["blue"],
+        )
+        ttk.Label(
+            intro,
+            text=f"{url}\nShowing the first ~{SOURCE_PREVIEW_MAX_LINES} lines only. This preview never edits the editor on its own.",
+            wraplength=720,
+            justify="left",
+            style="SectionBody.TLabel",
+        ).pack(anchor='w')
+
+        status_label = ttk.Label(dialog, text="Fetching preview...", style="StatusMeta.TLabel")
+        status_label.pack(anchor="w", padx=20, pady=(8, 0))
+
+        body = scrolledtext.ScrolledText(dialog, wrap=tk.NONE)
+        self._style_code_surface(body, font_spec=self.mono_small_font)
+        body.pack(expand=True, fill='both', padx=20, pady=(12, 12))
+        body.insert(tk.END, "Fetching...\n")
         body.configure(state="disabled")
 
         def write_body(text: str):
@@ -4410,21 +5782,24 @@ class HostsFileEditor:
                     )
                 if looks_like_html_document(lines):
                     self._safe_after(0, lambda: write_body(
-                        "This URL returned HTML rather than a hosts list — the feed may be behind a captive page or has moved."
+                        "This URL returned HTML rather than a hosts list - the feed may be behind a captive page or has moved."
                     ))
+                    self._safe_after(0, lambda: status_label.config(text="Preview failed: received HTML instead of a hosts list.", foreground=PALETTE["red"]))
                     return
                 snippet = '\n'.join(lines[:SOURCE_PREVIEW_MAX_LINES])
                 truncated = len(lines) > SOURCE_PREVIEW_MAX_LINES
                 if truncated:
-                    snippet += f"\n\n… ({len(lines) - SOURCE_PREVIEW_MAX_LINES} more lines not shown)"
+                    snippet += f"\n\n... ({len(lines) - SOURCE_PREVIEW_MAX_LINES} more lines not shown)"
                 self._safe_after(0, lambda: write_body(snippet or "(empty)"))
+                self._safe_after(0, lambda: status_label.config(text="Preview fetched successfully.", foreground=PALETTE["green"]))
             except Exception as e:
                 self._safe_after(0, lambda err=e: write_body(f"Could not fetch preview:\n{err}"))
+                self._safe_after(0, lambda err=e: status_label.config(text=f"Preview failed: {type(err).__name__}", foreground=PALETTE["red"]))
 
         threading.Thread(target=worker, daemon=True).start()
 
         btn_row = ttk.Frame(dialog)
-        btn_row.pack(fill="x", padx=16, pady=(0, 16))
+        btn_row.pack(fill="x", padx=20, pady=(0, 20))
         ttk.Button(btn_row, text="Import This Source", command=lambda: (dialog.destroy(), self.start_single_import(name, url)), style="Action.TButton").pack(side="right")
         ttk.Button(btn_row, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right", padx=(0, 8))
 
@@ -4434,7 +5809,13 @@ class HostsFileEditor:
         try:
             if os.path.exists(self.HOSTS_FILE_PATH):
                 if not is_initial_load and self._has_unsaved_changes():
-                    if not messagebox.askyesno("Reload From Disk", "Reload from disk and discard the current unsaved editor changes?", parent=self.root):
+                    if not self._confirm_dialog(
+                        "Reload from disk?",
+                        "Reloading from disk will discard the current unsaved editor changes.",
+                        tone="warning",
+                        confirm_text="Reload from disk",
+                        cancel_text="Keep current editor",
+                    ):
                         return
 
                 lines = read_text_file_lines(self.HOSTS_FILE_PATH)
@@ -4447,7 +5828,13 @@ class HostsFileEditor:
                 )
                 self.set_text(lines)
 
-                self.update_status(f"Loaded hosts file: '{self.HOSTS_FILE_PATH}'")
+                if self.is_hosts_disabled():
+                    self.update_status(
+                        "Warning: Hosts are currently disabled. The active file is the temporary minimal template; re-enable before saving editor changes.",
+                        is_error=False,
+                    )
+                else:
+                    self.update_status(f"Loaded hosts file: '{self.HOSTS_FILE_PATH}'")
             else:
                 if is_initial_load:
                     self._last_applied_raw_hash = None
@@ -4456,7 +5843,12 @@ class HostsFileEditor:
                 self.update_status("Hosts file not found.", is_error=True)
         except Exception as e:
             self.update_status(f"Error loading file: {e}", is_error=True)
-            messagebox.showerror("Error", f"Error loading file:\n{e}", parent=self.root)
+            self._show_notice_dialog(
+                "Could not load the hosts file",
+                "The app could not read the current hosts file from disk.",
+                tone="error",
+                details=str(e),
+            )
 
     # ----------------------------- Save Logic (Split) -----------------------------------
     
@@ -4545,18 +5937,54 @@ class HostsFileEditor:
 
     def _execute_save(self, content_to_save, source_description):
         if not self.is_admin:
-            messagebox.showerror("Error", f"{source_description} failed: Permission denied. Run as Administrator.", parent=self.root)
+            self._show_notice_dialog(
+                "Administrator privileges required",
+                f"{source_description} cannot write the real hosts file without Administrator rights.",
+                tone="error",
+                details="Relaunch the app as Administrator, or enable Dry-run mode if you only want to preview the result.",
+            )
             self.update_status(f"{source_description} failed: Permission denied.", is_error=True)
             return False
 
+        if self.is_hosts_disabled():
+            self._show_notice_dialog(
+                "Hosts file is currently disabled",
+                f"{source_description} is blocked while the hosts file is in disabled mode.",
+                tone="warning",
+                details=(
+                    "The active hosts file is only the temporary minimal Microsoft template right now.\n\n"
+                    "Saving into that temporary file would be overwritten the next time you re-enable your preserved hosts configuration. "
+                    "Re-enable the hosts file first, then save your editor changes."
+                ),
+                height=420,
+            )
+            self.update_status(
+                f"{source_description} blocked: re-enable the hosts file before saving changes.",
+                is_error=True,
+            )
+            return False
+
         if not content_to_save.strip():
-            if not messagebox.askyesno("Save Empty Hosts File", "The editor is empty. Replace the current hosts file with an empty one?", parent=self.root):
+            if not self._confirm_dialog(
+                "Save an empty hosts file?",
+                "The editor is empty. Saving now will replace the current hosts file with an empty file.",
+                tone="warning",
+                confirm_text="Save empty file",
+                cancel_text="Keep current file",
+            ):
                 return False
 
         try:
             self._rotate_backups()
         except Exception as e:
-            if not messagebox.askyesno("Backup Could Not Be Created", f"Could not create a backup before saving.\nError: {e}\n\nContinue anyway?", parent=self.root):
+            if not self._confirm_dialog(
+                "Backup could not be created",
+                "A safety backup could not be created before saving.",
+                tone="warning",
+                confirm_text="Save anyway",
+                cancel_text="Cancel save",
+                details=str(e),
+            ):
                 return False
 
         try:
@@ -4576,11 +6004,22 @@ class HostsFileEditor:
                     "- An earlier import is still being indexed."
                 )
             self.update_status(f"{source_description} permission denied: {e}", is_error=True)
-            messagebox.showerror("Permission Denied", f"{source_description} could not write the hosts file:\n{e}{hint}", parent=self.root)
+            self._show_notice_dialog(
+                "Permission denied while saving",
+                f"{source_description} could not write the hosts file.",
+                tone="error",
+                details=f"{e}{hint}",
+                height=420,
+            )
             return False
         except Exception as e:
             self.update_status(f"{source_description} error: {e}", is_error=True)
-            messagebox.showerror("Error", f"{source_description} error: {e}", parent=self.root)
+            self._show_notice_dialog(
+                f"{source_description} failed",
+                "The save operation ended with an unexpected error.",
+                tone="error",
+                details=str(e),
+            )
             return False
 
     # ----------------------- Revert to Backup (Preview + Apply) ----------------
@@ -4596,23 +6035,35 @@ class HostsFileEditor:
             current_lines = read_text_file_lines(self.HOSTS_FILE_PATH)
         except Exception as e:
             self.update_status(f"Error reading current hosts: {e}", is_error=True)
-            messagebox.showerror("Error", f"Error reading current hosts:\n{e}", parent=self.root)
+            self._show_notice_dialog(
+                "Could not read the current hosts file",
+                "The restore preview could not load the active hosts file.",
+                tone="error",
+                details=str(e),
+            )
             return
 
         try:
             backup_lines = read_text_file_lines(backup_path)
         except Exception as e:
             self.update_status(f"Error reading backup: {e}", is_error=True)
-            messagebox.showerror("Error", f"Error reading backup:\n{e}", parent=self.root)
+            self._show_notice_dialog(
+                "Could not read the backup file",
+                "The restore preview could not load the backup copy.",
+                tone="error",
+                details=str(e),
+            )
             return
 
         def do_restore(approved_lines):
             try:
                 if self._has_unsaved_changes():
-                    if not messagebox.askyesno(
-                        "Discard Unsaved Changes",
-                        "Restoring from backup will replace your current unsaved editor content. Continue?",
-                        parent=self.root,
+                    if not self._confirm_dialog(
+                        "Replace unsaved editor content?",
+                        "Restoring from backup will replace your current unsaved editor content.",
+                        tone="warning",
+                        confirm_text="Restore from backup",
+                        cancel_text="Keep current editor",
                     ):
                         # Give the user visible feedback that the whole
                         # revert flow was cancelled. Without this the
@@ -4632,7 +6083,12 @@ class HostsFileEditor:
                 self.update_status("Success: Restored the hosts file from backup.")
             except Exception as e:
                 self.update_status(f"Restore error: {e}", is_error=True)
-                messagebox.showerror("Error", f"Restore error: {e}", parent=self.root)
+                self._show_notice_dialog(
+                    "Restore from backup failed",
+                    "The backup preview was approved, but the restore operation did not complete.",
+                    tone="error",
+                    details=str(e),
+                )
 
         PreviewWindow(
             self,
@@ -4680,7 +6136,7 @@ class HostsFileEditor:
 
     def start_import_all(self):
         # Trigger the new Selection Dialog
-        dialog = BulkSelectionDialog(self.root, self.BLOCKLIST_SOURCES, self.custom_sources)
+        dialog = BulkSelectionDialog(self, self.BLOCKLIST_SOURCES, self.custom_sources)
         self.root.wait_window(dialog)
         
         if dialog.result:
@@ -4694,6 +6150,12 @@ class HostsFileEditor:
         if self.is_importing:
              self.update_status("An import is already in progress.", is_error=True)
              return
+
+        while True:
+            try:
+                self.import_queue.get_nowait()
+            except queue.Empty:
+                break
              
         self.is_importing = True
         self.stop_import_flag.clear()
@@ -4702,6 +6164,8 @@ class HostsFileEditor:
         self._set_status_hint("Batch imports run sequentially. Stop waits for the current download step.")
         
         # UI Prep
+        self.progress_status_label.config(text=f"0 / {len(sources)} queued")
+        self.progress_status_label.pack(side=tk.RIGHT, padx=(0, 8))
         self.progress_bar.pack(side=tk.RIGHT, padx=10)
         self.stop_btn.pack(side=tk.RIGHT, padx=5)
         self.progress_bar['value'] = 0
@@ -4725,6 +6189,7 @@ class HostsFileEditor:
     def _finish_import_ui(self):
         self.is_importing = False
         self.current_import_thread = None
+        self.progress_status_label.pack_forget()
         self.progress_bar.pack_forget()
         self.stop_btn.pack_forget()
         self.stop_btn.configure(state="normal")
@@ -4737,6 +6202,7 @@ class HostsFileEditor:
 
         self.stop_import_flag.set()
         self.stop_btn.configure(state="disabled")
+        self.progress_status_label.config(text="Stopping after current step")
         self.update_status("Warning: Stopping import after the current download step.", is_error=False)
 
     def _import_worker_thread(self, sources, mode):
@@ -4804,17 +6270,14 @@ class HostsFileEditor:
                 if msg_type == "progress":
                     i, total, name = msg[1], msg[2], msg[3]
                     self.progress_bar['value'] = i + 1
+                    self.progress_status_label.config(text=f"{i + 1} / {total}  {name}")
                     self.update_status(f"Importing source {i+1} of {total}: {name}...")
 
                 elif msg_type == "source_fetched":
                     name, url, raw_lines = msg[1], msg[2], msg[3]
-                    # Cap per-source corpus at ~2 MB of text so a huge
-                    # aggregate list can't balloon the session cache.
-                    text = '\n'.join(raw_lines)
-                    if len(text) > 2 * 1024 * 1024:
-                        text = text[: 2 * 1024 * 1024]
-                    self._source_corpus_cache[name] = text
+                    self._cache_source_corpus(name, url, raw_lines)
                     self.source_last_fetched[url] = datetime.datetime.now().isoformat(timespec='seconds')
+                    self._source_metadata_dirty = True
 
                 elif msg_type == "log":
                     text, is_err = msg[1], msg[2]
@@ -4823,21 +6286,24 @@ class HostsFileEditor:
                 
                 elif msg_type == "cancelled":
                     self._finish_import_ui()
+                    self._persist_source_metadata_if_needed()
                     self.update_status("Warning: Batch import cancelled.")
                     return # Stop checking
                  
                 elif msg_type == "done":
                     new_lines, total, success_count, failure_messages = msg[1], msg[2], msg[3], msg[4]
                     self._finish_import_ui()
+                    self._persist_source_metadata_if_needed()
                      
                     if not new_lines:
                         if failure_messages:
                             self.update_status(f"Import finished with {len(failure_messages)} failed source(s) and no usable entries.", is_error=True)
-                            messagebox.showerror(
-                                "Import Failed",
-                                "No usable entries were imported.\n\nFailed sources:\n"
-                                f"{self._summarize_failure_messages(failure_messages)}",
-                                parent=self.root,
+                            self._show_notice_dialog(
+                                "Import failed",
+                                "No usable entries were imported from the selected sources.",
+                                tone="error",
+                                details=self._summarize_failure_messages(failure_messages),
+                                height=460,
                             )
                         else:
                             self.update_status("Import finished, but no usable data was retrieved.", is_error=True)
@@ -4857,11 +6323,12 @@ class HostsFileEditor:
                         failure_suffix = f" {len(failure_messages)} source(s) failed." if failure_messages else ""
                         self.update_status(f"Success: Imported {len(new_lines)} lines from {success_count}/{total} source(s).{failure_suffix}")
                         if failure_messages:
-                            messagebox.showwarning(
-                                "Import Completed with Warnings",
-                                "Some sources could not be imported.\n\nFailed sources:\n"
-                                f"{self._summarize_failure_messages(failure_messages)}",
-                                parent=self.root,
+                            self._show_notice_dialog(
+                                "Import completed with warnings",
+                                "Some selected sources could not be imported, but usable entries were still added to the editor.",
+                                tone="warning",
+                                details=self._summarize_failure_messages(failure_messages),
+                                height=460,
                             )
                     return # Stop checking
 
@@ -4905,7 +6372,12 @@ class HostsFileEditor:
 
         except Exception as e:
             self.update_status(f"Error importing log file: {e}", is_error=True)
-            messagebox.showerror("Import Error", f"An unexpected error occurred while processing the log file:\n{e}", parent=self.root)
+            self._show_notice_dialog(
+                "Could not import pfSense log",
+                "An unexpected error occurred while processing the selected pfSense DNSBL log file.",
+                tone="error",
+                details=str(e),
+            )
             
     def import_nextdns_log(self):
         filepath = self._choose_file(
@@ -4947,7 +6419,12 @@ class HostsFileEditor:
 
         except Exception as e:
             self.update_status(f"Error importing NextDNS log file: {e}", is_error=True)
-            messagebox.showerror("Import Error", f"An unexpected error occurred while processing the NextDNS log file:\n{e}", parent=self.root)
+            self._show_notice_dialog(
+                "Could not import NextDNS log",
+                "An unexpected error occurred while processing the selected NextDNS query log file.",
+                tone="error",
+                details=str(e),
+            )
             
     def append_manual_list(self):
         content = self.manual_text_area.get('1.0', tk.END).strip()
@@ -5012,7 +6489,7 @@ class HostsFileEditor:
                 self.custom_sources_empty_label.pack_forget()
         else:
             if not self.custom_sources_empty_label.winfo_manager():
-                self.custom_sources_empty_label.pack(fill="x", padx=8, pady=(0, 6), before=self.btn_add_custom)
+                self.custom_sources_empty_label.pack(fill="x", pady=(0, 6), before=self.btn_add_custom)
         self._update_custom_source_summary()
 
     def _rebuild_custom_source_buttons(self):
@@ -5024,29 +6501,58 @@ class HostsFileEditor:
         self.btn_add_custom.pack(fill=tk.X, pady=2, side=tk.BOTTOM)
 
     def _create_custom_source_button(self, name, url):
-        tooltip = f"Appends the custom '{name}' blocklist."
-        frame = ttk.Frame(self.custom_sources_frame)
-        frame.pack(fill=tk.X, pady=2, before=self.btn_add_custom) 
+        tooltip = f"Use '{name}' as a saved custom feed."
+        frame = ttk.Frame(self.custom_sources_frame, style="Inset.TFrame", padding=(0, 8, 0, 8))
+        frame.pack(fill=tk.X, pady=0, before=self.btn_add_custom)
         self._custom_source_widgets[name] = frame
 
-        remove_btn = ttk.Button(
-            frame, 
-            text="✕", 
-            command=lambda n=name, f=frame: self.remove_custom_source(n, f), 
-            style="Remove.TButton"
-        )
-        ToolTip(remove_btn, f"Remove the '{name}' source from configuration.")
-        remove_btn.pack(side=tk.RIGHT, padx=(5, 0))
+        inner = ttk.Frame(frame, style="Inset.TFrame")
+        inner.pack(fill="both", expand=True)
+        top = ttk.Frame(inner, style="Inset.TFrame")
+        top.pack(fill="x")
 
+        copy = ttk.Frame(top, style="Inset.TFrame")
+        copy.pack(side="left", fill="x", expand=True)
+
+        last_stamp = self.source_last_fetched.get(url, "") if hasattr(self, "source_last_fetched") else ""
+        stamp_hint = format_relative_time(last_stamp)
+        source_host = urllib.parse.urlparse(url).netloc or url
+        freshness = f"Fetched {stamp_hint}" if stamp_hint else "Not fetched yet"
+        tooltip_full = f"{tooltip}\n\nLast fetched: {stamp_hint}" if stamp_hint else tooltip
+
+        ttk.Label(copy, text=name, style="InsetTitle.TLabel").pack(anchor="w")
+        ttk.Label(copy, text=f"{source_host}  |  {freshness}", style="InsetBody.TLabel", wraplength=260, justify="left").pack(anchor="w", pady=(3, 0))
+
+        action_row = ttk.Frame(top, style="Inset.TFrame")
+        action_row.pack(side="right", padx=(12, 0))
         import_btn = self._btn(
-            frame, 
-            text=name, 
-            command=lambda u=url, n=name: self.start_single_import(n, u), 
-            tooltip=tooltip, 
-            style="TButton"
+            action_row,
+            text="Import",
+            command=lambda u=url, n=name: self.start_single_import(n, u),
+            tooltip=tooltip_full,
+            style="Action.TButton"
         )
         self._register_import_widget(import_btn)
-        import_btn.pack(side=tk.LEFT, expand=True, fill=tk.X)
+        import_btn.pack(side="left")
+        preview_btn = self._btn(
+            action_row,
+            text="Peek",
+            command=lambda u=url, n=name: self.preview_blocklist_source(n, u),
+            tooltip=f"Preview the first entries of {name} without importing.",
+            style="TButton"
+        )
+        self._register_import_widget(preview_btn)
+        preview_btn.pack(side="left", padx=(6, 0))
+        remove_btn = ttk.Button(
+            action_row,
+            text="Remove",
+            command=lambda n=name, f=frame: self.remove_custom_source(n, f),
+            style="Remove.TButton"
+        )
+        self._register_import_widget(remove_btn)
+        ToolTip(remove_btn, f"Remove the '{name}' source from configuration.")
+        remove_btn.pack(side="left", padx=(6, 0))
+        ttk.Separator(frame, orient="horizontal").pack(fill="x", pady=(8, 0))
 
 
     def show_add_source_dialog(self):
@@ -5054,7 +6560,7 @@ class HostsFileEditor:
         draft_url = ""
 
         while True:
-            dialog = AddSourceDialog(self.root, initial_name=draft_name, initial_url=draft_url)
+            dialog = AddSourceDialog(self, initial_name=draft_name, initial_url=draft_url)
             if not dialog.result:
                 return
 
@@ -5062,11 +6568,19 @@ class HostsFileEditor:
             draft_name, draft_url = name, url
             normalized_url = normalize_custom_source_url(url)
             if any(s['name'].lower() == name.lower() for s in self.custom_sources):
-                messagebox.showwarning("Duplicate Name", "A custom source with that name already exists. Choose a different label.", parent=self.root)
+                self._show_notice_dialog(
+                    "Saved source name already exists",
+                    "A saved source with that display name already exists. Choose a different label so both sources stay distinguishable.",
+                    tone="warning",
+                )
                 self.update_status("Error: Source name already exists.", is_error=True)
                 continue
             if any(normalize_custom_source_url(s['url']) == normalized_url for s in self.custom_sources):
-                messagebox.showwarning("Duplicate URL", "That custom source URL is already configured.", parent=self.root)
+                self._show_notice_dialog(
+                    "Saved source URL already exists",
+                    "That feed URL is already configured in Saved Sources.",
+                    tone="warning",
+                )
                 self.update_status("Error: Source URL already exists.", is_error=True)
                 continue
             source_data = {'name': name, 'url': url}
@@ -5079,10 +6593,12 @@ class HostsFileEditor:
 
 
     def remove_custom_source(self, name, widget_frame):
-        if not messagebox.askyesno(
-            "Remove Custom Source",
-            f"Remove the custom source '{name}' from saved configuration?",
-            parent=self.root,
+        if not self._confirm_dialog(
+            "Remove saved source?",
+            f"Remove the saved source '{name}' from persistent configuration?",
+            tone="warning",
+            confirm_text="Remove source",
+            cancel_text="Keep source",
         ):
             return
 
@@ -5106,10 +6622,12 @@ class HostsFileEditor:
         if not self._has_unsaved_whitelist_changes():
             return True
 
-        return messagebox.askyesno(
-            "Replace Whitelist",
-            f"You have unsaved whitelist edits. Replace them with content from {source_name}?",
-            parent=self.root,
+        return self._confirm_dialog(
+            "Replace whitelist contents?",
+            f"You have unsaved whitelist edits. Replacing them with content from {source_name} will discard those edits.",
+            tone="warning",
+            confirm_text="Replace whitelist",
+            cancel_text="Keep current edits",
         )
 
     def load_whitelist_from_file(self):
@@ -5130,7 +6648,12 @@ class HostsFileEditor:
             self.update_status(f"Loaded whitelist from '{os.path.basename(filepath)}'.")
             self._trigger_ui_update()
         except Exception as e:
-            messagebox.showerror("File Error", f"Could not load whitelist:\n{e}", parent=self.root)
+            self._show_notice_dialog(
+                "Could not load whitelist file",
+                "The selected whitelist file could not be read.",
+                tone="error",
+                details=str(e),
+            )
 
     def import_whitelist_from_web(self):
         if getattr(self, "_whitelist_web_fetch_active", False):
@@ -5140,7 +6663,7 @@ class HostsFileEditor:
         if not self._confirm_whitelist_replacement("the HOSTShield web feed"):
             self.update_status("Whitelist import cancelled. Existing entries kept.")
             return
-        self.update_status("Importing whitelist from HOSTShield…")
+        self.update_status("Importing whitelist from HOSTShield...")
 
         self._whitelist_web_fetch_active = True
 
@@ -5181,7 +6704,12 @@ class HostsFileEditor:
     def _apply_whitelist_web_error(self, error):
         self._whitelist_web_fetch_active = False
         self.update_status(f"Could not fetch whitelist: {type(error).__name__}", is_error=True)
-        messagebox.showerror("Whitelist Import Error", f"Could not fetch whitelist:\n{error}", parent=self.root)
+        self._show_notice_dialog(
+            "Could not fetch whitelist feed",
+            "The HOSTShield whitelist feed could not be downloaded.",
+            tone="error",
+            details=str(error),
+        )
             
     def _get_whitelist_set(self):
         whitelist_content = self.whitelist_text_area.get('1.0', tk.END)
@@ -5250,12 +6778,14 @@ class HostsFileEditor:
             
     # ----------------------------- Emergency DNS Unlock -----------------
     def emergency_dns_stop(self):
-        if not messagebox.askyesno(
-            "Emergency DNS Recovery",
-            "This launches a last-resort recovery script that force-stops the DNS Client service and overwrites the hosts file with a minimal safe copy.\n\n"
-            "Use it only if Windows is already locked up because the hosts file is too large or corrupted.\n\n"
-            "Continue?",
-            parent=self.root,
+        if not self._confirm_dialog(
+            "Launch emergency DNS recovery?",
+            "This launches a last-resort recovery script that force-stops the DNS Client service and overwrites the hosts file with a minimal safe copy.",
+            tone="warning",
+            confirm_text="Launch recovery script",
+            cancel_text="Cancel",
+            details="Use this only if Windows is already locked up because the hosts file is too large or corrupted.",
+            width=620,
         ):
             return
 
@@ -5349,7 +6879,7 @@ pause
             self.update_status("Launched Emergency Unlock script in new window.", is_error=False)
 
         except Exception as e:
-            # Launch failed — remove the orphaned temp script so it doesn't
+            # Launch failed - remove the orphaned temp script so it doesn't
             # linger in %TEMP%. On success we intentionally leave it; the
             # launched cmd.exe needs it to survive.
             if fd is not None:
@@ -5362,7 +6892,12 @@ pause
                     os.unlink(path)
                 except OSError:
                     pass
-            messagebox.showerror("Error", f"Failed to launch emergency script: {e}", parent=self.root)
+            self._show_notice_dialog(
+                "Could not launch emergency recovery",
+                "The emergency recovery script could not be started.",
+                tone="error",
+                details=str(e),
+            )
 
 
     # ----------------------------- Editor Warnings -------------------------------------
@@ -5421,7 +6956,7 @@ pause
                 if transformed:
                     self.text_area.tag_add("warning_transform", start_index, end_index)
             except tk.TclError:
-                # Widget torn down during tagging — stop gracefully.
+                # Widget torn down during tagging - stop gracefully.
                 return
 
 
@@ -5541,7 +7076,7 @@ pause
                     f"Search match {self._search_index + 1:,} of {len(self._search_matches):,}."
                 )
         except tk.TclError:
-            # Text widget torn down (e.g. shutdown during a search cycle) —
+            # Text widget torn down (e.g. shutdown during a search cycle) -
             # quietly give up instead of raising.
             return
 
@@ -5558,20 +7093,23 @@ pause
             return
 
         if len(matching_indices) > MATCH_REMOVAL_DIALOG_LIMIT:
-            proceed = messagebox.askyesno(
-                "Too Many Matches",
-                f"Your search matched {len(matching_indices):,} lines. "
-                f"Building an individual checkbox for each would freeze the UI.\n\n"
-                f"Remove ALL {len(matching_indices):,} matching lines in one step instead? "
-                f"(A preview will still be shown before the editor is changed.)",
-                parent=self.root,
+            proceed = self._confirm_dialog(
+                "Too many matches for individual review",
+                f"Your search matched {len(matching_indices):,} lines. Building an individual checkbox for each would freeze the UI.",
+                tone="warning",
+                confirm_text="Review all in one preview",
+                cancel_text="Cancel",
+                details=(
+                    f"Remove all {len(matching_indices):,} matching lines in one step instead. "
+                    "A preview will still be shown before the editor changes."
+                ),
             )
             if not proceed:
                 return
             selected_indices = set(matching_indices)
         else:
             dialog = MatchRemovalDialog(
-                self.root,
+                self,
                 query,
                 [(line_index, current_lines[line_index]) for line_index in matching_indices],
             )
@@ -5643,8 +7181,12 @@ def _cli_backup(hosts_path: str) -> int:
         return 2
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     dest = f"{hosts_path}.{stamp}.bak"
-    shutil.copy2(hosts_path, f"{hosts_path}.bak")
-    shutil.copy2(hosts_path, dest)
+    try:
+        shutil.copy2(hosts_path, f"{hosts_path}.bak")
+        shutil.copy2(hosts_path, dest)
+    except OSError as e:
+        _cli_print(f"Backup failed: {e}")
+        return 1
     _cli_print(f"Backup created: {dest}")
     # Prune old ones.
     try:
@@ -5669,15 +7211,19 @@ def _cli_disable(hosts_path: str) -> int:
     if os.path.exists(disabled):
         _cli_print("hosts file is already disabled.")
         return 0
-    _cli_backup(hosts_path)
-    if os.path.exists(hosts_path):
-        shutil.copy2(hosts_path, disabled)
+    backup_result = _cli_backup(hosts_path)
+    if backup_result not in (0, 2):
+        return backup_result
     minimal = (
         "# Copyright (c) 1993-2009 Microsoft Corp.\n#\n"
         "127.0.0.1       localhost\n"
         "::1             localhost\n"
     )
-    write_text_file_atomic(hosts_path, minimal)
+    try:
+        disable_hosts_file_transactionally(hosts_path, disabled, minimal)
+    except OSError as e:
+        _cli_print(f"Disable failed: {e}")
+        return 1
     _cli_print("hosts file disabled; minimal template is active.")
     return 0
 
@@ -5690,9 +7236,14 @@ def _cli_enable(hosts_path: str) -> int:
     if not os.path.exists(disabled):
         _cli_print("no disabled sibling found; hosts file is already enabled.")
         return 0
-    _cli_backup(hosts_path)
-    shutil.copy2(disabled, hosts_path)
-    os.unlink(disabled)
+    backup_result = _cli_backup(hosts_path)
+    if backup_result not in (0, 2):
+        return backup_result
+    try:
+        enable_hosts_file_transactionally(hosts_path, disabled)
+    except OSError as e:
+        _cli_print(f"Enable failed: {e}")
+        return 1
     _cli_print("hosts file re-enabled.")
     return 0
 
@@ -5704,9 +7255,20 @@ def _cli_apply(hosts_path: str, source_file: str) -> int:
     if not os.path.isfile(source_file):
         _cli_print(f"source file not found: {source_file}")
         return 2
-    _cli_backup(hosts_path)
-    content = read_text_file_content(source_file)
-    write_text_file_atomic(hosts_path, content)
+    if os.path.exists(hosts_path + ".disabled"):
+        _cli_print(
+            "hosts file is currently disabled; re-enable it before applying a new file or the preserved configuration may overwrite your changes later."
+        )
+        return 1
+    backup_result = _cli_backup(hosts_path)
+    if backup_result not in (0, 2):
+        return backup_result
+    try:
+        content = read_text_file_content(source_file)
+        write_text_file_atomic(hosts_path, content)
+    except OSError as e:
+        _cli_print(f"Apply failed: {e}")
+        return 1
     _cli_print(f"Applied {source_file} to {hosts_path}")
     return 0
 
@@ -5720,6 +7282,11 @@ def _cli_update(hosts_path: str) -> int:
     """
     if not _cli_is_admin():
         _cli_print("Administrator privileges required.")
+        return 1
+    if os.path.exists(hosts_path + ".disabled"):
+        _cli_print(
+            "hosts file is currently disabled; re-enable it before running --update so refreshed sources are not written into the temporary minimal file."
+        )
         return 1
 
     config_path = get_primary_config_path("hosts_editor_config.json")
@@ -5746,7 +7313,9 @@ def _cli_update(hosts_path: str) -> int:
     for entry in sanitized.get("custom_sources", []):
         reverse[entry["url"]] = entry["name"]
 
-    _cli_backup(hosts_path)
+    backup_result = _cli_backup(hosts_path)
+    if backup_result not in (0, 2):
+        return backup_result
     collected: list[str] = []
     updated_stamps: dict[str, str] = dict(last_fetched)
     now_iso = datetime.datetime.now().isoformat(timespec='seconds')
@@ -5789,7 +7358,11 @@ def _cli_update(hosts_path: str) -> int:
 
     existing_lines: list[str] = []
     if os.path.exists(hosts_path):
-        existing_lines = read_text_file_lines(hosts_path)
+        try:
+            existing_lines = read_text_file_lines(hosts_path)
+        except OSError as e:
+            _cli_print(f"Could not read current hosts file: {e}")
+            return 1
     whitelist_text = sanitized.get("whitelist", "")
     whitelist_set: set[str] = set()
     for wline in whitelist_text.splitlines():
@@ -5804,7 +7377,11 @@ def _cli_update(hosts_path: str) -> int:
         trimmed = remove_import_section(trimmed, section)
     merged = trimmed + [""] + collected
     cleaned, stats = _get_canonical_cleaned_output_and_stats(merged, whitelist_set)
-    write_text_file_atomic(hosts_path, '\n'.join(cleaned))
+    try:
+        write_text_file_atomic(hosts_path, '\n'.join(cleaned))
+    except OSError as e:
+        _cli_print(f"Could not write updated hosts file: {e}")
+        return 1
 
     # Persist new timestamps.
     try:
@@ -5869,3 +7446,5 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = HostsFileEditor(root)
     root.mainloop()
+
+

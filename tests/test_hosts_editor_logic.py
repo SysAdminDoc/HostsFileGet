@@ -23,6 +23,8 @@ from hosts_editor import (
     compute_clean_impact_stats,
     decode_text_bytes,
     decode_downloaded_lines,
+    disable_hosts_file_transactionally,
+    enable_hosts_file_transactionally,
     discover_import_sections,
     fuzzy_score,
     summarize_source_contributions,
@@ -30,8 +32,10 @@ from hosts_editor import (
     find_keyword_match_line_indices,
     find_sources_containing_domain,
     format_relative_time,
+    build_schtasks_create_command,
     looks_like_domain,
     looks_like_html_document,
+    normalize_scheduler_start_time,
     normalize_line_to_hosts_entries,
     normalize_custom_source_url,
     read_http_body_limited,
@@ -179,6 +183,33 @@ class HostsEditorLogicTests(unittest.TestCase):
             "https://example.com/Path/File.TXT?a=1",
         )
 
+    def test_sanitize_custom_sources_rejects_hostless_http_urls(self):
+        sanitized = sanitize_custom_sources(
+            [
+                {"name": "MissingHost", "url": "https:///missing-host"},
+                {"name": "Good", "url": "https://example.com/list.txt"},
+            ]
+        )
+        self.assertEqual(sanitized, [{"name": "Good", "url": "https://example.com/list.txt"}])
+
+    def test_find_sources_containing_domain_accepts_structured_cache_entries(self):
+        source_cache = {
+            "https://one.example/list.txt": {
+                "name": "Curated One",
+                "url": "https://one.example/list.txt",
+                "text": "0.0.0.0 tracked.example\n",
+            },
+            "https://two.example/list.txt": {
+                "name": "Saved Two",
+                "url": "https://two.example/list.txt",
+                "text": "0.0.0.0 sub.tracked.example\n",
+            },
+        }
+        self.assertEqual(
+            find_sources_containing_domain("tracked.example", source_cache),
+            ["Curated One", "Saved Two"],
+        )
+
     def test_find_keyword_match_line_indices_skips_comments_and_blanks(self):
         lines = [
             "",
@@ -261,6 +292,22 @@ class HostsEditorLogicTests(unittest.TestCase):
 
         self.assertTrue(os.path.isdir(payload["last_open_dir"]))
 
+    def test_get_legacy_config_paths_ignores_current_working_directory(self):
+        fake_editor = type(
+            "FakeEditor",
+            (),
+            {
+                "CONFIG_FILENAME": "hosts_editor_config.json",
+                "config_path": os.path.join("C:\\stable", "hosts_editor_config.json"),
+            },
+        )()
+
+        with mock.patch.object(hosts_editor, "_EXE_DIR", "C:\\appdir"):
+            with mock.patch.object(hosts_editor.os, "getcwd", return_value="C:\\surprising-cwd"):
+                paths = HostsFileEditor._get_legacy_config_paths(fake_editor)
+
+        self.assertEqual(paths, [os.path.join("C:\\appdir", "hosts_editor_config.json")])
+
     def test_write_text_file_atomic_replaces_file_contents(self):
         import tempfile
         from pathlib import Path
@@ -316,6 +363,100 @@ class HostsEditorLogicTests(unittest.TestCase):
             write_text_file_atomic(str(path), "")
             # Empty input must not spuriously gain a newline.
             self.assertEqual(path.read_text(encoding="utf-8"), "")
+
+    def test_disable_hosts_file_transactionally_rolls_back_if_marker_write_fails(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            hosts_path = Path(tmpdir) / "hosts"
+            disabled_path = Path(tmpdir) / "hosts.disabled"
+            original = "0.0.0.0 original.example\n"
+            hosts_path.write_text(original, encoding="utf-8")
+
+            real_replace = hosts_editor.os.replace
+
+            def flaky_replace(src, dst):
+                if dst == str(disabled_path):
+                    raise OSError("rename failed")
+                return real_replace(src, dst)
+
+            with mock.patch.object(hosts_editor.os, "replace", side_effect=flaky_replace):
+                with self.assertRaises(OSError):
+                    disable_hosts_file_transactionally(
+                        str(hosts_path),
+                        str(disabled_path),
+                        "127.0.0.1 localhost\n",
+                    )
+
+            self.assertEqual(hosts_path.read_text(encoding="utf-8"), original)
+            self.assertFalse(disabled_path.exists())
+
+    def test_enable_hosts_file_transactionally_restores_marker_if_copy_fails(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            hosts_path = Path(tmpdir) / "hosts"
+            disabled_path = Path(tmpdir) / "hosts.disabled"
+            hosts_path.write_text("127.0.0.1 localhost\n", encoding="utf-8")
+            disabled_path.write_text("0.0.0.0 restored.example\n", encoding="utf-8")
+
+            real_copy2 = hosts_editor.shutil.copy2
+
+            def flaky_copy2(src, dst, *args, **kwargs):
+                if dst == str(hosts_path):
+                    raise OSError("copy failed")
+                return real_copy2(src, dst, *args, **kwargs)
+
+            with mock.patch.object(hosts_editor.shutil, "copy2", side_effect=flaky_copy2):
+                with self.assertRaises(OSError):
+                    enable_hosts_file_transactionally(str(hosts_path), str(disabled_path))
+
+            self.assertTrue(disabled_path.exists())
+            self.assertEqual(
+                disabled_path.read_text(encoding="utf-8"),
+                "0.0.0.0 restored.example\n",
+            )
+            self.assertEqual(hosts_path.read_text(encoding="utf-8"), "127.0.0.1 localhost\n")
+
+    def test_cli_apply_refuses_when_hosts_file_is_disabled(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            hosts_path = Path(tmpdir) / "hosts"
+            disabled_path = Path(tmpdir) / "hosts.disabled"
+            source_path = Path(tmpdir) / "import.txt"
+            hosts_path.write_text("127.0.0.1 localhost\n", encoding="utf-8")
+            disabled_path.write_text("0.0.0.0 preserved.example\n", encoding="utf-8")
+            source_path.write_text("0.0.0.0 new.example\n", encoding="utf-8")
+
+            with mock.patch.object(hosts_editor, "_cli_is_admin", return_value=True):
+                with mock.patch.object(hosts_editor, "_cli_backup") as backup_mock:
+                    result = hosts_editor._cli_apply(str(hosts_path), str(source_path))
+
+            self.assertEqual(result, 1)
+            backup_mock.assert_not_called()
+            self.assertEqual(hosts_path.read_text(encoding="utf-8"), "127.0.0.1 localhost\n")
+            self.assertEqual(disabled_path.read_text(encoding="utf-8"), "0.0.0.0 preserved.example\n")
+
+    def test_cli_update_refuses_when_hosts_file_is_disabled(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            hosts_path = Path(tmpdir) / "hosts"
+            disabled_path = Path(tmpdir) / "hosts.disabled"
+            hosts_path.write_text("127.0.0.1 localhost\n", encoding="utf-8")
+            disabled_path.write_text("0.0.0.0 preserved.example\n", encoding="utf-8")
+
+            with mock.patch.object(hosts_editor, "_cli_is_admin", return_value=True):
+                with mock.patch.object(hosts_editor.urllib.request, "urlopen") as urlopen_mock:
+                    result = hosts_editor._cli_update(str(hosts_path))
+
+            self.assertEqual(result, 1)
+            urlopen_mock.assert_not_called()
 
     def test_summarize_clean_changes_formats_consistent_status_text(self):
         self.assertEqual(
@@ -624,6 +765,32 @@ class HostsEditorLogicTests(unittest.TestCase):
         editor.update_status = lambda *args, **kwargs: None
         self.assertFalse(HostsFileEditor._block_during_import(editor, "Any Action"))
 
+    def test_execute_save_refuses_when_hosts_are_temporarily_disabled(self):
+        editor = HostsFileEditor.__new__(HostsFileEditor)
+        editor.is_admin = True
+        editor.HOSTS_FILE_PATH = r"C:\Windows\System32\drivers\etc\hosts"
+        editor.is_hosts_disabled = lambda: True
+
+        captured = {"notice": None, "status": None}
+
+        def fake_notice(*args, **kwargs):
+            captured["notice"] = (args, kwargs)
+
+        def fake_status(message, is_error=False):
+            captured["status"] = (message, is_error)
+
+        editor._show_notice_dialog = fake_notice
+        editor.update_status = fake_status
+
+        with mock.patch.object(hosts_editor, "write_text_file_atomic") as write_mock:
+            result = HostsFileEditor._execute_save(editor, "0.0.0.0 example.com\n", "Raw Save")
+
+        self.assertFalse(result)
+        self.assertIsNotNone(captured["notice"])
+        self.assertIn("disabled", captured["notice"][0][0].lower())
+        self.assertTrue(captured["status"][1])
+        write_mock.assert_not_called()
+
     def test_update_status_truncates_and_collapses_newlines(self):
         class FakeLabel:
             def __init__(self):
@@ -773,6 +940,43 @@ class HostsEditorLogicTests(unittest.TestCase):
 
         self.assertEqual(format_relative_time("not-a-timestamp"), "")
         self.assertEqual(format_relative_time(""), "")
+
+    # ---- scheduler helpers ----
+    def test_normalize_scheduler_start_time_pads_valid_times(self):
+        self.assertEqual(normalize_scheduler_start_time("3:05"), "03:05")
+        self.assertEqual(normalize_scheduler_start_time(" 23:59 "), "23:59")
+        self.assertEqual(normalize_scheduler_start_time(""), "03:30")
+
+    def test_normalize_scheduler_start_time_rejects_invalid_values(self):
+        with self.assertRaises(ValueError):
+            normalize_scheduler_start_time("24:00")
+        with self.assertRaises(ValueError):
+            normalize_scheduler_start_time("9:7")
+        with self.assertRaises(ValueError):
+            normalize_scheduler_start_time("nope")
+
+    def test_build_schtasks_create_command_handles_weekly_and_onlogon(self):
+        weekly_args, weekly_summary = build_schtasks_create_command(
+            "HostsFileGet Auto-Update",
+            '"python.exe" "hosts_editor.py" --update',
+            "weekly",
+            start_time="6:15",
+            weekday="fri",
+        )
+        self.assertIn("/D", weekly_args)
+        self.assertEqual(weekly_args[weekly_args.index("/D") + 1], "FRI")
+        self.assertIn("/ST", weekly_args)
+        self.assertEqual(weekly_args[weekly_args.index("/ST") + 1], "06:15")
+        self.assertIn("Friday", weekly_summary)
+
+        onlogon_args, onlogon_summary = build_schtasks_create_command(
+            "HostsFileGet Auto-Update",
+            '"python.exe" "hosts_editor.py" --update',
+            "ONLOGON",
+        )
+        self.assertNotIn("/ST", onlogon_args)
+        self.assertNotIn("/D", onlogon_args)
+        self.assertIn("sign-in", onlogon_summary.lower())
 
     # ---- sanitize_config_snapshot: new v2.12 fields ----
     def test_sanitize_config_snapshot_keeps_valid_source_last_fetched(self):
