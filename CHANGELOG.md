@@ -2,6 +2,28 @@
 
 All notable changes to HostsFileGet will be documented in this file.
 
+## [v2.16.0] - 2026-04-18
+
+**Source freshness at a glance**
+- Every curated-source row now shows a coloured dot: green (fresh, <24h), yellow (warm, 1-7d), red (stale, >1 week), gray (never fetched this install). Hover the dot for the last-fetched timestamp.
+
+**Integrity alarm**
+- `load_file` now remembers the hash of the last successful load. If an explicit *Refresh* picks up a different hash and the file doesn't match any of our saved states, the status bar flags it: *"hosts file changed on disk since last load by another process."* Doesn't block the reload — security-software rewrites are common — but surfaces the surprise.
+
+**Auto-update on launch (opt-in)**
+- New Preferences checkbox: *Re-fetch stale sources on launch*. When enabled and the user is elevated, every previously-imported source with a last-fetched stamp older than a week is refreshed in the background through the existing batch-import pipeline. Skipped silently when already-importing or non-admin.
+
+**Pinned domain import/export (team sharing)**
+- `Tools > Pinned Domains...` dialog gains **Import...** and **Export...** buttons. Export writes a versioned JSON payload (`hostsfileget.pinned.v1`) that's deduplicated, sorted, and reviewable in source control. Import accepts that payload or a bare array of domains, confirms the new-count before merging, and skips duplicates silently.
+
+**New curated sources**
+- Ads / Tracking: **NextDNS CNAME Cloak** (first-party Eulerian / Keyade / Criteo trackers that evade traditional blocklists).
+- Malware / Phishing / Scam: **NRD 14-day** and **NRD 30-day** (xRuffKez Newly-Registered-Domains — high-ROI phishing defense).
+
+**Tests**
+- 8 new regression tests covering `classify_source_freshness` (fresh/warm/stale/never, clock-skew), `STALE_*` thresholds, `build_pinned_export_payload` shape, `parse_pinned_import_payload` (export shape / bare list / foreign-schema / wrong-type), and the new `update_on_launch` config field.
+- Suite: **102 tests** (was 94).
+
 ## [v2.15.0] - 2026-04-18
 
 **Pinned domains**
