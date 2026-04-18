@@ -30,7 +30,7 @@ import glob
 
 APP_NAME = "Hosts File Get"
 APP_SLUG = "HostsFileGet"
-APP_VERSION = "2.15.0"
+APP_VERSION = "2.16.0"
 ELEVATION_ATTEMPT_FLAG = "--hostsfileget-elevation-attempted"
 
 # Hard cap for any single downloaded feed/whitelist payload (50 MB decompressed).
@@ -1646,6 +1646,7 @@ def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
         "backup_retention": backup_retention,
         "has_completed_first_run": has_completed_first_run,
         "pinned_domains": sanitize_pinned_domains(config.get("pinned_domains", [])),
+        "update_on_launch": bool(config.get("update_on_launch", False)),
     }
 
 def resolve_saved_state_hashes(current_hash: str, saved_raw_hash, saved_cleaned_hash) -> tuple[str | None, str | None]:
@@ -2083,6 +2084,80 @@ def fuzzy_score(query: str, target: str) -> int:
     return score
 
 
+STALE_FRESH_HOURS = 24
+STALE_WARN_HOURS = 7 * 24
+
+
+def classify_source_freshness(iso_timestamp: str, now: float | None = None) -> str:
+    """Bucket a source's last-fetched timestamp into a freshness tier.
+
+    Returns one of:
+        "never"  — never fetched in this install
+        "fresh"  — fetched within the last 24 hours
+        "warm"   — fetched 1-7 days ago
+        "stale"  — fetched more than 7 days ago
+
+    The caller is expected to map these to UI colours. We keep the helper
+    pure and string-valued so tests don't need Tk.
+    """
+    if not iso_timestamp:
+        return "never"
+    try:
+        when = datetime.datetime.fromisoformat(iso_timestamp)
+    except (TypeError, ValueError):
+        return "never"
+    if now is not None:
+        reference = (
+            datetime.datetime.fromtimestamp(now, when.tzinfo)
+            if when.tzinfo
+            else datetime.datetime.fromtimestamp(now)
+        )
+    else:
+        reference = datetime.datetime.now(when.tzinfo) if when.tzinfo else datetime.datetime.now()
+    delta_hours = (reference - when).total_seconds() / 3600.0
+    if delta_hours < 0:
+        # Clock skew — treat future timestamps as freshly fetched rather
+        # than raising; they're harmless aside from being a bit odd.
+        return "fresh"
+    if delta_hours < STALE_FRESH_HOURS:
+        return "fresh"
+    if delta_hours < STALE_WARN_HOURS:
+        return "warm"
+    return "stale"
+
+
+def build_pinned_export_payload(app_version: str, pinned: set[str]) -> dict:
+    """Shape a JSON export of the pin set for team sharing.
+
+    Schema is versioned so future readers can upgrade without guessing. We
+    pin the list sorted so diffs remain reviewable in source control.
+    """
+    return {
+        "schema": "hostsfileget.pinned.v1",
+        "exported_by_version": app_version,
+        "exported_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "pinned_domains": sorted(sanitize_pinned_domains(pinned)),
+    }
+
+
+def parse_pinned_import_payload(payload) -> list[str]:
+    """Validate a pinned-export JSON blob and return sanitized domains.
+
+    Accepts either the full ``build_pinned_export_payload`` schema or a
+    bare list of domain strings (for hand-rolled team files).
+    """
+    if isinstance(payload, dict):
+        schema = payload.get("schema")
+        if isinstance(schema, str) and not schema.startswith("hostsfileget.pinned."):
+            raise ValueError(f"Unrecognized schema: {schema!r}")
+        domains = payload.get("pinned_domains", [])
+    elif isinstance(payload, list):
+        domains = payload
+    else:
+        raise ValueError("Expected a JSON object with `pinned_domains` or a list of domains.")
+    return sanitize_pinned_domains(domains)
+
+
 def sanitize_pinned_domains(value) -> list[str]:
     """Return a deduplicated, lowercase list of valid domain strings.
 
@@ -2441,6 +2516,7 @@ class HostsFileEditor:
             ("MobileAdTrackers (jawz101)", "https://raw.githubusercontent.com/jawz101/MobileAdTrackers/master/hosts", "Mobile SDK trackers from Exodus Privacy reports."),
             ("DandelionSprout URL Shorteners", "https://raw.githubusercontent.com/DandelionSprout/adfilt/master/LegitimateURLShortener.txt", "URL shortener neutralizer to kill redirect tracking."),
             ("BlocklistProject Tracking", "https://blocklistproject.github.io/Lists/tracking.txt", "Community-maintained tracking domain list."),
+            ("NextDNS CNAME Cloak", "https://raw.githubusercontent.com/nextdns/cname-cloaking-blocklist/master/domains", "CNAME-cloaking first-party trackers (Eulerian / Keyade / Criteo)."),
         ],
         "Telemetry / Privacy / Spyware": [
             ("Windows Spy Blocker", "https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/spy.txt", "Blocks Windows telemetry."),
@@ -2506,6 +2582,8 @@ class HostsFileEditor:
             ("CoinBlockerLists Browser", "https://raw.githubusercontent.com/ZeroDot1/CoinBlockerLists/master/hosts_browser", "In-browser-mining subset from CoinBlockerLists."),
             ("BlocklistProject Fraud", "https://blocklistproject.github.io/Lists/fraud.txt", "Fraud / scam-focused subset."),
             ("BlocklistProject Ransomware", "https://blocklistproject.github.io/Lists/ransomware.txt", "Ransomware C2 / dropper domains."),
+            ("NRD 14-day (xRuffKez)", "https://raw.githubusercontent.com/xRuffKez/NRD/main/lists/14-day/domains-only/nrd-14day.txt", "Newly-Registered Domains (last 14 days) - phishing defense, low FPs."),
+            ("NRD 30-day (xRuffKez)", "https://raw.githubusercontent.com/xRuffKez/NRD/main/lists/30-day/domains-only/nrd-30day.txt", "Newly-Registered Domains (last 30 days) - broader NRD net."),
         ],
         "Spam / Abuse / Misc": [
             ("KAD Hosts (Polish)", "https://raw.githubusercontent.com/PolishFiltersTeam/KADhosts/master/KADhosts.txt", "Polish focused filters."),
@@ -2615,6 +2693,12 @@ class HostsFileEditor:
         # Save as "keep no matter what", separate from the whitelist which
         # strips entries. Used for the Starred smart view.
         self.pinned_domains: set[str] = set()
+        # Auto-refresh stale sources on launch (opt-in, off by default).
+        self._update_on_launch = False
+        # Tracked to detect out-of-process edits to the hosts file between
+        # loads. Set on every load_file() success; compared on the next
+        # load to warn the user if something else rewrote the file.
+        self._loaded_hosts_hash: str | None = None
         
         self.import_mode = tk.StringVar(value="Normalized") 
         self.dry_run_mode = tk.BooleanVar(value=False)
@@ -3154,6 +3238,7 @@ class HostsFileEditor:
         self._update_whitelist_summary()
         self._refresh_mode_badges()
         self.maybe_show_first_run_wizard()
+        self.maybe_auto_update_on_launch()
 
     # ----------------------------- UI Helpers & Panels ---------------------------------
     def _apply_window_branding(self):
@@ -3584,6 +3669,28 @@ class HostsFileEditor:
             )
         self.import_mode_detail_label.config(text=text)
 
+    _FRESHNESS_COLORS = {
+        "fresh": PALETTE["green"],
+        "warm": PALETTE["yellow"],
+        "stale": PALETTE["red"],
+        "never": PALETTE["overlay0"],
+    }
+
+    _FRESHNESS_TOOLTIPS = {
+        "fresh": "Fresh: fetched in the last 24 hours.",
+        "warm": "Warm: fetched 1-7 days ago.",
+        "stale": "Stale: last fetch was over a week ago.",
+        "never": "Not fetched in this install.",
+    }
+
+    def _freshness_indicator(self, iso_timestamp: str) -> tuple[str, str]:
+        """Map a last-fetched ISO timestamp to a (color, tooltip-text) pair."""
+        bucket = classify_source_freshness(iso_timestamp)
+        relative = format_relative_time(iso_timestamp)
+        base = self._FRESHNESS_TOOLTIPS.get(bucket, "")
+        tip = f"{base}\nLast fetched: {relative}" if relative else base
+        return self._FRESHNESS_COLORS.get(bucket, PALETTE["overlay0"]), tip
+
     def _iter_known_sources(self):
         for category, sources in self.BLOCKLIST_SOURCES.items():
             for name, url, _tooltip in sources:
@@ -3675,7 +3782,17 @@ class HostsFileEditor:
                 source_host = urllib.parse.urlparse(url).netloc or url
                 freshness = f"Fetched {stamp_hint}" if stamp_hint else "Not fetched yet"
                 tooltip_full = f"{tooltip}\n\nLast fetched: {stamp_hint}" if stamp_hint else tooltip
-                ttk.Label(copy, text=name, style="InsetTitle.TLabel").pack(anchor="w")
+
+                title_row = ttk.Frame(copy, style="Inset.TFrame")
+                title_row.pack(anchor="w", fill="x")
+                dot_color, dot_tip = self._freshness_indicator(last_stamp)
+                dot = tk.Label(
+                    title_row, text="\u25CF", font=("Segoe UI", 12, "bold"),
+                    fg=dot_color, bg=PALETTE["surface0"], padx=0, pady=0,
+                )
+                dot.pack(side="left", padx=(0, 6))
+                ToolTip(dot, dot_tip)
+                ttk.Label(title_row, text=name, style="InsetTitle.TLabel").pack(side="left")
                 ttk.Label(copy, text=f"{source_host}  |  {freshness}", style="InsetBody.TLabel", wraplength=260, justify="left").pack(anchor="w", pady=(3, 0))
                 ttk.Label(copy, text=tooltip, style="InsetBody.TLabel", wraplength=250, justify="left").pack(anchor="w", pady=(3, 0))
 
@@ -4389,6 +4506,7 @@ class HostsFileEditor:
         self._backup_retention = sanitized_config.get("backup_retention", BACKUP_RETENTION)
         self._has_completed_first_run = sanitized_config.get("has_completed_first_run", False)
         self.pinned_domains = set(sanitized_config.get("pinned_domains", []))
+        self._update_on_launch = bool(sanitized_config.get("update_on_launch", False))
 
         self.whitelist_text_area.delete('1.0', tk.END)
         self.whitelist_text_area.insert('1.0', sanitized_config["whitelist"])
@@ -4429,6 +4547,7 @@ class HostsFileEditor:
             "backup_retention": self._backup_retention,
             "has_completed_first_run": self._has_completed_first_run,
             "pinned_domains": sorted(self.pinned_domains),
+            "update_on_launch": self._update_on_launch,
         }, self.last_open_dir)
         try:
             self._write_config_payload(config)
@@ -5091,6 +5210,26 @@ class HostsFileEditor:
             justify="left",
         ).pack(anchor="w")
 
+        update_card, _ = self._create_sidebar_card(
+            dialog,
+            "Auto-update",
+            "Refresh stale curated sources quietly each time the app launches.",
+            accent=PALETTE["accent"],
+        )
+        update_var = tk.BooleanVar(value=self._update_on_launch)
+        ttk.Checkbutton(
+            update_card,
+            text="Re-fetch stale sources on launch",
+            variable=update_var,
+        ).pack(anchor="w", pady=(0, 6))
+        ttk.Label(
+            update_card,
+            text="When enabled, every curated or custom source last fetched more than a week ago is refreshed in the background on startup. Requires Administrator rights to apply results.",
+            style="SectionBody.TLabel",
+            wraplength=460,
+            justify="left",
+        ).pack(anchor="w")
+
         btn_row = ttk.Frame(dialog)
         btn_row.pack(fill='x', padx=20, pady=(6, 20))
 
@@ -5103,9 +5242,13 @@ class HostsFileEditor:
             chosen = sink_var.get()
             if chosen in BLOCK_SINK_IPS:
                 self._preferred_block_sink = chosen
+            self._update_on_launch = bool(update_var.get())
             self.save_config()
             dialog.destroy()
-            self.update_status(f"Preferences saved: retention={new_ret}, sink={self._preferred_block_sink}.")
+            self.update_status(
+                f"Preferences saved: retention={new_ret}, sink={self._preferred_block_sink}, "
+                f"auto-update={'on' if self._update_on_launch else 'off'}."
+            )
 
         ttk.Button(btn_row, text="Cancel", command=dialog.destroy, style="Secondary.TButton").pack(side="right", padx=(0, 8))
         ttk.Button(btn_row, text="Save preferences", command=do_save, style="Action.TButton").pack(side="right")
@@ -5506,6 +5649,41 @@ class HostsFileEditor:
             self.save_config()
             return
         self._safe_after(400, self.show_first_run_wizard)
+
+    def maybe_auto_update_on_launch(self):
+        """Kick off a background refresh of stale previously-imported sources.
+
+        Silent — it fires through the existing batch-import pipeline, which
+        means it pops the progress bar and writes status text. Gated by the
+        ``update_on_launch`` preference and only touches sources the user
+        has imported before (so it never silently downloads catalog entries
+        the user has not opted into).
+        """
+        if not self._update_on_launch:
+            return
+        if not self.is_admin:
+            self.update_status("Auto-update on launch skipped: Administrator rights required.")
+            return
+        if self.is_importing:
+            return
+
+        stale_urls = [
+            url for url, stamp in self.source_last_fetched.items()
+            if classify_source_freshness(stamp) == "stale"
+        ]
+        if not stale_urls:
+            return
+
+        # Reverse-map each stale URL back to its display name so the
+        # Normalized-Import markers make sense.
+        url_to_name: dict[str, str] = {}
+        for source in self._iter_known_sources():
+            url_to_name[source["url"]] = source["name"]
+
+        sources = [(url_to_name.get(url, url), url) for url in stale_urls]
+        self.update_status(f"Auto-update on launch: refreshing {len(sources)} stale source(s)...")
+        # Let the UI paint before kicking off the worker.
+        self._safe_after(600, lambda: self.start_import_worker(sources))
 
     def show_first_run_wizard(self):
         dialog = tk.Toplevel(self.root)
@@ -6033,6 +6211,75 @@ class HostsFileEditor:
             refresh_listbox()
             self.update_status(f"Unpinned all {count} domain(s).")
 
+        def do_export():
+            path = filedialog.asksaveasfilename(
+                parent=dialog,
+                title="Export pinned domains",
+                defaultextension=".json",
+                initialfile="hostsfileget-pinned.json",
+                initialdir=self.last_open_dir,
+                filetypes=[("JSON", "*.json"), ("All files", "*.*")],
+            )
+            if not path:
+                return
+            payload = build_pinned_export_payload(APP_VERSION, self.pinned_domains)
+            try:
+                write_text_file_atomic(path, json.dumps(payload, indent=2))
+            except OSError as e:
+                self._show_notice_dialog(
+                    "Could not write export file",
+                    "The export file could not be created.",
+                    tone="error",
+                    details=str(e),
+                )
+                return
+            self.last_open_dir = os.path.dirname(path) or self.last_open_dir
+            self.update_status(
+                f"Exported {len(payload['pinned_domains']):,} pinned domain(s) to {os.path.basename(path)}."
+            )
+
+        def do_import():
+            path = filedialog.askopenfilename(
+                parent=dialog,
+                title="Import pinned domains",
+                initialdir=self.last_open_dir,
+                filetypes=[("JSON", "*.json"), ("All files", "*.*")],
+            )
+            if not path:
+                return
+            try:
+                text = read_text_file_content(path)
+                payload = json.loads(text)
+                imported = parse_pinned_import_payload(payload)
+            except (OSError, ValueError) as e:
+                self._show_notice_dialog(
+                    "Could not import pinned domains",
+                    "The selected file could not be read as a pinned-domains export.",
+                    tone="error",
+                    details=str(e),
+                )
+                return
+
+            new_domains = set(imported) - self.pinned_domains
+            if not new_domains:
+                self.update_status("Import had no new pins to add.")
+                return
+            if not self._confirm_dialog(
+                "Add imported pins?",
+                f"{len(new_domains):,} new domain(s) will be added to your pin set. "
+                f"The pin set currently has {len(self.pinned_domains):,} entries.",
+                tone="info",
+                confirm_text=f"Add {len(new_domains):,}",
+                cancel_text="Cancel",
+            ):
+                return
+            self.pinned_domains.update(new_domains)
+            self.save_config()
+            self._trigger_ui_update()
+            refresh_listbox()
+            self.last_open_dir = os.path.dirname(path) or self.last_open_dir
+            self.update_status(f"Imported {len(new_domains):,} pinned domain(s).")
+
         btn_row = ttk.Frame(dialog, padding=(20, 0, 20, 20))
         btn_row.pack(fill="x")
         ttk.Button(btn_row, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
@@ -6042,6 +6289,8 @@ class HostsFileEditor:
         ttk.Button(btn_row, text="Unpin All", command=do_clear_all, style="Danger.TButton").pack(
             side="right", padx=(0, 8)
         )
+        ttk.Button(btn_row, text="Import...", command=do_import, style="TButton").pack(side="left")
+        ttk.Button(btn_row, text="Export...", command=do_export, style="TButton").pack(side="left", padx=(8, 0))
         dialog.grab_set()
 
     def _ctx_copy_domain(self):
@@ -6216,6 +6465,27 @@ class HostsFileEditor:
                 lines = read_text_file_lines(self.HOSTS_FILE_PATH)
 
                 file_hash = self._hash_lines(lines)
+
+                # Integrity alarm: if another process rewrote the hosts file
+                # between this load and the previous one, flag it once. We
+                # deliberately don't block — the user may have invoked the
+                # rewriter themselves (e.g. `hostsctl --apply`) — but
+                # surprising rewrites by security products or malware are
+                # worth surfacing. Only fires on explicit Refresh, not the
+                # very first load.
+                if (
+                    not is_initial_load
+                    and self._loaded_hosts_hash is not None
+                    and self._loaded_hosts_hash != file_hash
+                    and self._last_applied_raw_hash not in (file_hash, None)
+                    and self._last_applied_cleaned_hash not in (file_hash, None)
+                ):
+                    self.update_status(
+                        "Warning: hosts file changed on disk since last load by another process.",
+                        is_error=False,
+                    )
+
+                self._loaded_hosts_hash = file_hash
                 self._last_applied_raw_hash, self._last_applied_cleaned_hash = resolve_saved_state_hashes(
                     file_hash,
                     self._last_applied_raw_hash,

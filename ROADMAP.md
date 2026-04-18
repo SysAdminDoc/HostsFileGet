@@ -21,12 +21,12 @@ Legend:
 - ✅ **Backup diff viewer** — pick any two snapshots and compare side-by-side
 - ✅ **Configurable retention** — let the user choose how many timestamped backups to keep
 - 📋 **Hosts file ACL / read-only lock after save** — prevent malware tampering (HostsMan parity)
-- 🔬 **Integrity alarm** — detect external modifications since last save and prompt
+- ✅ **Integrity alarm** — detect external modifications since last save and prompt
 
 ## 2. Imports & Curated Sources
 
-- 📋 **NRD feed** (xRuffKez Newly-Registered-Domains, 14/30 day) — high-value for phishing defense, low false-positive rate
-- 📋 **CNAME-cloaking blocklist** — ship curated NextDNS CNAME-cloak list (Eulerian, Keyade, Criteo first-party trackers)
+- ✅ **NRD feed** (xRuffKez Newly-Registered-Domains, 14/30 day) — high-value for phishing defense, low false-positive rate
+- ✅ **CNAME-cloaking blocklist** — ship curated NextDNS CNAME-cloak list (Eulerian, Keyade, Criteo first-party trackers)
 - 📋 **Category bundles** — one-click Adult / Gambling / Social / Dating / Piracy / Streaming presets sourced from OISD/StevenBlack categorized feeds
 - 📋 **Vendor telemetry toggles** per OS/device (NextDNS-flagship style) — Apple/Samsung/Xiaomi/Windows/Roku/LG WebOS
 - ✅ **Curated source catalog** — now 160+ sources across Major, Ads, Tracking, Telemetry, Malware, Phishing, Category Filters, Regional, Vendor/Platform groups (+56 added in v2.12)
@@ -40,10 +40,10 @@ Legend:
 - ✅ **Source "Peek" preview** — fetch first ~80 lines before committing to import
 - ✅ **Per-source last-fetched timestamp** — tooltip shows "3 days ago"
 - ✅ **Scheduled auto-update** via Windows Task Scheduler integration
-- 📋 **Update-on-launch** opt-in
+- ✅ **Update-on-launch** opt-in (admin-gated, stale sources only)
 - 📋 **Silent background update mode** — headless exit-code-only, toast on completion
 - ✅ **`--update` CLI flag** — re-fetch every previously-imported source
-- 📋 **Per-source update frequency + stale indicator badge**
+- ✅ **Per-source stale indicator**
 - 📋 **Group/folder organization for custom sources** — drag-to-reorder, collapsible
 - ✅ **Remove imported source section** without deleting it
 - 📋 **Import from URL-based source list file** (`.dat`/`.txt`) for team sharing
