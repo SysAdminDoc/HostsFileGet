@@ -20,7 +20,7 @@ Legend:
 - ✅ **Panic Restore** — one-click restore to stock Microsoft default (distinct from generic backup restore)
 - ✅ **Backup diff viewer** — pick any two snapshots and compare side-by-side
 - ✅ **Configurable retention** — let the user choose how many timestamped backups to keep
-- 📋 **Hosts file ACL / read-only lock after save** — prevent malware tampering (HostsMan parity)
+- ✅ **Hosts file read-only lock after save** — prevent malware tampering (HostsMan parity)
 - ✅ **Integrity alarm** — detect external modifications since last save and prompt
 
 ## 2. Imports & Curated Sources
@@ -41,7 +41,7 @@ Legend:
 - ✅ **Per-source last-fetched timestamp** — tooltip shows "3 days ago"
 - ✅ **Scheduled auto-update** via Windows Task Scheduler integration
 - ✅ **Update-on-launch** opt-in (admin-gated, stale sources only)
-- 📋 **Silent background update mode** — headless exit-code-only, toast on completion
+- ✅ **Silent CLI mode** — headless exit-code-only, toast on completion
 - ✅ **`--update` CLI flag** — re-fetch every previously-imported source
 - ✅ **Per-source stale indicator**
 - 📋 **Group/folder organization for custom sources** — drag-to-reorder, collapsible
@@ -178,11 +178,11 @@ Legend:
 - ✅ **Built-in DNS resolver** — resolve a domain bypassing hosts, report its real IP
 - ✅ **Ping / connectivity test** from the editor context menu
 - 📋 **"Which source blocked this?"** inverse lookup — show every curated list that contains a given domain
-- 📋 **Per-category stats breakdown** — "40k ads, 15k telemetry, 8k malware"
+- ✅ **Per-category stats breakdown** — "40k ads, 15k telemetry, 8k malware"
 - ✅ **Top-contributing sources report** — which list added the most unique domains this session
 - 📋 **Source overlap matrix** — redundant-source pruning insight
 - 📋 **Historical growth chart** — sparkline from saved backup snapshots
-- 📋 **Allowlist audit log / provenance sidecar** — who-added-what-when tracked in `hosts.provenance.json` (AGH 0.107+ parity)
+- ✅ **Allowlist audit log / provenance sidecar** — who-added-what-when tracked in `hosts.provenance.json` (AGH 0.107+ parity)
 - 📋 **Tray badge counter** — uBO-style numeric badge showing blocks-since-midnight from DNS Client log (see §12)
 - 📋 **"Logger" live tail view** — mini window tails the nearest available DNS query log and highlights hits against current hosts
 - 🔬 **Blocked-query trend** — parse imported logs and render a 30-day histogram

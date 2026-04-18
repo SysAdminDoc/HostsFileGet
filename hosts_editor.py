@@ -30,7 +30,7 @@ import glob
 
 APP_NAME = "Hosts File Get"
 APP_SLUG = "HostsFileGet"
-APP_VERSION = "2.16.0"
+APP_VERSION = "2.17.0"
 ELEVATION_ATTEMPT_FLAG = "--hostsfileget-elevation-attempted"
 
 # Hard cap for any single downloaded feed/whitelist payload (50 MB decompressed).
@@ -1647,6 +1647,7 @@ def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
         "has_completed_first_run": has_completed_first_run,
         "pinned_domains": sanitize_pinned_domains(config.get("pinned_domains", [])),
         "update_on_launch": bool(config.get("update_on_launch", False)),
+        "lock_after_save": bool(config.get("lock_after_save", False)),
     }
 
 def resolve_saved_state_hashes(current_hash: str, saved_raw_hash, saved_cleaned_hash) -> tuple[str | None, str | None]:
@@ -2088,6 +2089,50 @@ STALE_FRESH_HOURS = 24
 STALE_WARN_HOURS = 7 * 24
 
 
+# Deterministic keyword-to-category rules used by the live stats panel
+# breakdown. Order matters: the first match wins so "malware" beats
+# "ads" for a domain named "malware-ads.example". The "other" bucket
+# catches anything we can't confidently classify.
+DOMAIN_CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("malware", ("malware", "threat", "trojan", "botnet", "maltrail", "phish", "scam", "fraud", "ransom", "urlhaus")),
+    ("tracking", ("tracker", "analytics", "metric", "telemetry", "beacon", "pixel", "stat", "collect", "logger", "matomo", "hotjar", "fullstory")),
+    ("ads", ("ads", "adserver", "doubleclick", "adroll", "criteo", "adnxs", "pubmatic", "taboola", "outbrain", "admob", "popad", "banner", "partnerad", "ad-delivery", "yieldmo")),
+    ("crypto", ("coin", "miner", "cryptoloot", "cryptoni", "webminepool", "coinhive")),
+    ("social", ("facebook", "instagram", "twitter", "tiktok", "snapchat", "pinterest")),
+)
+
+
+def categorize_entries_by_domain_hint(lines: list[str]) -> dict[str, int]:
+    """Bucket active block entries by keyword hints in the domain name.
+
+    Returns a dict with keys ``"ads"``, ``"tracking"``, ``"malware"``,
+    ``"crypto"``, ``"social"``, ``"other"`` whose values are unique-entry
+    counts. Custom-IP mappings (LAN aliases) are excluded. This is a
+    heuristic — not a classification truth — but good enough to drive a
+    "47k ads, 12k tracking, 8k malware" style live readout.
+    """
+    counts = {"ads": 0, "tracking": 0, "malware": 0, "crypto": 0, "social": 0, "other": 0}
+    seen: set[str] = set()
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or _is_comment_line(stripped):
+            continue
+        parsed, _ = parse_hosts_line_entries(line)
+        for _, domain, is_block in parsed:
+            if not is_block:
+                continue
+            if domain in seen:
+                continue
+            seen.add(domain)
+            bucket = "other"
+            for category, keywords in DOMAIN_CATEGORY_RULES:
+                if any(kw in domain for kw in keywords):
+                    bucket = category
+                    break
+            counts[bucket] += 1
+    return counts
+
+
 def classify_source_freshness(iso_timestamp: str, now: float | None = None) -> str:
     """Bucket a source's last-fetched timestamp into a freshness tier.
 
@@ -2124,6 +2169,87 @@ def classify_source_freshness(iso_timestamp: str, now: float | None = None) -> s
     if delta_hours < STALE_WARN_HOURS:
         return "warm"
     return "stale"
+
+
+PROVENANCE_FILENAME = "hosts_editor_provenance.jsonl"
+PROVENANCE_MAX_BYTES = 2 * 1024 * 1024  # soft cap; rotates when exceeded
+PROVENANCE_EVENT_KINDS = frozenset({"pin", "unpin", "whitelist_add", "whitelist_remove"})
+
+
+def append_provenance_event(path: str, event: dict) -> None:
+    """Append a sanitized event record to the provenance JSONL file.
+
+    Each event is a single JSON object on its own line. We intentionally
+    keep the schema tiny and additive so existing files stay readable when
+    fields are added later. Safely no-ops on IO errors — a broken audit
+    log should never break a save.
+    """
+    kind = event.get("kind")
+    if kind not in PROVENANCE_EVENT_KINDS:
+        return
+    safe = {
+        "ts": datetime.datetime.now().isoformat(timespec="seconds"),
+        "kind": kind,
+        "user": str(os.environ.get("USERNAME") or os.environ.get("USER") or ""),
+        "app_version": APP_VERSION,
+    }
+    for key in ("domain", "domains", "source", "note"):
+        if key in event:
+            value = event[key]
+            if isinstance(value, (list, tuple)):
+                safe[key] = [str(item) for item in value][:500]
+            else:
+                safe[key] = str(value)
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    except OSError:
+        return
+
+    try:
+        # Rotate once the file grows past PROVENANCE_MAX_BYTES: keep the
+        # previous generation as .1 so the current file stays quickly
+        # readable. Only one rotation is kept — this is an audit log, not
+        # a shipping dataset.
+        if os.path.exists(path) and os.path.getsize(path) > PROVENANCE_MAX_BYTES:
+            rotated = path + ".1"
+            try:
+                if os.path.exists(rotated):
+                    os.unlink(rotated)
+            except OSError:
+                pass
+            try:
+                os.replace(path, rotated)
+            except OSError:
+                pass
+        with open(path, "a", encoding="utf-8") as fp:
+            fp.write(json.dumps(safe, ensure_ascii=False) + "\n")
+    except OSError:
+        # Audit log unavailable; caller's primary action is unaffected.
+        return
+
+
+def read_provenance_events(path: str, limit: int = 500) -> list[dict]:
+    """Return the most recent ``limit`` well-formed events from the log."""
+    if not os.path.isfile(path):
+        return []
+    out: list[dict] = []
+    try:
+        with open(path, "r", encoding="utf-8") as fp:
+            for line in fp:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(obj, dict) and obj.get("kind") in PROVENANCE_EVENT_KINDS:
+                    out.append(obj)
+    except OSError:
+        return []
+    if limit and len(out) > limit:
+        out = out[-limit:]
+    return out
 
 
 def build_pinned_export_payload(app_version: str, pinned: set[str]) -> dict:
@@ -2695,6 +2821,10 @@ class HostsFileEditor:
         self.pinned_domains: set[str] = set()
         # Auto-refresh stale sources on launch (opt-in, off by default).
         self._update_on_launch = False
+        # Lock the hosts file with the Windows "read-only" attribute after a
+        # successful save so a later unelevated write attempt fails fast.
+        # Off by default — interferes with legitimate third-party writers.
+        self._lock_after_save = False
         # Tracked to detect out-of-process edits to the hosts file between
         # loads. Set on every load_file() success; compared on the next
         # load to warn the user if something else rewrote the file.
@@ -3573,6 +3703,11 @@ class HostsFileEditor:
             "total_discarded": tk.StringVar(value="0"),
             "transformed": tk.StringVar(value="0"),
             "removed_whitelist": tk.StringVar(value="0"),
+            # v2.17: per-category heuristic breakdown
+            "cat_ads": tk.StringVar(value="0"),
+            "cat_tracking": tk.StringVar(value="0"),
+            "cat_malware": tk.StringVar(value="0"),
+            "cat_other": tk.StringVar(value="0"),
         }
 
         header = ttk.Frame(parent, style="Panel.TFrame")
@@ -3594,6 +3729,12 @@ class HostsFileEditor:
         self._create_metric_tile(grid_frame, "Final active", self.stat_vars["final_active"], row=0, col=1, color=PALETTE["green"])
         self._create_metric_tile(grid_frame, "Will remove", self.stat_vars["total_discarded"], row=0, col=2, color=PALETTE["red"])
         self._create_metric_tile(grid_frame, "Will normalize", self.stat_vars["transformed"], row=0, col=3, color=PALETTE["yellow"])
+
+        # Category row (heuristic — buckets by keyword hints in the domain).
+        self._create_metric_tile(grid_frame, "Ads", self.stat_vars["cat_ads"], row=1, col=0, color=PALETTE["blue"])
+        self._create_metric_tile(grid_frame, "Tracking", self.stat_vars["cat_tracking"], row=1, col=1, color=PALETTE["accent"])
+        self._create_metric_tile(grid_frame, "Malware", self.stat_vars["cat_malware"], row=1, col=2, color=PALETTE["red"])
+        self._create_metric_tile(grid_frame, "Other", self.stat_vars["cat_other"], row=1, col=3, color=PALETTE["overlay1"])
 
         for column in range(4):
             grid_frame.grid_columnconfigure(column, weight=1)
@@ -3858,6 +3999,17 @@ class HostsFileEditor:
         self.stat_vars["removed_whitelist"].set(f"{stats['removed_whitelist']:,}")
         self.stat_vars["total_discarded"].set(f"{stats['total_discarded']:,}")
 
+        # Per-category heuristic breakdown. Grouping tracking+ads+malware
+        # into named buckets plus a single "other" gives the user an
+        # at-a-glance composition without an extra dialog. Crypto + social
+        # stay folded into "other" to keep the panel to four tiles.
+        categories = categorize_entries_by_domain_hint(lines)
+        self.stat_vars["cat_ads"].set(f"{categories['ads']:,}")
+        self.stat_vars["cat_tracking"].set(f"{categories['tracking']:,}")
+        self.stat_vars["cat_malware"].set(f"{categories['malware']:,}")
+        other_count = categories['other'] + categories['crypto'] + categories['social']
+        self.stat_vars["cat_other"].set(f"{other_count:,}")
+
         discard_count = stats["removed_invalid"] + stats["removed_duplicates"] + stats["removed_whitelist"]
 
         if discard_count > 0:
@@ -4074,6 +4226,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="Goto Anything...", command=self.show_goto_anything)
         tools_menu.add_command(label="Find and Replace...", command=self.show_find_replace_dialog)
         tools_menu.add_command(label="Pinned Domains...", command=self.show_pinned_domains)
+        tools_menu.add_command(label="Provenance Log...", command=self.show_provenance_log)
         tools_menu.add_separator()
         import_menu = tk.Menu(tools_menu, tearoff=0, bg=PALETTE["mantle"], fg=PALETTE["text"],
                               activebackground=PALETTE["blue"], activeforeground="#0b1020")
@@ -4507,6 +4660,7 @@ class HostsFileEditor:
         self._has_completed_first_run = sanitized_config.get("has_completed_first_run", False)
         self.pinned_domains = set(sanitized_config.get("pinned_domains", []))
         self._update_on_launch = bool(sanitized_config.get("update_on_launch", False))
+        self._lock_after_save = bool(sanitized_config.get("lock_after_save", False))
 
         self.whitelist_text_area.delete('1.0', tk.END)
         self.whitelist_text_area.insert('1.0', sanitized_config["whitelist"])
@@ -4548,6 +4702,7 @@ class HostsFileEditor:
             "has_completed_first_run": self._has_completed_first_run,
             "pinned_domains": sorted(self.pinned_domains),
             "update_on_launch": self._update_on_launch,
+            "lock_after_save": self._lock_after_save,
         }, self.last_open_dir)
         try:
             self._write_config_payload(config)
@@ -4861,6 +5016,37 @@ class HostsFileEditor:
         try:
             subprocess.run(['ipconfig', '/flushdns'], capture_output=True, check=False, creationflags=subprocess.CREATE_NO_WINDOW)
         except Exception:
+            pass
+
+    def _apply_hosts_read_only_attribute(self) -> None:
+        """Set the Windows FILE_ATTRIBUTE_READONLY bit on the hosts file.
+
+        Best-effort. A later Save Cleaned / Save Raw clears the flag first
+        via ``_clear_hosts_read_only_attribute`` so our own edits still
+        work — the goal is to make drive-by writes by other processes fail
+        noisily instead of silently hijacking the hosts file.
+        """
+        if os.name != 'nt' or not os.path.exists(self.HOSTS_FILE_PATH):
+            return
+        try:
+            subprocess.run(
+                ["attrib", "+R", self.HOSTS_FILE_PATH],
+                capture_output=True, check=False,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        except OSError:
+            pass
+
+    def _clear_hosts_read_only_attribute(self) -> None:
+        if os.name != 'nt' or not os.path.exists(self.HOSTS_FILE_PATH):
+            return
+        try:
+            subprocess.run(
+                ["attrib", "-R", self.HOSTS_FILE_PATH],
+                capture_output=True, check=False,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        except OSError:
             pass
 
     # ----------------------------- IP target conversion ----------------------
@@ -5230,6 +5416,26 @@ class HostsFileEditor:
             justify="left",
         ).pack(anchor="w")
 
+        lock_card, _ = self._create_sidebar_card(
+            dialog,
+            "Hosts file lock",
+            "Optionally set the Windows read-only attribute on the hosts file after each successful save.",
+            accent=PALETTE["red"],
+        )
+        lock_var = tk.BooleanVar(value=self._lock_after_save)
+        ttk.Checkbutton(
+            lock_card,
+            text="Mark hosts file read-only after save",
+            variable=lock_var,
+        ).pack(anchor="w", pady=(0, 6))
+        ttk.Label(
+            lock_card,
+            text="Blocks drive-by writes by unelevated processes. HostsFileGet itself clears and re-applies the attribute transparently around its own saves.",
+            style="SectionBody.TLabel",
+            wraplength=460,
+            justify="left",
+        ).pack(anchor="w")
+
         btn_row = ttk.Frame(dialog)
         btn_row.pack(fill='x', padx=20, pady=(6, 20))
 
@@ -5243,11 +5449,20 @@ class HostsFileEditor:
             if chosen in BLOCK_SINK_IPS:
                 self._preferred_block_sink = chosen
             self._update_on_launch = bool(update_var.get())
+            previous_lock = self._lock_after_save
+            self._lock_after_save = bool(lock_var.get())
+            # Reflect the setting on disk immediately so the user sees it
+            # take effect without waiting for their next save.
+            if self._lock_after_save and not previous_lock and self.is_admin:
+                self._apply_hosts_read_only_attribute()
+            elif previous_lock and not self._lock_after_save and self.is_admin:
+                self._clear_hosts_read_only_attribute()
             self.save_config()
             dialog.destroy()
             self.update_status(
                 f"Preferences saved: retention={new_ret}, sink={self._preferred_block_sink}, "
-                f"auto-update={'on' if self._update_on_launch else 'off'}."
+                f"auto-update={'on' if self._update_on_launch else 'off'}, "
+                f"lock={'on' if self._lock_after_save else 'off'}."
             )
 
         ttk.Button(btn_row, text="Cancel", command=dialog.destroy, style="Secondary.TButton").pack(side="right", padx=(0, 8))
@@ -6106,6 +6321,11 @@ class HostsFileEditor:
         self.whitelist_text_area.insert('1.0', new_text + '\n')
         self._cached_whitelist_text = None  # invalidate
         self._trigger_ui_update()
+        self._log_provenance_event({
+            "kind": "whitelist_add",
+            "domain": domain,
+            "source": "context-menu",
+        })
         self.update_status(f"Added '{domain}' to whitelist.")
 
     def _ctx_pin_domain(self):
@@ -6120,6 +6340,11 @@ class HostsFileEditor:
         self.pinned_domains.add(bare)
         self.save_config()
         self._trigger_ui_update()
+        self._log_provenance_event({
+            "kind": "pin",
+            "domain": bare,
+            "source": "context-menu",
+        })
         self.update_status(
             f"Pinned '{bare}' — it will be preserved across Cleaned Save and whitelist filters."
         )
@@ -6136,7 +6361,51 @@ class HostsFileEditor:
         self.pinned_domains.discard(bare)
         self.save_config()
         self._trigger_ui_update()
+        self._log_provenance_event({
+            "kind": "unpin",
+            "domain": bare,
+            "source": "context-menu",
+        })
         self.update_status(f"Unpinned '{bare}'.")
+
+    def _log_provenance_event(self, event: dict) -> None:
+        """Thin wrapper around ``append_provenance_event`` that routes the
+        JSONL alongside the user's config. Failures are silent by design —
+        pinning/unpinning must never break because the audit log is busy.
+        """
+        try:
+            base_dir = os.path.dirname(self.config_path) or get_app_config_dir()
+            path = os.path.join(base_dir, PROVENANCE_FILENAME)
+            append_provenance_event(path, event)
+        except Exception:
+            pass
+
+    def show_provenance_log(self):
+        """Show the recent provenance events in a read-only report."""
+        base_dir = os.path.dirname(self.config_path) or get_app_config_dir()
+        path = os.path.join(base_dir, PROVENANCE_FILENAME)
+        events = read_provenance_events(path, limit=500)
+        if not events:
+            self._show_notice_dialog(
+                "No provenance entries yet",
+                "The audit log fills up as you pin, unpin, or whitelist domains. Try it once and reopen this panel.",
+                tone="info",
+            )
+            return
+        lines = [f"{'When':<20}  {'Kind':<16}  User           Domain / note"]
+        lines.append("-" * 96)
+        for event in events[-200:]:
+            ts = event.get("ts", "")[:19]
+            kind = event.get("kind", "")
+            user = (event.get("user", "") or "-")[:12]
+            note = event.get("domain") or event.get("note") or ",".join(event.get("domains", []))[:60] or ""
+            lines.append(f"{ts:<20}  {kind:<16}  {user:<12}   {note}")
+        self._show_text_report_dialog(
+            "Provenance log",
+            f"Most recent {len(lines) - 2} audit events from {path}.",
+            "\n".join(lines),
+            tone="info",
+        )
 
     def show_pinned_domains(self):
         """Modal showing every pinned domain with an Unpin action per row."""
@@ -6653,7 +6922,12 @@ class HostsFileEditor:
                 return False
 
         try:
+            # Clear the read-only bit if we had previously set it; without
+            # this the atomic replace would fail on subsequent saves.
+            self._clear_hosts_read_only_attribute()
             write_text_file_atomic(self.HOSTS_FILE_PATH, content_to_save)
+            if self._lock_after_save:
+                self._apply_hosts_read_only_attribute()
             return True
         except PermissionError as e:
             # On Windows this usually means the hosts file has its
@@ -8095,8 +8369,41 @@ def _cli_hosts_path() -> str:
     return _default_hosts_file_path()
 
 
+_CLI_LOG_PATH: str | None = None
+
+
+def _cli_enable_silent_logging() -> str | None:
+    """Route CLI progress output to a per-user log file and suppress stderr.
+
+    Used by `--silent` for scheduled-task runs where stderr noise triggers
+    unwanted Task Scheduler alerts. Returns the log path (or None if the
+    directory could not be prepared).
+    """
+    global _CLI_LOG_PATH
+    try:
+        log_dir = get_app_config_dir()
+        os.makedirs(log_dir, exist_ok=True)
+        _CLI_LOG_PATH = os.path.join(log_dir, "cli.log")
+        return _CLI_LOG_PATH
+    except OSError:
+        _CLI_LOG_PATH = None
+        return None
+
+
 def _cli_print(msg: str):
-    # Use stderr so GUI-less automation can redirect cleanly.
+    """Emit a CLI progress line.
+
+    In interactive / default mode we write to stderr so the caller can pipe
+    stdout cleanly. In silent mode (set up by ``_cli_enable_silent_logging``)
+    lines are appended to a timestamped log file instead.
+    """
+    if _CLI_LOG_PATH:
+        try:
+            with open(_CLI_LOG_PATH, "a", encoding="utf-8") as fp:
+                fp.write(f"{datetime.datetime.now().isoformat(timespec='seconds')}  {msg}\n")
+        except OSError:
+            pass
+        return
     print(msg, file=sys.stderr)
 
 
@@ -8338,7 +8645,7 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     # Strip the elevation-probe flag so argparse doesn't choke on it; the
     # flag exists only to keep us from UAC-looping.
     argv = [arg for arg in argv if arg != ELEVATION_ATTEMPT_FLAG]
-    cli_flags = {"--version", "--disable", "--enable", "--backup", "--apply", "--update", "-h", "--help"}
+    cli_flags = {"--version", "--disable", "--enable", "--backup", "--apply", "--update", "--silent", "-h", "--help"}
     if not any(arg in cli_flags or arg.startswith("--apply=") for arg in argv):
         return None
 
@@ -8352,8 +8659,15 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--backup", action="store_true", help="Create a timestamped backup of the current hosts file.")
     parser.add_argument("--apply", metavar="PATH", help="Overwrite the hosts file with the contents of PATH (creates backup first).")
     parser.add_argument("--update", action="store_true", help="Re-fetch every source previously imported in the GUI and apply a Cleaned Save of the merged result.")
+    parser.add_argument(
+        "--silent", action="store_true",
+        help="Suppress stderr progress. Progress is logged to %%LOCALAPPDATA%%\\HostsFileGet\\cli.log instead. Designed for Task Scheduler runs.",
+    )
 
     args = parser.parse_args(argv)
+
+    if args.silent:
+        _cli_enable_silent_logging()
 
     if args.version:
         print(f"{APP_NAME} v{APP_VERSION}")

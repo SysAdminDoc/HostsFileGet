@@ -2,6 +2,26 @@
 
 All notable changes to HostsFileGet will be documented in this file.
 
+## [v2.17.0] - 2026-04-18
+
+**Live stats panel — per-category breakdown**
+- Added a second row of metric tiles: **Ads / Tracking / Malware / Other**. Categorization is heuristic (keyword matches against the domain) so it's fast, deterministic, and doesn't need any lookup service. Crypto + Social fold into *Other* to keep the row at four tiles.
+
+**Hosts file read-only lock**
+- New Preferences checkbox: *Mark hosts file read-only after save*. Sets the Windows `FILE_ATTRIBUTE_READONLY` bit via `attrib +R` after every successful save; HostsFileGet's own saves transparently clear the bit first and re-apply it after. Off by default — interferes with legitimate third-party writers — but HostsMan-parity for users who want the extra tamper resistance.
+
+**Silent CLI mode**
+- `--silent` flag suppresses stderr output and routes progress to `%LOCALAPPDATA%\HostsFileGet\cli.log` with ISO timestamps. Designed so Windows Task Scheduler jobs don't spam the dashboard with benign stderr noise. Works with all existing actions (`--backup`, `--update`, `--disable`, etc.).
+
+**Provenance sidecar (audit log)**
+- Every pin, unpin, and whitelist action now appends a one-line JSON record to `hosts_editor_provenance.jsonl` next to the config. Each record captures timestamp, action kind, Windows username, and app version.
+- Log auto-rotates at 2 MB (keeps one `.1` generation).
+- New **Tools > Provenance Log...** dialog shows the most recent 500 entries in a read-only table.
+
+**Tests**
+- 8 new regression tests for `categorize_entries_by_domain_hint` (bucketing, dedup, keyword hygiene), `append_provenance_event` / `read_provenance_events` (valid + malformed + missing-file + unknown-kind guard), `PROVENANCE_EVENT_KINDS`, and the new `lock_after_save` config field.
+- Suite: **110 tests** (was 102).
+
 ## [v2.16.0] - 2026-04-18
 
 **Source freshness at a glance**

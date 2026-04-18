@@ -13,13 +13,18 @@ import hosts_editor
 from hosts_editor import (
     AGH_BLOCK_REASONS,
     BLOCK_SINK_IPS,
+    DOMAIN_CATEGORY_RULES,
     FTL_BLOCKED_STATUS_CODES,
     HostsFileEditor,
+    PROVENANCE_EVENT_KINDS,
     STALE_FRESH_HOURS,
     STALE_WARN_HOURS,
+    append_provenance_event,
     build_pinned_export_payload,
+    categorize_entries_by_domain_hint,
     classify_source_freshness,
     parse_pinned_import_payload,
+    read_provenance_events,
     IPV4_REGEX,
     MAX_DOWNLOAD_BYTES,
     STOCK_MICROSOFT_HOSTS,
@@ -1399,6 +1404,107 @@ class HostsEditorLogicTests(unittest.TestCase):
     def test_parse_pinned_import_payload_rejects_wrong_type(self):
         with self.assertRaises(ValueError):
             parse_pinned_import_payload("just a string")
+
+    # ---- v2.17: per-category stats heuristic ----
+    def test_categorize_entries_by_domain_hint_buckets_correctly(self):
+        lines = [
+            "0.0.0.0 doubleclick.net",
+            "0.0.0.0 ads.example",
+            "0.0.0.0 google-analytics.com",
+            "0.0.0.0 telemetry.microsoft.com",
+            "0.0.0.0 malware.example",
+            "0.0.0.0 phishing.example",
+            "0.0.0.0 crypto-miner.example",
+            "0.0.0.0 facebook.com",
+            "0.0.0.0 lanhost.example",       # falls to 'other'
+            "192.168.1.10 printer",          # custom mapping, ignored
+            "# comment",                      # ignored
+        ]
+        counts = categorize_entries_by_domain_hint(lines)
+        self.assertGreaterEqual(counts["ads"], 2)
+        self.assertGreaterEqual(counts["tracking"], 1)  # analytics + telemetry
+        self.assertGreaterEqual(counts["malware"], 2)  # malware + phishing
+        self.assertGreaterEqual(counts["crypto"], 1)
+        self.assertGreaterEqual(counts["social"], 1)
+        self.assertGreaterEqual(counts["other"], 1)
+        # Custom IP mapping (192.168.1.10 printer) must not appear in any
+        # bucket — only the 9 blocking domains should be counted.
+        total = sum(counts.values())
+        self.assertEqual(total, 9)
+
+    def test_categorize_entries_dedupes_repeated_domains(self):
+        lines = [
+            "0.0.0.0 ads.example",
+            "0.0.0.0 ads.example",
+            "0.0.0.0 ads.example",
+        ]
+        counts = categorize_entries_by_domain_hint(lines)
+        self.assertEqual(counts["ads"], 1)
+
+    def test_domain_category_rules_keywords_are_lowercase(self):
+        # Guard rule: all keywords must be lowercase because the matcher
+        # compares against a lowercased domain.
+        for _, keywords in DOMAIN_CATEGORY_RULES:
+            for kw in keywords:
+                self.assertEqual(kw, kw.lower(), f"{kw!r} must be lowercase")
+
+    # ---- v2.17: provenance sidecar ----
+    def test_provenance_roundtrip_records_valid_events(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = str(Path(tmpdir) / "audit.jsonl")
+            append_provenance_event(log_path, {"kind": "pin", "domain": "ads.example"})
+            append_provenance_event(log_path, {"kind": "unpin", "domain": "ads.example"})
+            append_provenance_event(log_path, {"kind": "whitelist_add", "domain": "x.example", "source": "ui"})
+            # Unknown kind is silently dropped, not exploded.
+            append_provenance_event(log_path, {"kind": "bogus", "domain": "ignored.example"})
+
+            events = read_provenance_events(log_path)
+            self.assertEqual(len(events), 3)
+            kinds = [e["kind"] for e in events]
+            self.assertEqual(kinds, ["pin", "unpin", "whitelist_add"])
+            # Schema adds ts, kind, user, app_version.
+            for event in events:
+                self.assertIn("ts", event)
+                self.assertIn("kind", event)
+                self.assertIn("app_version", event)
+
+    def test_provenance_event_kinds_guarded(self):
+        self.assertIn("pin", PROVENANCE_EVENT_KINDS)
+        self.assertIn("unpin", PROVENANCE_EVENT_KINDS)
+        self.assertIn("whitelist_add", PROVENANCE_EVENT_KINDS)
+        self.assertIn("whitelist_remove", PROVENANCE_EVENT_KINDS)
+
+    def test_provenance_read_tolerates_bad_lines(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "audit.jsonl"
+            log_path.write_text(
+                '\n'.join([
+                    '{"kind":"pin","domain":"ok.example","ts":"2026-04-18T10:00:00"}',
+                    'not json at all',
+                    '{"kind":"bogus","domain":"filtered.example","ts":"2026-04-18T10:01:00"}',
+                    '{"kind":"unpin","domain":"still-ok.example","ts":"2026-04-18T10:02:00"}',
+                ]),
+                encoding="utf-8",
+            )
+            events = read_provenance_events(str(log_path))
+            kinds = [e.get("kind") for e in events]
+            self.assertEqual(kinds, ["pin", "unpin"])
+
+    def test_provenance_missing_file_returns_empty_list(self):
+        self.assertEqual(read_provenance_events("Z:/definitely/not/here.jsonl"), [])
+
+    # ---- v2.17: lock_after_save config ----
+    def test_sanitize_config_snapshot_persists_lock_after_save(self):
+        on = sanitize_config_snapshot({"lock_after_save": True}, os.path.expanduser("~"))
+        off = sanitize_config_snapshot({}, os.path.expanduser("~"))
+        self.assertTrue(on["lock_after_save"])
+        self.assertFalse(off["lock_after_save"])
 
     def test_sanitize_config_snapshot_persists_update_on_launch(self):
         truthy = sanitize_config_snapshot({"update_on_launch": True}, os.path.expanduser("~"))
