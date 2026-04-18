@@ -23,13 +23,14 @@ import threading
 import queue
 import gzip
 import bz2
+import pathlib
 import datetime
 import argparse
 import glob
 
 APP_NAME = "Hosts File Get"
 APP_SLUG = "HostsFileGet"
-APP_VERSION = "2.14.0"
+APP_VERSION = "2.15.0"
 ELEVATION_ATTEMPT_FLAG = "--hostsfileget-elevation-attempted"
 
 # Hard cap for any single downloaded feed/whitelist payload (50 MB decompressed).
@@ -1198,27 +1199,33 @@ WINDOWS_HEADER = [
 ]
 
 
-def _get_canonical_cleaned_output_and_stats(original_lines: list[str], whitelist_set: set) -> tuple[list[str], dict]:
+def _get_canonical_cleaned_output_and_stats(
+    original_lines: list[str],
+    whitelist_set: set,
+    pinned_domains: set | None = None,
+) -> tuple[list[str], dict]:
     stats = {
         "lines_total": len(original_lines),
         "removed_blanks": 0,
         "removed_comments": 0,
         "removed_whitelist": 0,
         "removed_duplicates": 0,
-        "removed_invalid": 0, 
-        "transformed": 0, 
+        "removed_invalid": 0,
+        "transformed": 0,
+        "pinned_preserved": 0,
     }
-    
+
+    pinned = {p.lstrip('.') for p in (pinned_domains or set())}
     seen_normalized = set()
     active_entries_to_keep = []
-    
+
     for line in original_lines:
         stripped = line.strip()
-        
+
         if not stripped:
             stats["removed_blanks"] += 1
             continue
-        
+
         if _is_comment_line(stripped):
             stats["removed_comments"] += 1
             continue
@@ -1230,9 +1237,14 @@ def _get_canonical_cleaned_output_and_stats(original_lines: list[str], whitelist
 
         kept_from_line = 0
         for normalized, domain, is_block_entry in parsed_entries:
-            if is_block_entry and (domain in whitelist_set or domain.lstrip('.') in whitelist_set):
-                stats["removed_whitelist"] += 1
-                continue
+            bare_domain = domain.lstrip('.')
+            if is_block_entry and (domain in whitelist_set or bare_domain in whitelist_set):
+                # Pinned entries outrank the whitelist — a user who pinned
+                # a domain wants it kept blocked even when the same domain
+                # is (e.g.) on a shared whitelist feed.
+                if bare_domain not in pinned:
+                    stats["removed_whitelist"] += 1
+                    continue
 
             if normalized in seen_normalized:
                 stats["removed_duplicates"] += 1
@@ -1245,13 +1257,22 @@ def _get_canonical_cleaned_output_and_stats(original_lines: list[str], whitelist
         if kept_from_line > 0 and transformed:
             stats["transformed"] += 1
 
+    # Ensure every pinned domain is present even if the editor never had it.
+    for bare in sorted(pinned):
+        synthetic = f"0.0.0.0 {bare}"
+        if synthetic in seen_normalized:
+            continue
+        seen_normalized.add(synthetic)
+        active_entries_to_keep.append(synthetic)
+        stats["pinned_preserved"] += 1
+
     final_header = WINDOWS_HEADER + [
         f"#\t127.0.0.1       localhost ({len(active_entries_to_keep)} active entries prepared by editor)",
         "#\t::1             localhost",
         "",
         f"# --- Active Hosts Entries (Cleaned & Sorted by {APP_NAME} v{APP_VERSION}) ---"
     ]
-    
+
     cleaned_lines = final_header + sorted(active_entries_to_keep)
     
     if cleaned_lines and cleaned_lines[-1].strip():
@@ -1269,8 +1290,12 @@ def _get_canonical_cleaned_output_and_stats(original_lines: list[str], whitelist
 
     return cleaned_lines, stats
 
-def compute_clean_impact_stats(original_lines: list[str], whitelist_set: set) -> dict:
-    _, stats = _get_canonical_cleaned_output_and_stats(original_lines, whitelist_set)
+def compute_clean_impact_stats(
+    original_lines: list[str],
+    whitelist_set: set,
+    pinned_domains: set | None = None,
+) -> dict:
+    _, stats = _get_canonical_cleaned_output_and_stats(original_lines, whitelist_set, pinned_domains)
     return stats
 
 TEXT_FILE_ENCODINGS = ("utf-8", "utf-8-sig", "cp1252", "latin-1")
@@ -1620,6 +1645,7 @@ def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
         "preferred_block_sink": preferred_sink,
         "backup_retention": backup_retention,
         "has_completed_first_run": has_completed_first_run,
+        "pinned_domains": sanitize_pinned_domains(config.get("pinned_domains", [])),
     }
 
 def resolve_saved_state_hashes(current_hash: str, saved_raw_hash, saved_cleaned_hash) -> tuple[str | None, str | None]:
@@ -2057,6 +2083,220 @@ def fuzzy_score(query: str, target: str) -> int:
     return score
 
 
+def sanitize_pinned_domains(value) -> list[str]:
+    """Return a deduplicated, lowercase list of valid domain strings.
+
+    Pinned entries are persisted in config. We accept raw domains only
+    (not full hosts lines) to keep the stored shape simple. Invalid
+    entries are dropped silently so a hand-edited config can't poison
+    the list.
+    """
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    seen: set[str] = set()
+    pinned: list[str] = []
+    for candidate in value:
+        if not isinstance(candidate, str):
+            continue
+        normalized = candidate.strip().lower().lstrip('.')
+        if not normalized or normalized in seen:
+            continue
+        if not looks_like_domain(normalized, allow_single_label=False):
+            continue
+        seen.add(normalized)
+        pinned.append(normalized)
+    return pinned
+
+
+# Pi-hole FTL stores per-query rows with integer status codes. Codes 1,4,5,
+# 6,7,8,9,10,11 all represent some form of block (upstream block, regex
+# match, gravity, wildcard, external block, etc.). Codes 2,3,12 are allow
+# decisions. See FTL commit history / pihole-FTL.db schema for the full
+# enum.
+FTL_BLOCKED_STATUS_CODES = (1, 4, 5, 6, 7, 8, 9, 10, 11)
+
+
+def _sqlite_readonly_uri(path: str) -> str:
+    """Build a SQLite ``file:`` URI that opens ``path`` read-only.
+
+    SQLite URI paths must start with ``/`` for absolute paths. ``pathlib``
+    on Windows yields ``C:/foo/bar.db`` (no leading slash), which SQLite
+    treats as a relative URI fragment. Prepend a slash for absolute paths.
+    """
+    posix = pathlib.Path(path).as_posix()
+    if not posix.startswith('/'):
+        posix = '/' + posix
+    return f"file:{posix}?mode=ro"
+
+
+def parse_pihole_ftl_blocked_domains(sqlite_path: str, max_rows: int = 50_000) -> list[str]:
+    """Return blocked domains from a Pi-hole FTL ``pihole-FTL.db`` file.
+
+    Reads the ``queries`` table in read-only mode and keeps only rows where
+    the query was blocked (see ``FTL_BLOCKED_STATUS_CODES``). Caller is
+    expected to pass a valid path — we raise ``OSError`` subclasses or
+    ``sqlite3.Error`` on failure.
+    """
+    import sqlite3
+
+    if not os.path.isfile(sqlite_path):
+        raise FileNotFoundError(f"FTL database not found: {sqlite_path}")
+
+    uri = _sqlite_readonly_uri(sqlite_path)
+    try:
+        conn = sqlite3.connect(uri, uri=True)
+    except sqlite3.Error as e:
+        raise OSError(f"Could not open FTL DB: {e}") from e
+    try:
+        placeholders = ",".join("?" * len(FTL_BLOCKED_STATUS_CODES))
+        cursor = conn.execute(
+            f"SELECT DISTINCT domain FROM queries "
+            f"WHERE status IN ({placeholders}) "
+            f"ORDER BY timestamp DESC LIMIT ?",
+            (*FTL_BLOCKED_STATUS_CODES, int(max_rows)),
+        )
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        domain = (row[0] or "").strip().lower().lstrip('.')
+        if not domain or domain in seen:
+            continue
+        if not looks_like_domain(domain, allow_single_label=False):
+            continue
+        seen.add(domain)
+        out.append(domain)
+    return out
+
+
+# AdGuard Home reason codes: only the "Filtered*" family represents an
+# actual block decision. Earlier drafts of this parser also accepted 1
+# (NotFilteredAllowList) and 9/10 (Rewrite/RewriteAutoHosts), which would
+# have imported explicitly-allowed and rewrite-target domains as if they
+# were blocks.
+AGH_BLOCK_REASONS = frozenset({3, 4, 5, 7, 8, 12})
+
+
+def parse_adguard_home_querylog(text: str) -> list[str]:
+    """Extract blocked domains from an AdGuard Home ``querylog.json`` stream.
+
+    AGH writes NDJSON (one JSON object per line). We pull the ``QH`` field
+    (question hostname) from entries where ``Result.Reason`` is one of the
+    Filtered* codes (``AGH_BLOCK_REASONS``). ``IsFiltered`` alone is accepted
+    as a fallback for log versions where ``Reason`` is missing or 0. If
+    ``text`` is a JSON array instead of NDJSON we walk it directly.
+    """
+    candidates: list[dict] = []
+    text = text.strip()
+    if not text:
+        return []
+    if text.startswith('['):
+        try:
+            loaded = json.loads(text)
+            if isinstance(loaded, list):
+                candidates = [item for item in loaded if isinstance(item, dict)]
+        except ValueError:
+            return []
+    else:
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(obj, dict):
+                candidates.append(obj)
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        result_raw = item.get("Result")
+        result = result_raw if isinstance(result_raw, dict) else {}
+        reason = result.get("Reason")
+        is_filtered = bool(result.get("IsFiltered"))
+        if reason in AGH_BLOCK_REASONS:
+            pass  # definitely a block
+        elif reason is None and is_filtered:
+            pass  # missing Reason but IsFiltered=true → legacy log, accept
+        else:
+            continue
+        domain = (item.get("QH") or item.get("Q") or "").strip().lower().rstrip('.')
+        if not domain or domain in seen:
+            continue
+        if not looks_like_domain(domain, allow_single_label=False):
+            continue
+        seen.add(domain)
+        out.append(domain)
+    return out
+
+
+def apply_find_replace(
+    lines: list[str],
+    pattern: str,
+    replacement: str,
+    *,
+    use_regex: bool = False,
+    case_sensitive: bool = False,
+) -> tuple[list[str], int]:
+    """Plain-text or regex find/replace across all lines. Returns (new_lines, count)."""
+    if not pattern:
+        return list(lines), 0
+    if use_regex:
+        try:
+            flags = 0 if case_sensitive else re.IGNORECASE
+            compiled = re.compile(pattern, flags)
+        except re.error as e:
+            raise ValueError(f"Invalid regex: {e}") from e
+        new_lines: list[str] = []
+        count = 0
+        for line in lines:
+            new_line, n = compiled.subn(replacement, line)
+            count += n
+            new_lines.append(new_line)
+        return new_lines, count
+
+    # Literal replace: case-insensitive impl hand-rolled so we preserve
+    # original case of *surrounding* text even when matching case-folded.
+    if case_sensitive:
+        new_lines = []
+        count = 0
+        for line in lines:
+            n = line.count(pattern)
+            if n:
+                line = line.replace(pattern, replacement)
+                count += n
+            new_lines.append(line)
+        return new_lines, count
+
+    needle = pattern.lower()
+    new_lines = []
+    count = 0
+    for line in lines:
+        lowered = line.lower()
+        if needle not in lowered:
+            new_lines.append(line)
+            continue
+        # Walk indices to replace in the original case.
+        rebuilt: list[str] = []
+        i = 0
+        while i < len(line):
+            j = lowered.find(needle, i)
+            if j < 0:
+                rebuilt.append(line[i:])
+                break
+            rebuilt.append(line[i:j])
+            rebuilt.append(replacement)
+            count += 1
+            i = j + len(pattern)
+        new_lines.append(''.join(rebuilt))
+    return new_lines, count
+
+
 def discover_import_sections(lines: list[str]) -> list[dict]:
     """Locate every ``# --- {Raw|Normalized} Import Start/End: NAME ---`` block.
 
@@ -2371,6 +2611,10 @@ class HostsFileEditor:
         self._preferred_block_sink = "0.0.0.0"
         self._backup_retention = BACKUP_RETENTION
         self._has_completed_first_run = False
+        # Persistent pinned-domain allowlist. Pinned domains survive Cleaned
+        # Save as "keep no matter what", separate from the whitelist which
+        # strips entries. Used for the Starred smart view.
+        self.pinned_domains: set[str] = set()
         
         self.import_mode = tk.StringVar(value="Normalized") 
         self.dry_run_mode = tk.BooleanVar(value=False)
@@ -2888,6 +3132,8 @@ class HostsFileEditor:
         self.text_area.bind("<Button-2>", self._show_editor_context_menu)
         self.text_area.bind("<Control-slash>", self.toggle_selection_comment)
         self.root.bind("<Control-p>", self.show_goto_anything)
+        self.root.bind("<Control-h>", self.show_find_replace_dialog)
+        self.root.bind("<Control-H>", self.show_find_replace_dialog)
 
         # Init
         try:
@@ -3485,7 +3731,7 @@ class HostsFileEditor:
         return "break"
 
     def _update_diff_stats(self, lines):
-        stats = compute_clean_impact_stats(lines, self._get_whitelist_set())
+        stats = compute_clean_impact_stats(lines, self._get_whitelist_set(), self.pinned_domains)
 
         self.stat_vars["total"].set(f"{stats['lines_total']:,}")
         self.stat_vars["final_active"].set(f"{stats['final_active']:,}")
@@ -3680,6 +3926,7 @@ class HostsFileEditor:
         file_menu.add_command(label="Save Cleaned", command=self.save_cleaned_file)
         file_menu.add_command(label="Refresh", command=self.load_file)
         file_menu.add_command(label="Revert to Backup", command=self.revert_to_backup)
+        file_menu.add_command(label="Compare Backups...", command=self.show_backup_diff_viewer)
         file_menu.add_command(label="Panic Restore (Microsoft default)", command=self.panic_restore_stock)
         file_menu.add_separator()
         file_menu.add_command(label="Export Cleaned As...", command=self.show_export_dialog)
@@ -3708,6 +3955,16 @@ class HostsFileEditor:
         tools_menu.add_command(label="Hosts Health Scan...", command=self.show_health_scan)
         tools_menu.add_command(label="Sources Report...", command=self.show_sources_report)
         tools_menu.add_command(label="Goto Anything...", command=self.show_goto_anything)
+        tools_menu.add_command(label="Find and Replace...", command=self.show_find_replace_dialog)
+        tools_menu.add_command(label="Pinned Domains...", command=self.show_pinned_domains)
+        tools_menu.add_separator()
+        import_menu = tk.Menu(tools_menu, tearoff=0, bg=PALETTE["mantle"], fg=PALETTE["text"],
+                              activebackground=PALETTE["blue"], activeforeground="#0b1020")
+        import_menu.add_command(label="From pfSense DNSBL log...", command=self.import_pfsense_log)
+        import_menu.add_command(label="From NextDNS query log (CSV)...", command=self.import_nextdns_log)
+        import_menu.add_command(label="From Pi-hole FTL (pihole-FTL.db)...", command=self.import_pihole_ftl)
+        import_menu.add_command(label="From AdGuard Home query log...", command=self.import_adguard_home_querylog)
+        tools_menu.add_cascade(label="Import Blocked Queries From Log", menu=import_menu)
         tools_menu.add_separator()
         tools_menu.add_command(label="Schedule Auto-Update...", command=self.show_schedule_wizard)
         tools_menu.add_command(label="Preferences...", command=self.show_preferences)
@@ -4131,6 +4388,7 @@ class HostsFileEditor:
         self._preferred_block_sink = sanitized_config.get("preferred_block_sink", "0.0.0.0")
         self._backup_retention = sanitized_config.get("backup_retention", BACKUP_RETENTION)
         self._has_completed_first_run = sanitized_config.get("has_completed_first_run", False)
+        self.pinned_domains = set(sanitized_config.get("pinned_domains", []))
 
         self.whitelist_text_area.delete('1.0', tk.END)
         self.whitelist_text_area.insert('1.0', sanitized_config["whitelist"])
@@ -4170,6 +4428,7 @@ class HostsFileEditor:
             "preferred_block_sink": self._preferred_block_sink,
             "backup_retention": self._backup_retention,
             "has_completed_first_run": self._has_completed_first_run,
+            "pinned_domains": sorted(self.pinned_domains),
         }, self.last_open_dir)
         try:
             self._write_config_payload(config)
@@ -4690,7 +4949,7 @@ class HostsFileEditor:
     def show_export_dialog(self):
         original = self.get_lines()
         whitelist_set = self._get_whitelist_set()
-        cleaned, stats = _get_canonical_cleaned_output_and_stats(original, whitelist_set)
+        cleaned, stats = _get_canonical_cleaned_output_and_stats(original, whitelist_set, self.pinned_domains)
 
         dialog = tk.Toplevel(self.root)
         self._configure_modal_window(
@@ -5550,24 +5809,44 @@ class HostsFileEditor:
         if not domain:
             self.update_status("No domain detected at cursor.", is_error=True)
             return
+
         import socket
-        try:
-            infos = socket.getaddrinfo(domain, None)
-        except socket.gaierror as e:
-            self._show_notice_dialog(
-                f"Resolve domain: {domain}",
-                "DNS resolution failed for this domain.",
-                tone="warning",
-                details=str(e),
-            )
-            return
-        addrs = sorted({info[4][0] for info in infos})
-        self._show_text_report_dialog(
-            f"Resolve domain: {domain}",
-            "Live DNS resolution from the current machine.",
-            "\n".join(addrs) if addrs else "(no addresses)",
-            tone="info",
-        )
+
+        self.update_status(f"Resolving {domain}...")
+
+        def worker():
+            try:
+                infos = socket.getaddrinfo(domain, None)
+                addrs = sorted({info[4][0] for info in infos})
+                error: Exception | None = None
+            except socket.gaierror as e:
+                addrs = []
+                error = e
+            except OSError as e:
+                addrs = []
+                error = e
+
+            def show_result():
+                self.update_status(f"Resolved {domain}." if addrs else f"Resolve failed for {domain}.",
+                                   is_error=bool(error))
+                if error is not None:
+                    self._show_notice_dialog(
+                        f"Resolve domain: {domain}",
+                        "DNS resolution failed for this domain.",
+                        tone="warning",
+                        details=str(error),
+                    )
+                    return
+                self._show_text_report_dialog(
+                    f"Resolve domain: {domain}",
+                    "Live DNS resolution from the current machine (bypasses the hosts file).",
+                    "\n".join(addrs) if addrs else "(no addresses)",
+                    tone="info",
+                )
+
+            self._safe_after(0, show_result)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _ctx_ping_domain(self):
         _, _, domain = self._ctx_line_info()
@@ -5609,6 +5888,8 @@ class HostsFileEditor:
             bg=PALETTE["mantle"], fg=PALETTE["text"],
             activebackground=PALETTE["blue"], activeforeground="#0b1020",
         )
+        menu.add_command(label="Pin this domain (star)", command=self._ctx_pin_domain)
+        menu.add_command(label="Unpin this domain", command=self._ctx_unpin_domain)
         menu.add_command(label="Whitelist this domain", command=self._ctx_whitelist_domain)
         menu.add_command(label="Copy domain", command=self._ctx_copy_domain)
         menu.add_separator()
@@ -5648,6 +5929,120 @@ class HostsFileEditor:
         self._cached_whitelist_text = None  # invalidate
         self._trigger_ui_update()
         self.update_status(f"Added '{domain}' to whitelist.")
+
+    def _ctx_pin_domain(self):
+        _, _, domain = self._ctx_line_info()
+        if not domain:
+            self.update_status("No domain detected at cursor.", is_error=True)
+            return
+        bare = domain.lstrip('.')
+        if bare in self.pinned_domains:
+            self.update_status(f"'{bare}' is already pinned.")
+            return
+        self.pinned_domains.add(bare)
+        self.save_config()
+        self._trigger_ui_update()
+        self.update_status(
+            f"Pinned '{bare}' — it will be preserved across Cleaned Save and whitelist filters."
+        )
+
+    def _ctx_unpin_domain(self):
+        _, _, domain = self._ctx_line_info()
+        if not domain:
+            self.update_status("No domain detected at cursor.", is_error=True)
+            return
+        bare = domain.lstrip('.')
+        if bare not in self.pinned_domains:
+            self.update_status(f"'{bare}' is not pinned.")
+            return
+        self.pinned_domains.discard(bare)
+        self.save_config()
+        self._trigger_ui_update()
+        self.update_status(f"Unpinned '{bare}'.")
+
+    def show_pinned_domains(self):
+        """Modal showing every pinned domain with an Unpin action per row."""
+        dialog = tk.Toplevel(self.root)
+        self._configure_modal_window(
+            dialog,
+            title="Pinned domains",
+            size="520x480",
+            min_size=(460, 360),
+        )
+
+        intro, _ = self._create_sidebar_card(
+            dialog,
+            "Pinned domains",
+            "Pinned domains are preserved across Cleaned Save even when they are covered by your whitelist. "
+            "Right-click an entry in the editor to pin or unpin it.",
+            accent=PALETTE["yellow"],
+        )
+        ttk.Label(
+            intro,
+            text=f"{len(self.pinned_domains):,} domain(s) currently pinned.",
+            style="SectionBody.TLabel",
+        ).pack(anchor="w")
+
+        list_container = ttk.Frame(dialog, padding=(20, 0, 20, 10))
+        list_container.pack(expand=True, fill="both")
+
+        listbox = tk.Listbox(list_container, selectmode=tk.EXTENDED)
+        self._style_listbox_surface(listbox, font_spec=self.mono_small_font)
+        scrollbar = ttk.Scrollbar(list_container, orient="vertical", command=listbox.yview)
+        listbox.configure(yscrollcommand=scrollbar.set)
+        listbox.pack(side="left", expand=True, fill="both")
+        scrollbar.pack(side="right", fill="y")
+
+        def refresh_listbox():
+            listbox.delete(0, tk.END)
+            for pinned in sorted(self.pinned_domains):
+                listbox.insert(tk.END, pinned)
+
+        refresh_listbox()
+
+        def do_unpin_selected():
+            indices = listbox.curselection()
+            if not indices:
+                self.update_status("Select one or more domains to unpin.", is_error=True)
+                return
+            targets = {listbox.get(i) for i in indices}
+            if not targets:
+                return
+            self.pinned_domains.difference_update(targets)
+            self.save_config()
+            self._trigger_ui_update()
+            refresh_listbox()
+            self.update_status(f"Unpinned {len(targets)} domain(s).")
+
+        def do_clear_all():
+            if not self.pinned_domains:
+                return
+            if not self._confirm_dialog(
+                "Unpin every domain?",
+                f"This will remove all {len(self.pinned_domains):,} pinned domains. Cleaned Save "
+                "will no longer preserve them against whitelist matches.",
+                tone="warning",
+                confirm_text="Unpin all",
+                cancel_text="Keep pinned",
+            ):
+                return
+            count = len(self.pinned_domains)
+            self.pinned_domains.clear()
+            self.save_config()
+            self._trigger_ui_update()
+            refresh_listbox()
+            self.update_status(f"Unpinned all {count} domain(s).")
+
+        btn_row = ttk.Frame(dialog, padding=(20, 0, 20, 20))
+        btn_row.pack(fill="x")
+        ttk.Button(btn_row, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
+        ttk.Button(btn_row, text="Unpin Selected", command=do_unpin_selected, style="Danger.TButton").pack(
+            side="right", padx=(0, 8)
+        )
+        ttk.Button(btn_row, text="Unpin All", command=do_clear_all, style="Danger.TButton").pack(
+            side="right", padx=(0, 8)
+        )
+        dialog.grab_set()
 
     def _ctx_copy_domain(self):
         _, _, domain = self._ctx_line_info()
@@ -5893,8 +6288,8 @@ class HostsFileEditor:
             return
         original_lines = self.get_lines()
         whitelist_set = self._get_whitelist_set()
-        
-        final_lines, stats = _get_canonical_cleaned_output_and_stats(original_lines, whitelist_set)
+
+        final_lines, stats = _get_canonical_cleaned_output_and_stats(original_lines, whitelist_set, self.pinned_domains)
         total_discarded = stats["total_discarded"]
         change_summary = summarize_clean_changes(total_discarded, stats["transformed"])
 
@@ -6426,6 +6821,275 @@ class HostsFileEditor:
                 details=str(e),
             )
             
+    def import_pihole_ftl(self):
+        filepath = self._choose_file(
+            title="Select pihole-FTL.db",
+            filetypes=(("SQLite DB", "*.db"), ("All files", "*.*")),
+        )
+        if not filepath:
+            return
+
+        filename = os.path.basename(filepath)
+        self.update_status(f"Reading {filename}...")
+
+        def worker():
+            try:
+                domains = parse_pihole_ftl_blocked_domains(filepath)
+                error: Exception | None = None
+            except (OSError, RuntimeError, ValueError) as e:
+                domains = []
+                error = e
+
+            def apply_result():
+                if error is not None:
+                    self.update_status(f"Pi-hole FTL import failed: {error}", is_error=True)
+                    self._show_notice_dialog(
+                        "Could not import Pi-hole FTL DB",
+                        "The selected file could not be read as a Pi-hole FTL database.",
+                        tone="error",
+                        details=str(error),
+                    )
+                    return
+                if not domains:
+                    self.update_status(f"No blocked domains found in '{filename}'.", is_error=True)
+                    return
+                self.fetch_and_append_hosts(f"Pi-hole FTL: {filename}", lines_to_add=domains)
+
+            self._safe_after(0, apply_result)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def import_adguard_home_querylog(self):
+        filepath = self._choose_file(
+            title="Select AdGuard Home querylog",
+            filetypes=(("JSON / NDJSON", "*.json"), ("Log files", "*.log"), ("All files", "*.*")),
+        )
+        if not filepath:
+            return
+
+        filename = os.path.basename(filepath)
+        try:
+            text = read_text_file_content(filepath)
+        except OSError as e:
+            self.update_status(f"AGH import read error: {e}", is_error=True)
+            self._show_notice_dialog(
+                "Could not read AdGuard Home log",
+                "The selected file could not be read.",
+                tone="error",
+                details=str(e),
+            )
+            return
+
+        try:
+            domains = parse_adguard_home_querylog(text)
+        except Exception as e:
+            self.update_status(f"AGH import parse error: {e}", is_error=True)
+            self._show_notice_dialog(
+                "Could not parse AdGuard Home log",
+                "The selected file did not contain valid AdGuard Home log entries.",
+                tone="error",
+                details=str(e),
+            )
+            return
+
+        if not domains:
+            self.update_status(f"No blocked domains found in '{filename}'.", is_error=True)
+            return
+        self.fetch_and_append_hosts(f"AdGuard Home: {filename}", lines_to_add=domains)
+
+    def show_find_replace_dialog(self, _event=None):
+        if self._block_during_import("Find / Replace"):
+            return
+        dialog = tk.Toplevel(self.root)
+        self._configure_modal_window(
+            dialog,
+            title="Find and Replace",
+            size="560x340",
+            min_size=(500, 300),
+        )
+
+        intro, _ = self._create_sidebar_card(
+            dialog,
+            "Batch find and replace",
+            "Applies across every line in the editor. The result is previewed before it's committed.",
+            accent=PALETTE["blue"],
+        )
+        ttk.Label(
+            intro,
+            text="Regex mode uses Python syntax — use `\\1`, `\\g<name>` for backreferences (not `$1`).",
+            style="SectionBody.TLabel",
+            wraplength=500,
+            justify="left",
+        ).pack(anchor="w")
+
+        form = ttk.Frame(dialog, padding=(20, 0, 20, 10))
+        form.pack(fill="x")
+
+        ttk.Label(form, text="Find:").grid(row=0, column=0, sticky="w", pady=4)
+        find_var = tk.StringVar()
+        ttk.Entry(form, textvariable=find_var).grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=4)
+
+        ttk.Label(form, text="Replace with:").grid(row=1, column=0, sticky="w", pady=4)
+        replace_var = tk.StringVar()
+        ttk.Entry(form, textvariable=replace_var).grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=4)
+        form.grid_columnconfigure(1, weight=1)
+
+        use_regex_var = tk.BooleanVar(value=False)
+        case_var = tk.BooleanVar(value=False)
+        opts = ttk.Frame(form)
+        opts.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ttk.Checkbutton(opts, text="Use regex", variable=use_regex_var).pack(side="left", padx=(0, 16))
+        ttk.Checkbutton(opts, text="Case sensitive", variable=case_var).pack(side="left")
+
+        btn_row = ttk.Frame(dialog, padding=(20, 0, 20, 20))
+        btn_row.pack(fill="x", side="bottom")
+
+        def do_preview():
+            pattern = find_var.get()
+            if not pattern:
+                self.update_status("Enter a find pattern.", is_error=True)
+                return
+            original = self.get_lines()
+            try:
+                new_lines, count = apply_find_replace(
+                    original,
+                    pattern,
+                    replace_var.get(),
+                    use_regex=use_regex_var.get(),
+                    case_sensitive=case_var.get(),
+                )
+            except ValueError as e:
+                self._show_notice_dialog(
+                    "Invalid regex",
+                    "The find pattern is not a valid Python regular expression.",
+                    tone="error",
+                    details=str(e),
+                )
+                return
+            if count == 0:
+                self.update_status("No matches found.")
+                return
+
+            def apply_to_editor(approved_lines):
+                self.set_text(approved_lines)
+                self.update_status(f"Replaced {count:,} occurrence(s).")
+                dialog.destroy()
+
+            PreviewWindow(
+                self,
+                original,
+                new_lines,
+                title=f"Preview: Find/Replace ({count:,} changes)",
+                on_apply_callback=apply_to_editor,
+                apply_label=f"Replace {count:,}",
+            )
+
+        ttk.Button(btn_row, text="Cancel", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
+        ttk.Button(btn_row, text="Preview...", command=do_preview, style="Action.TButton").pack(
+            side="right", padx=(0, 8)
+        )
+        dialog.grab_set()
+
+    def show_backup_diff_viewer(self):
+        if self._block_during_import("Backup Diff"):
+            return
+        snapshots = self.list_backup_snapshots()
+        rolling = self.HOSTS_FILE_PATH + ".bak"
+        all_paths = []
+        if os.path.exists(rolling):
+            all_paths.append(rolling)
+        all_paths.extend(snapshots)
+        if len(all_paths) < 2:
+            self._show_notice_dialog(
+                "Not enough backups",
+                "At least two backup snapshots are required to compare. Make a Cleaned Save, then try again.",
+                tone="info",
+            )
+            return
+
+        dialog = tk.Toplevel(self.root)
+        self._configure_modal_window(
+            dialog,
+            title="Compare backup snapshots",
+            size="620x380",
+            min_size=(540, 320),
+        )
+
+        intro, _ = self._create_sidebar_card(
+            dialog,
+            "Backup snapshots",
+            "Pick any two snapshots to see a preview of their differences. "
+            "This is a read-only comparison — applying from the preview overwrites the editor, not disk.",
+            accent=PALETTE["blue"],
+        )
+        ttk.Label(
+            intro,
+            text=f"{len(all_paths)} snapshot(s) available.",
+            style="SectionBody.TLabel",
+        ).pack(anchor="w")
+
+        def label_for(path):
+            try:
+                mtime = datetime.datetime.fromtimestamp(os.path.getmtime(path))
+                ts = mtime.strftime("%Y-%m-%d %H:%M:%S")
+            except OSError:
+                ts = "?"
+            return f"{os.path.basename(path)}   ({ts})"
+
+        labels = [label_for(p) for p in all_paths]
+
+        form = ttk.Frame(dialog, padding=(20, 0, 20, 10))
+        form.pack(fill="x")
+        ttk.Label(form, text="Older:").grid(row=0, column=0, sticky="w", pady=4)
+        older_var = tk.StringVar(value=labels[-1])
+        ttk.OptionMenu(form, older_var, older_var.get(), *labels).grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=4)
+        ttk.Label(form, text="Newer:").grid(row=1, column=0, sticky="w", pady=4)
+        newer_var = tk.StringVar(value=labels[0])
+        ttk.OptionMenu(form, newer_var, newer_var.get(), *labels).grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=4)
+        form.grid_columnconfigure(1, weight=1)
+
+        def do_compare():
+            try:
+                older_path = all_paths[labels.index(older_var.get())]
+                newer_path = all_paths[labels.index(newer_var.get())]
+            except ValueError:
+                return
+            if older_path == newer_path:
+                self.update_status("Pick two different snapshots to compare.", is_error=True)
+                return
+            try:
+                older_lines = read_text_file_lines(older_path)
+                newer_lines = read_text_file_lines(newer_path)
+            except OSError as e:
+                self._show_notice_dialog(
+                    "Could not read snapshot",
+                    "One of the selected backup files could not be read.",
+                    tone="error",
+                    details=str(e),
+                )
+                return
+            dialog.destroy()
+            # Read-only comparison: supply a no-op apply callback so the
+            # Apply button doesn't silently overwrite the editor with one
+            # of the snapshots.
+            PreviewWindow(
+                self,
+                older_lines,
+                newer_lines,
+                title=f"Diff: {os.path.basename(older_path)} -> {os.path.basename(newer_path)}",
+                on_apply_callback=lambda _approved: self.update_status("Backup comparison closed."),
+                apply_label="Close",
+                cancel_label="Close",
+            )
+
+        btn_row = ttk.Frame(dialog, padding=(20, 0, 20, 20))
+        btn_row.pack(fill="x", side="bottom")
+        ttk.Button(btn_row, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
+        ttk.Button(btn_row, text="Compare...", command=do_compare, style="Action.TButton").pack(
+            side="right", padx=(0, 8)
+        )
+        dialog.grab_set()
+
     def append_manual_list(self):
         content = self.manual_text_area.get('1.0', tk.END).strip()
         if not content:
@@ -6742,8 +7406,8 @@ class HostsFileEditor:
             return
         original = self.get_lines()
         whitelist_set = self._get_whitelist_set()
-        
-        final_lines, stats = _get_canonical_cleaned_output_and_stats(original, whitelist_set)
+
+        final_lines, stats = _get_canonical_cleaned_output_and_stats(original, whitelist_set, self.pinned_domains)
         
         if original != final_lines:
             def apply_to_editor(approved_lines):
@@ -7376,7 +8040,8 @@ def _cli_update(hosts_path: str) -> int:
     for section in sorted(previous_sections, key=lambda s: s["start"], reverse=True):
         trimmed = remove_import_section(trimmed, section)
     merged = trimmed + [""] + collected
-    cleaned, stats = _get_canonical_cleaned_output_and_stats(merged, whitelist_set)
+    pinned = set(sanitized.get("pinned_domains", []))
+    cleaned, stats = _get_canonical_cleaned_output_and_stats(merged, whitelist_set, pinned)
     try:
         write_text_file_atomic(hosts_path, '\n'.join(cleaned))
     except OSError as e:
