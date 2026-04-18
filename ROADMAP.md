@@ -18,7 +18,7 @@ Legend:
 - ✅ **Revert to Backup with preview** — diff current vs `.bak` before restore
 - ✅ **Emergency DNS Recovery** — external `.bat` that force-kills Dnscache and installs a blank hosts file
 - ✅ **Panic Restore** — one-click restore to stock Microsoft default (distinct from generic backup restore)
-- 📋 **Backup diff viewer** — pick any two snapshots and compare side-by-side
+- ✅ **Backup diff viewer** — pick any two snapshots and compare side-by-side
 - ✅ **Configurable retention** — let the user choose how many timestamped backups to keep
 - 📋 **Hosts file ACL / read-only lock after save** — prevent malware tampering (HostsMan parity)
 - 🔬 **Integrity alarm** — detect external modifications since last save and prompt
@@ -115,7 +115,7 @@ Legend:
 ### 3d. Organization & Curation (Email / RSS / Notion)
 
 - 📋 **Focused vs Other split** — auto-partition imports into "curated official" and "user ad-hoc" tabs
-- 📋 **Star/pin entries** — flag high-value rules, survive wipes, appear in "Starred" smart view
+- ✅ **Star/pin entries** — flag high-value rules, survive wipes, appear in "Starred" smart view
 - 📋 **Unreviewed badge** — new imports carry unread dot until viewed in diff
 - 📋 **Tag sidebar** — multi-tag entries with free-form labels (`tracker`, `ads`, `work-only`)
 - 📋 **Backlinks panel** — show every source/note/profile that references a given domain
@@ -261,8 +261,8 @@ Legend:
 
 - ✅ **Export hosts format** (original behaviour of `Save Raw`)
 - ✅ **Export Cleaned As…** — hosts / domains-only / adblock / dnsmasq / pi-hole
-- 📋 **Import from Pi-hole FTL database** (`pihole-FTL.db`) — blocked queries → hosts (direct SQLite, SMB/SSH-friendly)
-- 📋 **Import from AdGuard Home querylog.json** — streaming JSONL + live-tail mode
+- ✅ **Import from Pi-hole FTL database** (`pihole-FTL.db`) — blocked queries → hosts (direct SQLite, SMB/SSH-friendly)
+- ✅ **Import from AdGuard Home querylog.json** — streaming JSONL + live-tail mode
 - 📋 **Technitium REST API client** — query blocked-queries endpoint
 - 📋 **Unbound / dnsmasq log tailers** — regex-based, format auto-detection
 - 📋 **OPNsense/pfSense Unbound syslog listener** — listen UDP/514 locally, ingest blocked-query events

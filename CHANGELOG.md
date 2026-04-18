@@ -2,6 +2,34 @@
 
 All notable changes to HostsFileGet will be documented in this file.
 
+## [v2.15.0] - 2026-04-18
+
+**Pinned domains**
+- New persistent "pinned" concept: domains in the pin set are preserved across Cleaned Save *even if they match your whitelist*. Lets a team whitelist file cover a broad class while individual users keep specific entries blocked.
+- Editor right-click menu gains **Pin this domain (star)** and **Unpin this domain**.
+- New **Tools > Pinned Domains...** dialog to review, unpin selected, or unpin all.
+
+**Blocked-query log importers**
+- **Tools > Import Blocked Queries From Log** cascade: existing *pfSense DNSBL* and *NextDNS CSV* plus two new importers:
+  - **Pi-hole FTL (pihole-FTL.db)** — read-only SQLite query of the `queries` table, keeping only block statuses (1/4/5/6/7/8/9/10/11). Runs on a worker thread to keep the UI responsive.
+  - **AdGuard Home query log** — streams NDJSON or arrays; only `Filtered*` reason codes (3/4/5/7/8/12) are imported. **Fixed in this release: previous drafts wrongly accepted `NotFilteredAllowList` and `Rewrite` as blocks.**
+
+**Find / replace**
+- New **Tools > Find and Replace...** (Ctrl+H). Plain-text or Python-regex, optional case-sensitivity, always previewed before committing.
+
+**Backup diff viewer**
+- New **File > Compare Backups...** — pick any two timestamped snapshots (or the rolling `.bak`) and diff them in a read-only preview. Apply button is disarmed so you can't silently overwrite the editor while comparing history.
+
+**Audit fixes**
+- **Critical**: right-clicking the editor pane would `AttributeError` in v2.14 because the pin/unpin menu items pointed at missing methods. Added the handlers and integrated the pin set into Cleaned Save.
+- **AGH parser**: reason codes `1 (NotFilteredAllowList)`, `9 (Rewrite)`, `10 (RewriteAutoHosts)` no longer treated as blocks.
+- **Pi-hole FTL URI**: on Windows, `file:C:/…` was a relative URI fragment; now wrapped through `_sqlite_readonly_uri` that forces an absolute leading slash.
+- **DNS resolve** (`Resolve domain (real DNS)` context-menu entry) now runs on a worker thread. Hostile or slow DNS no longer freezes the UI.
+
+**Tests**
+- 17 new pure-function tests for `sanitize_pinned_domains`, pinned-aware Cleaned Save, `AGH_BLOCK_REASONS`, `parse_adguard_home_querylog` (NDJSON + array + malformed), `FTL_BLOCKED_STATUS_CODES`, `_sqlite_readonly_uri`, `parse_pihole_ftl_blocked_domains` (against a temporary SQLite fixture), and `apply_find_replace` (plain / regex / case / empty).
+- Suite: **94 tests** (was 77).
+
 ## [v2.14.0] - 2026-04-17
 
 **Onboarding & preferences**

@@ -11,7 +11,9 @@ import datetime
 
 import hosts_editor
 from hosts_editor import (
+    AGH_BLOCK_REASONS,
     BLOCK_SINK_IPS,
+    FTL_BLOCKED_STATUS_CODES,
     HostsFileEditor,
     IPV4_REGEX,
     MAX_DOWNLOAD_BYTES,
@@ -19,6 +21,8 @@ from hosts_editor import (
     _default_hosts_file_path,
     _get_canonical_cleaned_output_and_stats,
     _looks_like_ip_token,
+    _sqlite_readonly_uri,
+    apply_find_replace,
     count_nonempty_lines,
     compute_clean_impact_stats,
     decode_text_bytes,
@@ -27,6 +31,8 @@ from hosts_editor import (
     enable_hosts_file_transactionally,
     discover_import_sections,
     fuzzy_score,
+    parse_adguard_home_querylog,
+    parse_pihole_ftl_blocked_domains,
     summarize_source_contributions,
     export_lines_as_format,
     find_keyword_match_line_indices,
@@ -46,6 +52,7 @@ from hosts_editor import (
     rewrite_block_sink_ip,
     sanitize_config_snapshot,
     sanitize_custom_sources,
+    sanitize_pinned_domains,
     scan_suspicious_redirects,
     strip_lines_by_category,
     summarize_clean_changes,
@@ -1137,6 +1144,187 @@ class HostsEditorLogicTests(unittest.TestCase):
         self.assertTrue(s["has_completed_first_run"])
         s = sanitize_config_snapshot({}, os.path.expanduser("~"))
         self.assertFalse(s["has_completed_first_run"])
+
+    # ---- v2.15: pinned domains ----
+    def test_sanitize_pinned_domains_rejects_garbage(self):
+        result = sanitize_pinned_domains([
+            "ads.example.com",
+            ".tracker.example",       # leading dot tolerated
+            "UPPER.Example",          # lowercased
+            "",                       # dropped
+            None,                     # dropped
+            "not a domain",           # dropped
+            "ads.example.com",        # duplicate dropped
+            42,                       # non-string dropped
+            "a",                      # single-label dropped
+        ])
+        self.assertEqual(result, ["ads.example.com", "tracker.example", "upper.example"])
+
+    def test_sanitize_pinned_domains_non_iterable(self):
+        self.assertEqual(sanitize_pinned_domains(None), [])
+        self.assertEqual(sanitize_pinned_domains("not-a-list"), [])
+
+    def test_sanitize_config_snapshot_persists_pinned_domains(self):
+        s = sanitize_config_snapshot(
+            {"pinned_domains": ["A.Example", "b.example", "garbage"]},
+            os.path.expanduser("~"),
+        )
+        self.assertEqual(s["pinned_domains"], ["a.example", "b.example"])
+
+    def test_cleaned_save_preserves_pinned_domains_over_whitelist(self):
+        # Whitelist would normally strip ads.example; pinning it keeps the
+        # block. A pinned domain that isn't even in the editor should be
+        # synthetically added.
+        cleaned, stats = _get_canonical_cleaned_output_and_stats(
+            [
+                "0.0.0.0 ads.example",
+                "0.0.0.0 tracker.example",
+            ],
+            whitelist_set={"ads.example", "tracker.example"},
+            pinned_domains={"ads.example", "absent.example"},
+        )
+        self.assertIn("0.0.0.0 ads.example", cleaned)
+        self.assertIn("0.0.0.0 absent.example", cleaned)
+        self.assertNotIn("0.0.0.0 tracker.example", cleaned)
+        self.assertGreaterEqual(stats["pinned_preserved"], 1)
+
+    # ---- v2.15: AdGuard Home parser ----
+    def test_agh_block_reasons_excludes_allow_and_rewrite(self):
+        # Reasons 1 (NotFilteredAllowList), 9 (Rewrite), 10 (RewriteAutoHosts)
+        # must NOT be treated as blocks.
+        self.assertNotIn(1, AGH_BLOCK_REASONS)
+        self.assertNotIn(9, AGH_BLOCK_REASONS)
+        self.assertNotIn(10, AGH_BLOCK_REASONS)
+        # At least the core Filtered* codes are blocks.
+        for code in (3, 4, 5, 7, 8):
+            self.assertIn(code, AGH_BLOCK_REASONS)
+
+    def test_parse_agh_querylog_ndjson_keeps_only_blocks(self):
+        lines = [
+            '{"QH":"ads.example","Result":{"Reason":3,"IsFiltered":true}}',
+            '{"QH":"allowed.example","Result":{"Reason":1,"IsFiltered":false}}',
+            '{"QH":"rewritten.example","Result":{"Reason":9,"IsFiltered":false}}',
+            '{"QH":"legacy.example","Result":{"IsFiltered":true}}',  # no Reason key
+            '{"QH":"safebrowse.example","Result":{"Reason":4,"IsFiltered":true}}',
+            'not-json-at-all',
+            '{"QH":"dup.example","Result":{"Reason":3,"IsFiltered":true}}',
+            '{"QH":"dup.example","Result":{"Reason":3,"IsFiltered":true}}',
+        ]
+        blocked = parse_adguard_home_querylog("\n".join(lines))
+        self.assertIn("ads.example", blocked)
+        self.assertIn("safebrowse.example", blocked)
+        self.assertIn("legacy.example", blocked)
+        self.assertIn("dup.example", blocked)
+        self.assertNotIn("allowed.example", blocked)
+        self.assertNotIn("rewritten.example", blocked)
+        # Dup domain appears only once.
+        self.assertEqual(blocked.count("dup.example"), 1)
+
+    def test_parse_agh_querylog_array_form(self):
+        blob = (
+            '[{"QH":"ads.example","Result":{"Reason":3,"IsFiltered":true}},'
+            ' {"QH":"ok.example","Result":{"Reason":0,"IsFiltered":false}}]'
+        )
+        self.assertEqual(parse_adguard_home_querylog(blob), ["ads.example"])
+
+    def test_parse_agh_querylog_empty_and_malformed(self):
+        self.assertEqual(parse_adguard_home_querylog(""), [])
+        self.assertEqual(parse_adguard_home_querylog("not json at all"), [])
+
+    # ---- v2.15: Pi-hole FTL ----
+    def test_ftl_blocked_status_codes_covers_known_block_statuses(self):
+        for code in (1, 4, 5, 6, 7, 8, 9, 10, 11):
+            self.assertIn(code, FTL_BLOCKED_STATUS_CODES)
+        # Allow statuses 2 and 3 must NOT be present.
+        self.assertNotIn(2, FTL_BLOCKED_STATUS_CODES)
+        self.assertNotIn(3, FTL_BLOCKED_STATUS_CODES)
+
+    def test_sqlite_readonly_uri_forces_absolute_slash(self):
+        uri_abs = _sqlite_readonly_uri("C:/temp/pihole-FTL.db")
+        # Prior bug: file:C:/... was interpreted as relative URI.
+        self.assertTrue(uri_abs.startswith("file:/C:/"), uri_abs)
+        self.assertIn("mode=ro", uri_abs)
+        # Unix-style path should retain its single leading slash.
+        uri_unix = _sqlite_readonly_uri("/var/lib/pihole-FTL.db")
+        self.assertTrue(uri_unix.startswith("file:/var/") or uri_unix.startswith("file:///var/"))
+
+    def test_parse_pihole_ftl_reads_blocked_rows_only(self):
+        import sqlite3
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "pihole-FTL.db"
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.execute(
+                    "CREATE TABLE queries "
+                    "(id INTEGER PRIMARY KEY, timestamp INTEGER, status INTEGER, domain TEXT)"
+                )
+                rows = [
+                    (1, 1000, 1, "blocked.example"),
+                    (2, 1001, 3, "allowed.example"),   # status 3 = allowlisted
+                    (3, 1002, 5, "regex-blocked.example"),
+                    (4, 1003, 8, "external-block.example"),
+                    (5, 1004, 2, "forward.example"),   # status 2 = forwarded OK
+                    (6, 1005, 1, "DUP.example"),
+                    (7, 1006, 1, "dup.example"),       # dedup case-insensitive
+                    (8, 1007, 1, "not a valid host"),  # skipped as invalid
+                    (9, 1008, 1, ""),                  # skipped
+                ]
+                conn.executemany(
+                    "INSERT INTO queries (id, timestamp, status, domain) VALUES (?, ?, ?, ?)",
+                    rows,
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            result = parse_pihole_ftl_blocked_domains(str(db_path))
+            self.assertIn("blocked.example", result)
+            self.assertIn("regex-blocked.example", result)
+            self.assertIn("external-block.example", result)
+            self.assertIn("dup.example", result)
+            self.assertNotIn("allowed.example", result)
+            self.assertNotIn("forward.example", result)
+            # Dedup kept only one copy.
+            self.assertEqual(result.count("dup.example"), 1)
+
+    def test_parse_pihole_ftl_missing_file_raises(self):
+        with self.assertRaises(FileNotFoundError):
+            parse_pihole_ftl_blocked_domains("Z:/this/path/does/not/exist/pihole-FTL.db")
+
+    # ---- v2.15: find/replace ----
+    def test_apply_find_replace_plain_case_insensitive(self):
+        lines = ["0.0.0.0 ADS.example", "0.0.0.0 tracker.ADS"]
+        result, count = apply_find_replace(lines, "ads", "XX", use_regex=False, case_sensitive=False)
+        self.assertEqual(count, 2)
+        self.assertIn("0.0.0.0 XX.example", result)
+        self.assertIn("0.0.0.0 tracker.XX", result)
+
+    def test_apply_find_replace_plain_case_sensitive(self):
+        lines = ["0.0.0.0 ADS.example", "0.0.0.0 ads.example"]
+        result, count = apply_find_replace(lines, "ads", "XX", use_regex=False, case_sensitive=True)
+        self.assertEqual(count, 1)
+        self.assertEqual(result, ["0.0.0.0 ADS.example", "0.0.0.0 XX.example"])
+
+    def test_apply_find_replace_regex_with_backrefs(self):
+        lines = ["0.0.0.0 foo.example", "0.0.0.0 bar.example"]
+        result, count = apply_find_replace(
+            lines, r"0\.0\.0\.0 (.+)\.example", r"127.0.0.1 \1.example", use_regex=True
+        )
+        self.assertEqual(count, 2)
+        self.assertEqual(result[0], "127.0.0.1 foo.example")
+
+    def test_apply_find_replace_invalid_regex_raises(self):
+        with self.assertRaises(ValueError):
+            apply_find_replace(["anything"], r"(unbalanced", "x", use_regex=True)
+
+    def test_apply_find_replace_empty_pattern_noop(self):
+        lines = ["anything"]
+        result, count = apply_find_replace(lines, "", "x")
+        self.assertEqual(result, lines)
+        self.assertEqual(count, 0)
 
 
 if __name__ == "__main__":
