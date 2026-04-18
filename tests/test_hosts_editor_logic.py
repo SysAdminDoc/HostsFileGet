@@ -15,6 +15,11 @@ from hosts_editor import (
     BLOCK_SINK_IPS,
     FTL_BLOCKED_STATUS_CODES,
     HostsFileEditor,
+    STALE_FRESH_HOURS,
+    STALE_WARN_HOURS,
+    build_pinned_export_payload,
+    classify_source_freshness,
+    parse_pinned_import_payload,
     IPV4_REGEX,
     MAX_DOWNLOAD_BYTES,
     STOCK_MICROSOFT_HOSTS,
@@ -1325,6 +1330,84 @@ class HostsEditorLogicTests(unittest.TestCase):
         result, count = apply_find_replace(lines, "", "x")
         self.assertEqual(result, lines)
         self.assertEqual(count, 0)
+
+    # ---- v2.16: source freshness ----
+    def test_classify_source_freshness_buckets(self):
+        now = datetime.datetime(2026, 4, 18, 12, 0, 0)
+        now_epoch = now.timestamp()
+        # fresh
+        self.assertEqual(
+            classify_source_freshness(
+                (now - datetime.timedelta(hours=2)).isoformat(timespec="seconds"),
+                now=now_epoch,
+            ),
+            "fresh",
+        )
+        # warm (~2 days)
+        self.assertEqual(
+            classify_source_freshness(
+                (now - datetime.timedelta(days=2)).isoformat(timespec="seconds"),
+                now=now_epoch,
+            ),
+            "warm",
+        )
+        # stale (> 7 days)
+        self.assertEqual(
+            classify_source_freshness(
+                (now - datetime.timedelta(days=30)).isoformat(timespec="seconds"),
+                now=now_epoch,
+            ),
+            "stale",
+        )
+        # never
+        self.assertEqual(classify_source_freshness(""), "never")
+        self.assertEqual(classify_source_freshness(None), "never")
+        # garbage
+        self.assertEqual(classify_source_freshness("not a date"), "never")
+        # clock skew (future timestamp) → treat as fresh
+        future = (now + datetime.timedelta(hours=5)).isoformat(timespec="seconds")
+        self.assertEqual(classify_source_freshness(future, now=now_epoch), "fresh")
+
+    def test_stale_thresholds_reasonable(self):
+        # Guard against accidental hours-vs-days confusion in future edits.
+        self.assertEqual(STALE_FRESH_HOURS, 24)
+        self.assertEqual(STALE_WARN_HOURS, 7 * 24)
+
+    # ---- v2.16: pinned export / import ----
+    def test_build_pinned_export_payload_shape(self):
+        payload = build_pinned_export_payload("9.9.9", {"a.example", "b.example"})
+        self.assertEqual(payload["schema"], "hostsfileget.pinned.v1")
+        self.assertEqual(payload["exported_by_version"], "9.9.9")
+        self.assertEqual(payload["pinned_domains"], ["a.example", "b.example"])
+        self.assertIn("exported_at", payload)
+
+    def test_parse_pinned_import_payload_accepts_export_shape(self):
+        parsed = parse_pinned_import_payload({
+            "schema": "hostsfileget.pinned.v1",
+            "pinned_domains": ["A.Example", "b.example", "garbage"],
+        })
+        self.assertEqual(parsed, ["a.example", "b.example"])
+
+    def test_parse_pinned_import_payload_accepts_bare_list(self):
+        parsed = parse_pinned_import_payload(["c.example", "c.example", "not a host"])
+        self.assertEqual(parsed, ["c.example"])
+
+    def test_parse_pinned_import_payload_rejects_foreign_schema(self):
+        with self.assertRaises(ValueError):
+            parse_pinned_import_payload({"schema": "foreign.v1", "pinned_domains": []})
+
+    def test_parse_pinned_import_payload_rejects_wrong_type(self):
+        with self.assertRaises(ValueError):
+            parse_pinned_import_payload("just a string")
+
+    def test_sanitize_config_snapshot_persists_update_on_launch(self):
+        truthy = sanitize_config_snapshot({"update_on_launch": True}, os.path.expanduser("~"))
+        falsy = sanitize_config_snapshot({"update_on_launch": "off"}, os.path.expanduser("~"))
+        self.assertTrue(truthy["update_on_launch"])
+        # Non-empty string is truthy under bool() — that's the intended shape.
+        self.assertTrue(falsy["update_on_launch"])
+        default = sanitize_config_snapshot({}, os.path.expanduser("~"))
+        self.assertFalse(default["update_on_launch"])
 
 
 if __name__ == "__main__":
