@@ -241,6 +241,41 @@ function Install-Winget {
 # ==========================================================
 # 3. PYTHON INSTALLATION LOGIC
 # ==========================================================
+function Install-PythonWithWinget {
+    $candidateIds = @(
+        "Python.Python.3.14",
+        "Python.Python.3.13",
+        "Python.Python.3.12",
+        "Python.Python.3"
+    )
+
+    foreach ($packageId in $candidateIds) {
+        Write-LauncherStatus "Trying $packageId via winget..."
+        try {
+            $wingetResult = winget install --id $packageId --exact --source winget --silent --accept-package-agreements --accept-source-agreements 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                return [PSCustomObject]@{
+                    Success = $true
+                    PackageId = $packageId
+                    Output = $wingetResult
+                }
+            }
+
+            Write-Host "winget install failed for $packageId"
+            Write-Host $wingetResult
+        } catch {
+            Write-Host "winget install raised for $packageId"
+            Write-Host $_.Exception.Message
+        }
+    }
+
+    return [PSCustomObject]@{
+        Success = $false
+        PackageId = $null
+        Output = $null
+    }
+}
+
 function Initialize-PythonRuntime {
     $pythonInfo = Get-PythonLaunchInfo
     if ($pythonInfo) {
@@ -251,7 +286,11 @@ function Initialize-PythonRuntime {
     Write-LauncherStatus "Installing Python via winget..."
     
     try {
-        $wingetResult = winget install --id Python.Python.3.14 --exact --source winget --silent --accept-package-agreements --accept-source-agreements 2>&1
+        $installResult = Install-PythonWithWinget
+        if (-not $installResult.Success) {
+            Write-LauncherStatus "ERROR: Failed to install Python"
+            return $null
+        }
         
         Write-LauncherStatus "Reloading environment variables..."
         
@@ -268,7 +307,10 @@ function Initialize-PythonRuntime {
         }
 
         Write-LauncherStatus "Python installed but could not be located in PATH."
-        Write-Host $wingetResult
+        Write-Host "Last successful package id: $($installResult.PackageId)"
+        if ($installResult.Output) {
+            Write-Host $installResult.Output
+        }
         return $null
     }
     catch {
@@ -289,7 +331,7 @@ function Test-ValidEditorFile {
         if ($item.Length -lt 1000) {
             return $false
         }
-        # Upper bound: the current editor is under 200 KB. A 20 MB file in
+        # Upper bound: the current editor is well under 1 MB. A 20 MB file in
         # this slot is either a MITM-substituted payload or a download that
         # picked up a generic landing page we didn't catch. Refuse it.
         if ($item.Length -gt 20MB) {
@@ -303,6 +345,31 @@ function Test-ValidEditorFile {
 
         return $content -match 'APP_NAME\s*=\s*"Hosts File Get"' -and $content -match "class HostsFileEditor"
     } catch {
+        return $false
+    }
+}
+
+function Test-EditorSyntax {
+    param(
+        [Parameter(Mandatory = $true)]$PythonInfo,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+
+    try {
+        $compileOutput = & $PythonInfo.FilePath @($PythonInfo.Arguments + @("-m", "py_compile", $Path)) 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            return $true
+        }
+        Write-Host "Python syntax validation failed for $Path"
+        Write-Host $compileOutput
+        return $false
+    } catch {
+        Write-Host "Python syntax validation raised for $Path"
+        Write-Host $_.Exception.Message
         return $false
     }
 }
@@ -328,10 +395,13 @@ function Invoke-EditorBootstrap {
             if (-not (Test-ValidEditorFile -Path $temporaryDownloadPath)) {
                 throw "Downloaded editor file appears truncated."
             }
+            if (-not (Test-EditorSyntax -PythonInfo $PythonInfo -Path $temporaryDownloadPath)) {
+                throw "Downloaded editor file failed Python syntax validation."
+            }
 
             Move-Item -LiteralPath $temporaryDownloadPath -Destination $EditorPath -Force
             Write-LauncherStatus "Download complete!"
-        } elseif (Test-ValidEditorFile -Path $EditorPath) {
+        } elseif ((Test-ValidEditorFile -Path $EditorPath) -and (Test-EditorSyntax -PythonInfo $PythonInfo -Path $EditorPath)) {
             Write-LauncherStatus "Download failed. Using cached editor copy."
         } else {
             throw "Download failed and no valid cached editor is available."
