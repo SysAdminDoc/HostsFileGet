@@ -365,3 +365,32 @@ Legend:
 ---
 
 *This roadmap is appended to as new research lands. See `CHANGELOG.md` for shipped history.*
+
+## Open-Source Research (Round 2)
+
+### Related OSS Projects
+- StevenBlack/hosts — https://github.com/StevenBlack/hosts — the canonical unified hosts aggregator; 31 variants, 87K+ base entries, 170K+ with gambling/porn extensions (Apr 2026)
+- forficate/hosts-block — https://github.com/forficate/hosts-block — Go aggregator inspired by StevenBlack, hosts + unbound output formats, single static binary, TOML config
+- Host Minder — https://github.com/mkrd/HostMinder — Python GUI for swapping /etc/hosts between StevenBlack variants (closest analog to HostsFileGet)
+- Hosts-BL — https://github.com/tiuxo/hosts-bl — hosts list tool; removes comments/dupes, compresses, converts to dnsmasq/DualServer/RPZ/Privoxy/Unbound formats
+- Maza ad blocking — https://github.com/tanrax/maza-ad-blocking — bash auto-updater, also emits dnsmasq config
+- BlackHosts — CLI updater/installer mentioned in StevenBlack repo, cross-platform
+- dnscrypt-proxy — https://github.com/DNSCrypt/dnscrypt-proxy — includes a builder for block lists from local + remote sources in common formats
+- Pi-hole — https://github.com/pi-hole/pi-hole — reference for gravity list pipeline (multi-source fetch → dedupe → normalize)
+
+### Features to Borrow
+- **31-variant selector UI** (StevenBlack) — mirror the variant matrix (base / fakenews / gambling / porn / social, ± combinations) as presets rather than making users hand-pick sources
+- **Multi-format output** (Hosts-BL) — emit hosts, dnsmasq, unbound, RPZ, Privoxy, Pi-hole gravity formats from one download
+- **Stat diff after update** (StevenBlack workflow) — print "added 1,203, removed 87, now 87,770 entries" after each refresh
+- **Whitelist.example pattern** (StevenBlack `whitelist`/`blacklist` files) — user-editable allow/deny overlay applied after merge, preserved across updates
+- **Comment/dup stripping + compression to 9 domains per line** (Hosts-BL) — drastically shrinks resulting file for DNS daemons that accept it
+- **Scheduled auto-update with cron/Task Scheduler registration** (Maza) — one-click "install weekly updater" button
+- **Public anycast DoH/DoT fallback mirror** (Control D `freedns.controld.com/x-stevenblack`) — option to point OS DNS at hosted mirror instead of writing local file
+- **Source list editor with priority ordering** (Pi-hole gravity) — reorder sources so later ones override earlier on conflict
+
+### Patterns & Architectures Worth Studying
+- Pi-hole's **gravity pipeline** — fetch-all → normalize (strip IPs, comments, BOMs) → dedupe → apply allow/deny overlay → emit. Each stage is testable in isolation
+- StevenBlack's **data/ directory of upstream sources** — sources are literal URL lists, trivial to audit and contribute to
+- Hosts-BL's **format-as-transformation** approach — every output format is a pure function over a normalized IR, no special-casing
+- dnscrypt-proxy's **block list builder** — handles remote fetch with ETag/If-Modified-Since caching, avoiding re-download on cron runs
+- **NRPT vs. hosts file tradeoff on Windows** — `Add-DnsClientNrptRule` blocks per-suffix without touching hosts; worth offering as an alternative output mode
