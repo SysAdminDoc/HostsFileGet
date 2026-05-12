@@ -18,6 +18,33 @@ Non-negotiables:
 - Browser cosmetic blocking, path-level ad blocking, and full network DNS enforcement are out of scope unless implemented as exports or diagnostics.
 - The current Catppuccin/Tkinter desktop identity is preserved unless a redesign is explicitly requested.
 
+## Implementation Progress
+
+- [x] F001 - Architecture and module map (`ARCHITECTURE.md`)
+- [ ] F002 - CI for compile, unit tests, PowerShell parser
+- [ ] F003 - PyInstaller release workflow
+- [ ] F004 - Code signing, checksums, SBOM, dependency advisory scan
+- [ ] F005 - Versioned config schema and migrator tests
+- [ ] F006 - External curated source manifest
+- [ ] F007 - Source health checker
+- [ ] F008 - ETag/Last-Modified cache
+- [ ] F009 - Source trust badges
+- [ ] F010 - False-positive triage flow
+- [ ] F011 - Source overlap matrix
+- [ ] F012 - Entry provenance/blame panel
+- [ ] F013 - Windows DNS Client ETW import/live tail spike
+- [ ] F014 - DoH/DoT/DoQ bypass diagnostics
+- [ ] F015 - Named profile data model groundwork
+- [ ] F016 - Golden-file cleaned-output tests
+- [ ] F017 - Property-based parser/fuzzer tests
+- [ ] F018 - GUI smoke tests
+- [ ] F019 - Large-file benchmark suite
+- [ ] F020 - High-contrast, screen-reader, and font audit
+- [ ] F021 - i18n string catalog foundation
+- [ ] F022 - Importers for SwitchHosts, Gas Mask, HostsFileEditor archives
+- [ ] F023 - RPZ, Unbound, Privoxy, compressed-hosts exports
+- [x] F024 - Limitations and troubleshooting guide (`TROUBLESHOOTING.md`)
+
 ## State Of The Repo
 
 ### What Exists Today
@@ -26,7 +53,7 @@ Non-negotiables:
 - Entry points: `hosts_editor.py` for GUI and CLI, `PythonLauncher.ps1` for elevated launch/bootstrap, `HostsFileGet.spec` for PyInstaller.
 - Packaging: PyInstaller one-file Windows EXE with `uac_admin=True`; build artifacts exist locally under `build/` and `dist/` but are not tracked.
 - Tests: `tests/test_hosts_editor_logic.py` contains 110 pure-function unit tests covering parsing, normalization, config, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, and find/replace.
-- Docs: `README.md`, `CHANGELOG.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `LICENSE`, and this roadmap.
+- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `LICENSE`, and this roadmap.
 - License: MIT.
 
 ### Product Reality
@@ -237,7 +264,7 @@ Legend:
 
 ### Now
 
-1. Documentation and architecture baseline: F001, F024.
+1. Completed - Documentation and architecture baseline: F001, F024.
 2. CI and release hygiene: F002, F003, F004.
 3. Config and source-data foundations: F005, F006, F007, F008, F009.
 4. Explainability and diagnostics: F010, F011, F012, F013, F014.

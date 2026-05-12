@@ -190,6 +190,24 @@ The Codex pass added keyboard shortcuts (`Ctrl+F`, `Ctrl+S`, `Ctrl+Shift+S`, `F5
 - The main codebase is still concentrated in one large `hosts_editor.py` file, so future cleanup could reasonably split pure logic from Tkinter UI if the user wants maintainability work next.
 - Keyboard shortcuts conflict with the global CLAUDE.md rule — await user decision before adding more or removing existing ones.
 
+## Autonomous Roadmap Progress — 2026-05-12
+
+### Completed
+
+- F001: Added `ARCHITECTURE.md`, a current-state map of the Windows/Tkinter runtime, entry points, monolith layers, pure helper boundaries, CLI layer, data files, import/save pipelines, test strategy, known risks, and refactor rules.
+- F024: Added `TROUBLESHOOTING.md`, a hosts-file limitations and recovery guide covering admin rights, wildcards, same-domain ads, DoH/DoT/DoQ bypass, false positives, stale sources, read-only lock behavior, Defender hosts hijack warnings, disabled-hosts state, backups, scheduled updates, large files, and when to use DNS/firewall tools instead.
+- Updated `README.md` repository notes to point at the architecture, troubleshooting, and roadmap documents.
+- Added a checkbox-based implementation progress ledger to `ROADMAP.md` so future autonomous passes can identify the next uncompleted Now-tier item directly.
+
+### Validation
+
+- `python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py`
+- `python -m unittest discover -s tests -v`
+
+### Next
+
+- F002: add CI for Python compile, unit tests, and PowerShell parser validation.
+
 ## Codex Follow-Up — 2026-04-15
 
 ### Additional hardening completed
