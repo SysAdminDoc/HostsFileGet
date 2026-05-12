@@ -21,7 +21,7 @@ Non-negotiables:
 ## Implementation Progress
 
 - [x] F001 - Architecture and module map (`ARCHITECTURE.md`)
-- [ ] F002 - CI for compile, unit tests, PowerShell parser
+- [x] F002 - CI for compile, unit tests, PowerShell parser (`.github/workflows/ci.yml`)
 - [ ] F003 - PyInstaller release workflow
 - [ ] F004 - Code signing, checksums, SBOM, dependency advisory scan
 - [ ] F005 - Versioned config schema and migrator tests
@@ -265,7 +265,7 @@ Legend:
 ### Now
 
 1. Completed - Documentation and architecture baseline: F001, F024.
-2. CI and release hygiene: F002, F003, F004.
+2. In progress - CI and release hygiene: F002 complete; F003 and F004 remain.
 3. Config and source-data foundations: F005, F006, F007, F008, F009.
 4. Explainability and diagnostics: F010, F011, F012, F013, F014.
 5. Profile groundwork and migrations: F015, F022, F023.

@@ -208,6 +208,23 @@ The Codex pass added keyboard shortcuts (`Ctrl+F`, `Ctrl+S`, `Ctrl+Shift+S`, `F5
 
 - F002: add CI for Python compile, unit tests, and PowerShell parser validation.
 
+## Autonomous Roadmap Progress — 2026-05-12 CI
+
+### Completed
+
+- F002: Added `.github/workflows/ci.yml` with a Windows validation job for `python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py`, `python -m unittest discover -s tests -v`, and PowerShell AST parser validation of `PythonLauncher.ps1`.
+- Updated `ROADMAP.md` implementation progress to mark F002 complete.
+
+### Validation
+
+- `python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py`
+- `python -m unittest discover -s tests -v`
+- PowerShell parser validation for `PythonLauncher.ps1`
+
+### Next
+
+- F003: add a pinned PyInstaller release workflow and local release-build documentation.
+
 ## Codex Follow-Up — 2026-04-15
 
 ### Additional hardening completed
