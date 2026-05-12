@@ -22,7 +22,7 @@ Non-negotiables:
 
 - [x] F001 - Architecture and module map (`ARCHITECTURE.md`)
 - [x] F002 - CI for compile, unit tests, PowerShell parser (`.github/workflows/ci.yml`)
-- [ ] F003 - PyInstaller release workflow
+- [x] F003 - PyInstaller release workflow (`.github/workflows/release.yml`, `requirements-build.txt`, `docs/release.md`)
 - [ ] F004 - Code signing, checksums, SBOM, dependency advisory scan
 - [ ] F005 - Versioned config schema and migrator tests
 - [ ] F006 - External curated source manifest

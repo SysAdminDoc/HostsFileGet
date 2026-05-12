@@ -144,6 +144,7 @@ python -m unittest discover -s tests -v
 - Architecture map: `ARCHITECTURE.md`
 - Troubleshooting and hosts-file limits: `TROUBLESHOOTING.md`
 - Sourced implementation plan: `ROADMAP.md`
+- Release build notes: `docs/release.md`
 - Codex handoff notes: `CODEX_CHANGELOG.md`
 
 ## License
