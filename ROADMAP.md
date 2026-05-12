@@ -42,7 +42,7 @@ Non-negotiables:
 - [x] F020 - High-contrast, screen-reader, and font audit (`docs/accessibility.md`, Tools audit report, contrast regression coverage)
 - [x] F021 - i18n string catalog foundation (`data/i18n/en-US.json`, fallback translator, Tools catalog report)
 - [x] F022 - Importers for SwitchHosts, Gas Mask, HostsFileEditor archives (`docs/migration-imports.md`, append-only migration importers, Raw/Normalized GUI integration)
-- [ ] F023 - RPZ, Unbound, Privoxy, compressed-hosts exports
+- [x] F023 - RPZ, Unbound, Privoxy, compressed-hosts exports (`docs/export-formats.md`, shared export records, compressed binary writes)
 - [x] F024 - Limitations and troubleshooting guide (`TROUBLESHOOTING.md`)
 
 ## State Of The Repo
@@ -52,8 +52,8 @@ Non-negotiables:
 - Language and runtime: Python 3.x, Tkinter desktop UI, Windows-first assumptions, PowerShell launcher.
 - Entry points: `hosts_editor.py` for GUI and CLI, `PythonLauncher.ps1` for elevated launch/bootstrap, `HostsFileGet.spec` for PyInstaller.
 - Packaging: PyInstaller one-file Windows EXE with `uac_admin=True`; build artifacts exist locally under `build/` and `dist/` but are not tracked.
-- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 173 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation, migration importer fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, and find/replace.
-- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `LICENSE`, and this roadmap.
+- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 177 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation, migration importer fixtures, export-format fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, and find/replace.
+- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `LICENSE`, and this roadmap.
 - License: MIT.
 
 ### Product Reality
@@ -275,7 +275,7 @@ Legend:
 9. Completed - Benchmark quality gate: F019.
 10. Completed - Accessibility and i18n foundations: F020, F021.
 11. Completed - Migration imports: F022.
-12. Migration/export interoperability: F023.
+12. Completed - Migration/export interoperability: F023.
 
 Rationale: these items reduce maintenance risk, make the current product more trustworthy, and create the internal contracts needed for the larger profile/integration work.
 

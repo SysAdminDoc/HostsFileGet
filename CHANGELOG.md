@@ -75,6 +75,11 @@ All notable changes to HostsFileGet will be documented in this file.
 - Wired migration imports into the sidebar and **Tools > Migration Imports** while reusing the existing Raw/Normalized import mode behavior.
 - Documented upstream archive/source format evidence and bounded migration import limits in `docs/migration-imports.md`.
 
+**Export format adapters**
+- Expanded **Export Cleaned** with RPZ, Unbound, Privoxy, gzip-compressed hosts, and bzip2-compressed hosts outputs.
+- Added a stable cleaned-domain export record layer so DNS/proxy formats share dedupe and non-blocking-mapping behavior.
+- Documented format semantics and source references in `docs/export-formats.md`.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

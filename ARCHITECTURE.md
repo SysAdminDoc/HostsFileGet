@@ -50,6 +50,7 @@ It is not a DNS server, browser ad blocker, cloud filtering service, or endpoint
 | `docs/windows-dns-client.md` | Windows DNS Client Operational snapshot import behavior and limits |
 | `docs/dns-bypass-diagnostics.md` | Browser encrypted-DNS/proxy bypass diagnostic behavior and limits |
 | `docs/migration-imports.md` | SwitchHosts, Gas Mask, and HostsFileEditor archive import behavior and limits |
+| `docs/export-formats.md` | Cleaned-output export adapters for hosts, DNS, proxy, and compressed formats |
 | `docs/accessibility.md` | Contrast audit, font assumptions, and manual Windows accessibility release checks |
 | `docs/i18n.md` | String catalog schema, fallback behavior, and localization guardrails |
 | `CLAUDE.md` | Compact architecture and gotchas snapshot for agents |
@@ -107,7 +108,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Windows diagnostics import: `parse_windows_dns_client_events_xml`, `build_windows_dns_client_wevtutil_command`, `collect_recent_windows_dns_client_queries`.
 - DNS bypass diagnostics: `collect_dns_bypass_policy_snapshot`, `dns_bypass_policy_status`, `format_dns_bypass_diagnostics`.
 - Accessibility audit: `relative_luminance`, `contrast_ratio`, `build_accessibility_audit_report`, `format_accessibility_audit_report`.
-- Cleanup/export/search helpers: `remove_lines_by_indices`, `rewrite_block_sink_ip`, `scan_suspicious_redirects`, `export_lines_as_format`, `strip_lines_by_category`.
+- Cleanup/export/search helpers: `remove_lines_by_indices`, `rewrite_block_sink_ip`, `scan_suspicious_redirects`, `build_export_domain_records`, `export_lines_as_format`, `export_lines_as_bytes`, `strip_lines_by_category`.
 - Source analytics: `find_sources_containing_domain`, `summarize_source_contributions`, `build_source_domain_index`, `build_source_overlap_report`, `categorize_entries_by_domain_hint`, `classify_source_freshness`.
 - Provenance and pinned-domain helpers: `append_provenance_event`, `read_provenance_events`, `build_entry_provenance_report`, `format_entry_provenance_report`, `build_pinned_export_payload`, `parse_pinned_import_payload`, `sanitize_pinned_domains`.
 - Log importers: `parse_pihole_ftl_blocked_domains`, `parse_adguard_home_querylog`.
