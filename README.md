@@ -59,6 +59,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - DNS cache flush
   - DNS bypass diagnostics for browser encrypted-DNS and proxy signals
   - backup restore preview
+  - optional local Git history snapshot/status/restore commands
   - emergency DNS recovery helper
 - Configuration:
   - versioned JSON config migration
@@ -169,6 +170,14 @@ python hosts_editor.py --config-apply .\profile.toml
 python hosts_editor.py --config-export .\profile.yaml
 ```
 
+Use optional local Git-backed history when Git is installed:
+
+```powershell
+python hosts_editor.py --history-status
+python hosts_editor.py --history-snapshot
+python hosts_editor.py --history-restore 1a2b3c4d5e6f
+```
+
 Run the deterministic large-file benchmark with:
 
 ```powershell
@@ -188,6 +197,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Large-file benchmark harness: `benchmarks/large_file_benchmark.py`
 - Architecture map: `ARCHITECTURE.md`
 - Declarative profile files: `docs/declarative-config.md`
+- Optional Git history: `docs/git-history.md`
 - Troubleshooting and hosts-file limits: `TROUBLESHOOTING.md`
 - Config schema: `docs/config-schema.md`
 - Curated source manifest: `docs/source-manifest.md`

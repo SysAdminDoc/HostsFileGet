@@ -83,6 +83,11 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added dependency-free YAML/TOML/JSON declarative profile parsing for repo-backed whitelist/source/pin policy.
 - Added `--config-plan`, `--config-apply`, and `--config-export` so automation can review and update the app config without writing the system hosts file.
 - Documented the `hostsfileget.declarative.v1` profile schema and preservation rules for operational config metadata.
+
+**Git history**
+- Added optional local Git-backed hosts history with `--history-status`, `--history-snapshot`, and `--history-restore`.
+- History snapshots are stored in a local app-data repository and include hosts content plus metadata; duplicate content does not create duplicate commits.
+- Restores require Administrator privileges, refuse disabled-hosts state, and create the normal `.bak` safety backup before writing.
 - Documented format semantics and source references in `docs/export-formats.md`.
 
 ## [v2.17.0] - 2026-04-18
