@@ -88,7 +88,9 @@ This file is a handoff note for future agents, including Claude.
 - Completed F043: added pure filter-builder query/history helpers, persisted `filter_query_history`, **Tools > Filter Builder...**, `docs/filter-builder.md`, config/docs updates, and regression tests.
 - Updated `ROADMAP.md` to mark F043 complete. Next roadmap item: F047 provenance log filters and export.
 - Completed F047: expanded the provenance log into a filtered local audit view with kind/domain/source/user/text/date filters, CSV/JSONL export, pure report/export helpers, docs, and regression tests.
-- Updated `ROADMAP.md` to mark F047 complete. Next roadmap item: F048 local metrics dashboard.
+- Updated `ROADMAP.md` to mark F047 complete. Next roadmap item: F048 watch expressions.
+- Completed F048: added persistent watch expressions that save local Filter Builder queries, rerun them against editor/source-index state, expose a **Tools > Watch Expressions...** manager, document config behavior, and add regression tests.
+- Updated `ROADMAP.md` to mark F048 complete. Next roadmap item: F049 source freshness and growth charts.
 
 ## Scope
 

@@ -188,6 +188,10 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added persisted `filter_query_history` config state with sanitation, dedupe, and newest-first promotion.
 - Documented query syntax and local-only limits in `docs/filter-builder.md`.
 
+**Watch Expressions**
+- Added **Tools > Watch Expressions...** to save and rerun local Filter Builder queries against the current editor and fetched-source index.
+- Added persisted `watch_expressions` app config state with sanitation, dedupe, enable/disable state, docs, and regression tests.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

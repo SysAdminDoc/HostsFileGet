@@ -46,6 +46,7 @@ from hosts_editor import (
     build_source_overlap_report,
     build_source_request_headers,
     build_source_trust_badges,
+    build_watch_expression_report,
     build_windows_dns_client_wevtutil_command,
     categorize_entries_by_domain_hint,
     check_source_health_record,
@@ -154,6 +155,7 @@ from hosts_editor import (
     format_portable_bundle_export_summary,
     format_scheduler_activity_report,
     format_source_trust_badges,
+    format_watch_expression_report,
     format_source_bundle_catalog,
     format_source_bundle_report,
     format_source_overlap_report,
@@ -195,6 +197,7 @@ from hosts_editor import (
     remove_import_section,
     remove_false_positive_matches_from_lines,
     remove_lines_by_indices,
+    remove_watch_expression,
     resolve_saved_state_hashes,
     rewrite_block_sink_ip,
     sanitize_config_snapshot,
@@ -208,6 +211,7 @@ from hosts_editor import (
     sanitize_source_cache_metadata,
     sanitize_source_bundle_catalog,
     sanitize_source_manifest,
+    sanitize_watch_expressions,
     sanitize_pinned_domains,
     scan_suspicious_redirects,
     source_trust_report_url,
@@ -218,6 +222,7 @@ from hosts_editor import (
     translate_message,
     set_active_profile_in_config,
     update_active_profile_snapshot,
+    upsert_watch_expression,
     write_git_history_snapshot,
     write_portable_bundle_config,
     write_text_file_atomic,
@@ -4712,6 +4717,92 @@ profile:
         self.assertIn("Editor matches: 1", text)
         self.assertIn("Source matches: 0", text)
         self.assertIn("Boundary: local report only", text)
+
+    # ---- v2.21: watch expressions ----
+    def test_sanitize_watch_expressions_accepts_strings_dicts_and_dedupes(self):
+        watches = sanitize_watch_expressions(
+            [
+                " domain:ads.example ",
+                {"name": "Ads", "query": "DOMAIN:ADS.example", "enabled": False},
+                {"name": "Telemetry\nWatch", "query": "line:telemetry"},
+                {"name": "", "expression": "source:hagezi"},
+                {"query": ""},
+                object(),
+            ],
+            max_items=3,
+        )
+
+        self.assertEqual(
+            watches,
+            [
+                {"name": "domain:ads.example", "query": "domain:ads.example", "enabled": True},
+                {"name": "Telemetry Watch", "query": "line:telemetry", "enabled": True},
+                {"name": "source:hagezi", "query": "source:hagezi", "enabled": True},
+            ],
+        )
+
+    def test_upsert_and_remove_watch_expression_are_deterministic(self):
+        watches = upsert_watch_expression([], "line:ads", "Ads")
+        watches = upsert_watch_expression(watches, "source:hagezi", "HaGeZi", enabled=False)
+        self.assertEqual([watch["name"] for watch in watches], ["HaGeZi", "Ads"])
+        watches = upsert_watch_expression(watches, "line:tracker", "Tracking", index=1)
+        self.assertEqual([watch["query"] for watch in watches], ["source:hagezi", "line:tracker"])
+        watches = remove_watch_expression(watches, 0)
+        self.assertEqual([watch["query"] for watch in watches], ["line:tracker"])
+
+    def test_sanitize_config_snapshot_persists_watch_expressions(self):
+        snapshot = sanitize_config_snapshot(
+            {
+                "watch_expressions": [
+                    {"name": "Ads", "query": "line:ads", "enabled": True},
+                    {"name": "Duplicate", "query": "LINE:ads", "enabled": False},
+                    {"name": "Source", "query": "source:hagezi"},
+                ]
+            },
+            os.path.expanduser("~"),
+        )
+        self.assertEqual(
+            snapshot["watch_expressions"],
+            [
+                {"name": "Ads", "query": "line:ads", "enabled": True},
+                {"name": "Source", "query": "source:hagezi", "enabled": True},
+            ],
+        )
+
+    def test_build_watch_expression_report_uses_filter_builder_matches(self):
+        report = build_watch_expression_report(
+            [
+                {"name": "Ads", "query": "domain:ads.example", "enabled": True},
+                {"name": "Disabled", "query": "line:tracker", "enabled": False},
+            ],
+            editor_lines=["0.0.0.0 ads.example", "0.0.0.0 other.example"],
+            source_corpus={
+                "hagezi": {
+                    "name": "HaGeZi",
+                    "url": "https://example.test/hosts.txt",
+                    "text": "0.0.0.0 cdn.ads.example",
+                }
+            },
+            blocklist_sources={},
+        )
+
+        self.assertEqual(report["watch_count"], 2)
+        self.assertEqual(report["enabled_count"], 1)
+        self.assertEqual(report["triggered_count"], 1)
+        self.assertEqual(report["watches"][0]["editor_match_count"], 1)
+        self.assertEqual(report["watches"][0]["source_match_count"], 1)
+        self.assertIn("Watch is disabled.", report["watches"][1]["warnings"])
+
+    def test_format_watch_expression_report_lists_triggered_and_boundary(self):
+        report = build_watch_expression_report(
+            [{"name": "Ads", "query": "line:ads"}],
+            editor_lines=["0.0.0.0 ads.example"],
+        )
+        text = format_watch_expression_report(report)
+        self.assertIn("Watch Expressions", text)
+        self.assertIn("Triggered: 1", text)
+        self.assertIn("Ads [triggered]", text)
+        self.assertIn("Boundary: local watch report only", text)
 
 
 if __name__ == "__main__":

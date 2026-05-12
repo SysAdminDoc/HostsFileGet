@@ -30,6 +30,7 @@ Configs without `config_version` are treated as legacy schema `0`, migrated in m
 | `source_last_fetched` | object | Source URL to ISO timestamp |
 | `source_cache_metadata` | object | Source URL to validated ETag/Last-Modified/body-cache metadata |
 | `filter_query_history` | array | Recent local Filter Builder queries, newest first |
+| `watch_expressions` | array | Saved local Filter Builder queries for watch reports |
 | `preferred_block_sink` | string | One of `0.0.0.0`, `127.0.0.1`, `::`, `::1` |
 | `backup_retention` | integer | Clamped to `0..50` |
 | `has_completed_first_run` | boolean | First-run wizard completion |
@@ -148,6 +149,12 @@ Per-source metadata shape:
 `filter_query_history` stores the 25 most recent valid **Tools > Filter Builder...** queries. It is app-level config state, not profile policy.
 
 The sanitizer removes non-string and empty values, collapses control whitespace, caps each query to 240 characters, and deduplicates case-insensitively while preserving newest-first order.
+
+## Watch Expressions
+
+`watch_expressions` stores up to 50 saved **Tools > Watch Expressions...** rows. Each row contains a `name`, `query`, and `enabled` flag.
+
+The sanitizer accepts string rows as enabled query shortcuts, accepts dict rows with `query` or legacy `expression`, collapses control whitespace, caps names to 80 characters, caps queries to the Filter Builder query length, and deduplicates case-insensitively by query.
 
 ## Compatibility Rules
 
