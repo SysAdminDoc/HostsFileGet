@@ -30,6 +30,7 @@ from hosts_editor import (
     append_cli_activity_event,
     add_domain_to_whitelist_text,
     build_accessibility_audit_report,
+    build_adblock_syntax_report,
     build_false_positive_triage_report,
     build_i18n_catalog_report,
     build_entry_provenance_report,
@@ -43,6 +44,7 @@ from hosts_editor import (
     categorize_entries_by_domain_hint,
     check_source_health_record,
     check_source_health_records,
+    classify_adblock_rule_line,
     classify_source_freshness,
     collect_recent_windows_dns_client_queries,
     collect_dns_bypass_policy_snapshot,
@@ -102,6 +104,7 @@ from hosts_editor import (
     format_entry_provenance_report,
     format_false_positive_triage_report,
     format_accessibility_audit_report,
+    format_adblock_syntax_report,
     format_i18n_catalog_report,
     format_declarative_config_payload,
     format_declarative_profile_summary,
@@ -138,6 +141,7 @@ from hosts_editor import (
     read_cli_activity_events,
     read_git_history_snapshot,
     read_text_file_lines,
+    quarantine_adblock_rule_lines,
     remove_import_section,
     remove_false_positive_matches_from_lines,
     remove_lines_by_indices,
@@ -192,6 +196,51 @@ class HostsEditorLogicTests(unittest.TestCase):
         self.assertTrue(url_transformed)
         self.assertTrue(filter_transformed)
         self.assertTrue(dnsmasq_transformed)
+
+    def test_adblock_linter_quarantines_browser_only_and_path_rules(self):
+        cosmetic = classify_adblock_rule_line("example.com##.ad-banner")
+        path_rule = classify_adblock_rule_line("||example.com/ads/*")
+        exception = classify_adblock_rule_line("@@||allowed.example^$document")
+        dns_rule = classify_adblock_rule_line("||tracker.example^$third-party")
+
+        self.assertTrue(cosmetic["quarantine"])
+        self.assertEqual(cosmetic["category"], "browser-only")
+        self.assertTrue(path_rule["quarantine"])
+        self.assertEqual(path_rule["category"], "path-network")
+        self.assertTrue(exception["quarantine"])
+        self.assertEqual(exception["category"], "exception")
+        self.assertFalse(dns_rule["quarantine"])
+        self.assertTrue(dns_rule["dns_compatible"])
+        self.assertEqual(dns_rule["normalized"], "0.0.0.0 tracker.example")
+
+    def test_adblock_linter_prevents_cosmetic_rules_from_overblocking(self):
+        self.assertEqual(normalize_line_to_hosts_entries("example.com##.ad-banner")[0], [])
+        self.assertEqual(normalize_line_to_hosts_entries("||example.com/ads/*")[0], [])
+        self.assertEqual(
+            normalize_line_to_hosts_entries("||tracker.example^$third-party")[0],
+            ["0.0.0.0 tracker.example"],
+        )
+
+    def test_adblock_syntax_report_and_quarantine_comments_rules(self):
+        lines = [
+            "0.0.0.0 ads.example",
+            "||tracker.example^$third-party",
+            "example.com##.ad-banner",
+            "||example.com/ads/*",
+            "@@||allowed.example^$document",
+        ]
+        report = build_adblock_syntax_report(lines)
+        self.assertEqual(report["dns_compatible"], 2)
+        self.assertEqual(report["quarantined"], 3)
+        self.assertEqual(len(report["findings"]), 3)
+        rendered = format_adblock_syntax_report(report)
+        self.assertIn("Adblock syntax lint", rendered)
+        self.assertIn("Path-level", rendered)
+
+        quarantined, quarantine_report = quarantine_adblock_rule_lines(lines)
+        self.assertEqual(quarantine_report["changed_lines"], 3)
+        self.assertEqual(quarantined[0], "0.0.0.0 ads.example")
+        self.assertTrue(quarantined[2].startswith("# HostsFileGet quarantined browser-only rule:"))
 
     def test_clean_stats_do_not_go_negative(self):
         stats = compute_clean_impact_stats(["example.com"], set())
@@ -1654,6 +1703,32 @@ profile:
             self.assertEqual(plan["requests"][0]["headers"], {"X-Api-Key": "<NEXTDNS_API_KEY>"})
             self.assertEqual(domains_path.read_text(encoding="utf-8").splitlines(), ["ads.example"])
 
+    def test_cli_adblock_lint_and_quarantine_write_review_files(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "filters.txt"
+            report_path = Path(tmpdir) / "lint.json"
+            output_path = Path(tmpdir) / "quarantined.txt"
+            input_path.write_text(
+                "0.0.0.0 ads.example\n"
+                "||tracker.example^$third-party\n"
+                "example.com##.ad-banner\n"
+                "||example.com/ads/*\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(hosts_editor, "_cli_print"):
+                self.assertEqual(hosts_editor._cli_adblock_lint(str(input_path), str(report_path)), 1)
+                self.assertEqual(hosts_editor._cli_adblock_quarantine(str(input_path), str(output_path)), 0)
+
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["quarantined"], 2)
+            quarantined = output_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(quarantined[0], "0.0.0.0 ads.example")
+            self.assertTrue(quarantined[2].startswith("# HostsFileGet quarantined browser-only rule:"))
+
     def test_handle_cli_args_routes_integration_flags(self):
         with mock.patch.object(hosts_editor, "_cli_integration_list", return_value=0) as mocked_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--integration-list"]), 0)
@@ -1687,6 +1762,21 @@ profile:
                 0,
             )
             mocked_import.assert_called_once_with("controld", "log.csv", "domains.txt")
+
+    def test_handle_cli_args_routes_adblock_lint_flags(self):
+        with mock.patch.object(hosts_editor, "_cli_adblock_lint", return_value=1) as mocked_lint:
+            self.assertEqual(
+                hosts_editor._handle_cli_args(["--adblock-lint", "filters.txt", "--adblock-lint-output", "lint.json"]),
+                1,
+            )
+            mocked_lint.assert_called_once_with("filters.txt", "lint.json")
+
+        with mock.patch.object(hosts_editor, "_cli_adblock_quarantine", return_value=0) as mocked_quarantine:
+            self.assertEqual(
+                hosts_editor._handle_cli_args(["--adblock-quarantine", "filters.txt", "quarantined.txt"]),
+                0,
+            )
+            mocked_quarantine.assert_called_once_with("filters.txt", "quarantined.txt")
 
     def test_sanitize_config_snapshot_rejects_non_sha256_hashes(self):
         payload = sanitize_config_snapshot(

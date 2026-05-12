@@ -63,6 +63,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F030 complete. Next roadmap item: F031 NextDNS and Control D import/export adapters.
 - Completed F031: added plan-only NextDNS denylist/allowlist and Control D custom-rule adapter plans, Control D CSV log import, shared NextDNS/Control D log parsers, `--cloud-adapter-list`, `--cloud-adapter-plan`, `--cloud-log-import`, GUI adapter reporting, docs, and regression tests.
 - Updated `ROADMAP.md` to mark F031 complete. Next roadmap item: F032 Adblock syntax linter and cosmetic-rule quarantine.
+- Completed F032: added adblock syntax classification, normalized-import protection against cosmetic/path/exception over-blocking, GUI lint/quarantine commands, `--adblock-lint`, `--adblock-lint-output`, `--adblock-quarantine`, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F032 complete. Next roadmap item: F033 Regex/exact/wildcard rule tiers with hosts warnings.
 
 ## Scope
 

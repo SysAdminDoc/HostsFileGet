@@ -51,6 +51,7 @@ It is designed for people who work with large blocklists, external feed imports,
 - Search and cleanup:
   - find / next / previous navigation
   - remove matching entries with selection + preview
+  - adblock syntax linting plus cosmetic/path-rule quarantine for hosts-safe reviews
   - false-positive triage for whitelist, pin, source-match, and upstream report decisions
   - entry provenance view for import-section ownership, source matches, and local audit events
 - Export adapters:
@@ -83,6 +84,8 @@ The cleaner/importer is more flexible than a plain hosts parser. It can normaliz
 - URL-style entries like `https://example.com/path`
 - adblock-style rules like `||tracker.example^`
 - dnsmasq-style rules like `address=/telemetry.example/0.0.0.0`
+
+Browser-only adblock rules such as `example.com##.ad`, exception rules such as `@@||example.com^`, and path rules such as `||example.com/ads/*` are linted and skipped during normalized hosts-file conversion instead of being broadened into unsafe domain blocks.
 
 ## Requirements
 
@@ -224,6 +227,13 @@ python hosts_editor.py --cloud-adapter-plan controld .\cleaned-hosts.txt .\contr
 python hosts_editor.py --cloud-log-import controld .\activity-log.csv .\blocked-domains.txt
 ```
 
+Lint mixed adblock lists and write a hosts-safe quarantine copy:
+
+```powershell
+python hosts_editor.py --adblock-lint .\filters.txt --adblock-lint-output .\adblock-lint.json
+python hosts_editor.py --adblock-quarantine .\filters.txt .\filters.hosts-safe.txt
+```
+
 Run the deterministic large-file benchmark with:
 
 ```powershell
@@ -249,6 +259,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Portable bundle config: `docs/portable-config.md`
 - DNS interoperability pack: `docs/dns-integrations.md`
 - Cloud DNS adapters: `docs/cloud-dns-adapters.md`
+- Adblock syntax lint: `docs/adblock-lint.md`
 - Troubleshooting and hosts-file limits: `TROUBLESHOOTING.md`
 - Config schema: `docs/config-schema.md`
 - Curated source manifest: `docs/source-manifest.md`

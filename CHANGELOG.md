@@ -116,6 +116,12 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added a Control D activity-log CSV importer alongside the existing NextDNS CSV importer and moved NextDNS parsing through the shared pure parser.
 - Documented provider source references, privacy limits, and replay boundaries in `docs/cloud-dns-adapters.md`.
 
+**Adblock syntax lint**
+- Added adblock syntax classification so normalized hosts imports skip browser-only cosmetic, scriptlet, exception, regex, and URL-path rules instead of over-blocking whole domains.
+- Added **Tools > Adblock Syntax Lint...** and **Targeted Cleanup > Quarantine Browser-Only Adblock Rules...** for local review and comment-based quarantine.
+- Added `--adblock-lint`, `--adblock-lint-output`, and `--adblock-quarantine` for CLI review workflows.
+- Documented DNS-compatible versus browser-only rule boundaries in `docs/adblock-lint.md`.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**
