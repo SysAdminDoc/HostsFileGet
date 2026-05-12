@@ -55,6 +55,7 @@ It is not a DNS server, browser ad blocker, cloud filtering service, or endpoint
 | `docs/cli-profiles.md` | CLI profile list/import/apply/export behavior |
 | `docs/git-history.md` | Optional local Git-backed hosts snapshot and restore behavior |
 | `docs/scheduler-activity.md` | Scheduled-update silent logging and activity report behavior |
+| `docs/portable-config.md` | Local-vs-portable config resolution and portable bundle export behavior |
 | `docs/accessibility.md` | Contrast audit, font assumptions, and manual Windows accessibility release checks |
 | `docs/i18n.md` | String catalog schema, fallback behavior, and localization guardrails |
 | `CLAUDE.md` | Compact architecture and gotchas snapshot for agents |
@@ -105,6 +106,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Transactional hosts enable/disable helpers: `disable_hosts_file_transactionally`, `enable_hosts_file_transactionally`.
 - Download guards: `read_http_body_limited`, `decode_downloaded_lines`, `looks_like_html_document`.
 - Config sanitation and declarative profiles: `sanitize_custom_sources`, `sanitize_config_snapshot`, `sanitize_profile_snapshot`, `sanitize_profiles_snapshot`, `update_active_profile_snapshot`, `parse_declarative_config_text`, `format_declarative_config_payload`, `upsert_profile_in_config`, `set_active_profile_in_config`, `apply_declarative_profile_to_config`, `resolve_saved_state_hashes`.
+- Config location and portable export: `get_primary_config_path`, `get_config_root_dir`, `build_config_location_report`, `write_portable_bundle_config`, `format_portable_bundle_export_summary`.
 - Source catalog loading: `sanitize_source_manifest`, `load_blocklist_sources_manifest`.
 - i18n catalog loading: `normalize_locale_code`, `sanitize_i18n_catalog`, `load_i18n_catalog`, `translate_message`, `build_i18n_catalog_report`.
 - Source response caching: `fetch_source_with_cache`, `sanitize_source_cache_metadata`, `build_source_request_headers`.
@@ -161,6 +163,8 @@ The CLI functions live near the bottom of `hosts_editor.py` and intentionally sh
 - `_cli_enable`
 - `_cli_apply`
 - `_cli_update`
+- `_cli_config_location`
+- `_cli_portable_export`
 - `_cli_config_plan`
 - `_cli_config_apply`
 - `_cli_config_export`
@@ -181,8 +185,8 @@ Admin-required CLI actions must fail clearly when not elevated. Source health ch
 
 | Data | Location | Notes |
 | --- | --- | --- |
-| Primary config | `%LOCALAPPDATA%\HostsFileGet\hosts_editor_config.json` | Default per-user config; schema documented in `docs/config-schema.md` |
-| Portable config | `hosts_editor_config.json` next to script/exe | Used when present; same schema as primary config |
+| Primary config | `%LOCALAPPDATA%\HostsFileGet\hosts_editor_config.json` | Default per-user config; schema documented in `docs/config-schema.md`; inspect with `--config-location` |
+| Portable config | `hosts_editor_config.json` next to script/exe | Used when present; create/manage with `--portable-export`; same schema as primary config |
 | Curated source manifest | `data/blocklist_sources.json` beside script, exe bundle, or launcher cache | Versioned schema documented in `docs/source-manifest.md` |
 | i18n catalog | `data\i18n\en-US.json` beside script, exe bundle, or launcher cache | Optional versioned UI strings; built-in English fallback is used if the cached catalog is missing |
 | Source response cache | `source_cache\*.bin` beside the active config location | Raw source bodies keyed by normalized URL hash, verified by `source_cache_metadata` |

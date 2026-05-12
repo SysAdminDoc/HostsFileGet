@@ -57,6 +57,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F027 complete. Next roadmap item: F028 scheduler hardening and activity report.
 - Completed F028: hardened scheduled update command construction, made registered tasks use `--update --silent`, added bounded structured silent-run activity JSONL, `--activity-report`, scheduler activity docs, and regression tests.
 - Updated `ROADMAP.md` to mark F028 complete. Next roadmap item: F029 managed portable bundle config.
+- Completed F029: added explicit config-location reporting, managed portable config bundle export/overwrite CLI, portable sidecar-root resolution for cache/history/logs, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F029 complete. Next roadmap item: F030 Pi-hole/AdGuard/Technitium/blocky interoperability pack.
 
 ## Scope
 

@@ -98,6 +98,11 @@ All notable changes to HostsFileGet will be documented in this file.
 - Scheduled auto-update registration now uses the hardened `--update --silent` command builder for script and frozen executable launches.
 - Silent scheduled updates write bounded structured activity records to `%LOCALAPPDATA%\HostsFileGet\cli-activity.jsonl` alongside the human-readable CLI log.
 - Added `--activity-report` and `--activity-report-output` to inspect Task Scheduler status, recent update outcomes, and the CLI log tail without elevation.
+
+**Portable config**
+- Added `--config-location` to report whether local-user or portable config is active and where sidecar files resolve.
+- Added `--portable-export DIR` with `--portable-overwrite` to create a managed portable `hosts_editor_config.json` bundle.
+- Portable mode now keeps source cache, optional Git history, CLI logs, and scheduler activity under the active config root.
 - Documented format semantics and source references in `docs/export-formats.md`.
 
 ## [v2.17.0] - 2026-04-18

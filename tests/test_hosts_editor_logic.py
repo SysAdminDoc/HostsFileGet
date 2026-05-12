@@ -82,6 +82,8 @@ from hosts_editor import (
     build_export_domain_records,
     build_git_history_metadata,
     build_git_history_status_report,
+    build_config_location_report,
+    build_portable_bundle_readme,
     build_scheduler_activity_report,
     build_scheduler_update_command,
     export_lines_as_format,
@@ -100,12 +102,16 @@ from hosts_editor import (
     format_declarative_profile_summary,
     format_profile_list_summary,
     format_git_history_status_report,
+    format_config_location_report,
+    format_portable_bundle_export_summary,
     format_scheduler_activity_report,
     format_source_trust_badges,
     format_source_overlap_report,
     format_dns_bypass_diagnostics,
     build_schtasks_create_command,
     get_source_cache_body_path,
+    get_config_root_dir,
+    get_git_history_dir,
     looks_like_domain,
     looks_like_html_document,
     load_blocklist_sources_manifest,
@@ -145,6 +151,7 @@ from hosts_editor import (
     set_active_profile_in_config,
     update_active_profile_snapshot,
     write_git_history_snapshot,
+    write_portable_bundle_config,
     write_text_file_atomic,
     write_bytes_file_atomic,
 )
@@ -1495,6 +1502,77 @@ profile:
             exported = parse_declarative_config_text(export_path.read_text(encoding="utf-8"), "json")
             self.assertEqual(exported["id"], "work")
             self.assertEqual(exported["whitelist"], "work.example")
+
+    def test_config_location_report_switches_sidecars_with_portable_config(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as exe_dir, tempfile.TemporaryDirectory() as app_dir:
+            with mock.patch.object(hosts_editor, "_EXE_DIR", exe_dir):
+                with mock.patch.object(hosts_editor, "get_app_config_dir", return_value=app_dir):
+                    local_report = build_config_location_report()
+                    self.assertEqual(local_report["mode"], "local")
+                    self.assertEqual(local_report["active_config_path"], os.path.join(app_dir, "hosts_editor_config.json"))
+                    self.assertEqual(get_config_root_dir(), app_dir)
+                    self.assertEqual(get_git_history_dir(), os.path.join(app_dir, "hosts_history_git"))
+
+                    Path(exe_dir, "hosts_editor_config.json").write_text("{}", encoding="utf-8")
+                    portable_report = build_config_location_report()
+                    formatted = format_config_location_report(portable_report)
+
+                    self.assertEqual(portable_report["mode"], "portable")
+                    self.assertEqual(portable_report["sidecar_root"], exe_dir)
+                    self.assertEqual(get_config_root_dir(), exe_dir)
+                    self.assertEqual(get_git_history_dir(), os.path.join(exe_dir, "hosts_history_git"))
+                    self.assertIn("Portable", formatted)
+                    self.assertIn("CLI activity", formatted)
+
+    def test_write_portable_bundle_config_refuses_overwrite_and_writes_readme(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = write_portable_bundle_config(
+                tmpdir,
+                {"whitelist": "keep.example", "active_profile_id": "default"},
+                os.path.expanduser("~"),
+            )
+            config_path = Path(result["config_path"])
+            readme_path = Path(result["readme_path"])
+            written = json.loads(config_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(written["whitelist"], "keep.example")
+            self.assertTrue(readme_path.exists())
+            self.assertIn("Portable mode", build_portable_bundle_readme(str(config_path)))
+            self.assertIn("Portable Bundle Config", format_portable_bundle_export_summary(result))
+            with self.assertRaises(FileExistsError):
+                write_portable_bundle_config(tmpdir, {}, os.path.expanduser("~"))
+
+            overwritten = write_portable_bundle_config(
+                tmpdir,
+                {"whitelist": "new.example"},
+                os.path.expanduser("~"),
+                overwrite=True,
+            )
+            self.assertEqual(overwritten["config_path"], str(config_path))
+
+    def test_cli_config_location_and_portable_export(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "current.json"
+            bundle_dir = Path(tmpdir) / "bundle"
+            config_path.write_text(json.dumps({"whitelist": "cli.example"}), encoding="utf-8")
+
+            with mock.patch.object(hosts_editor, "get_primary_config_path", return_value=str(config_path)):
+                self.assertEqual(hosts_editor._cli_config_location(), 0)
+                self.assertEqual(hosts_editor._cli_portable_export(str(bundle_dir)), 0)
+                self.assertEqual(hosts_editor._cli_portable_export(str(bundle_dir)), 2)
+                self.assertEqual(hosts_editor._cli_portable_export(str(bundle_dir), overwrite=True), 0)
+
+            exported = json.loads((bundle_dir / "hosts_editor_config.json").read_text(encoding="utf-8"))
+            self.assertEqual(exported["whitelist"], "cli.example")
 
     def test_sanitize_config_snapshot_rejects_non_sha256_hashes(self):
         payload = sanitize_config_snapshot(

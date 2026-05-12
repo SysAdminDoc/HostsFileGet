@@ -37,6 +37,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback path
 APP_NAME = "Hosts File Get"
 APP_SLUG = "HostsFileGet"
 APP_VERSION = "2.17.0"
+CONFIG_FILENAME = "hosts_editor_config.json"
 CONFIG_SCHEMA_VERSION = 3
 PROFILE_SCHEMA_VERSION = 1
 DEFAULT_PROFILE_ID = "default"
@@ -73,6 +74,7 @@ CLI_ACTIVITY_FILENAME = "cli-activity.jsonl"
 CLI_ACTIVITY_SCHEMA_VERSION = 1
 CLI_ACTIVITY_MAX_EVENTS = 200
 CLI_ACTIVITY_LOG_TAIL_LINES = 25
+PORTABLE_BUNDLE_README_FILENAME = "HOSTSFILEGET_PORTABLE.md"
 
 DEFAULT_I18N_MESSAGES = {
     "app.name": APP_NAME,
@@ -1694,7 +1696,7 @@ def looks_like_html_document(lines: list[str]) -> bool:
     marker_hits = sum(1 for marker in html_markers if marker in combined)
     return marker_hits >= 2
 
-def _portable_config_path_candidate() -> str:
+def _portable_config_path_candidate(config_filename: str = CONFIG_FILENAME) -> str:
     """Return the path where a portable-mode config would live.
 
     Portable mode: if the user ships a ``hosts_editor_config.json`` next to
@@ -1702,7 +1704,7 @@ def _portable_config_path_candidate() -> str:
     ``%LOCALAPPDATA%`` entirely. Lets USB-stick / team-share deployments
     carry their settings with the binary.
     """
-    return os.path.join(_EXE_DIR, "hosts_editor_config.json")
+    return os.path.join(_EXE_DIR, config_filename)
 
 
 def is_portable_mode() -> bool:
@@ -1717,7 +1719,7 @@ def get_app_config_dir() -> str:
 
 def get_primary_config_path(config_filename: str) -> str:
     if is_portable_mode():
-        return _portable_config_path_candidate()
+        return _portable_config_path_candidate(config_filename)
     return _roaming_config_path(config_filename)
 
 
@@ -1725,9 +1727,12 @@ def _roaming_config_path(config_filename: str) -> str:
     return os.path.join(get_app_config_dir(), config_filename)
 
 
+def get_config_root_dir(config_filename: str = CONFIG_FILENAME) -> str:
+    return os.path.dirname(get_primary_config_path(config_filename)) or "."
+
+
 def get_source_cache_dir() -> str:
-    base_dir = _EXE_DIR if is_portable_mode() else get_app_config_dir()
-    return os.path.join(base_dir, SOURCE_CACHE_DIRNAME)
+    return os.path.join(get_config_root_dir(), SOURCE_CACHE_DIRNAME)
 
 
 def source_cache_key(url: str) -> str:
@@ -1740,8 +1745,113 @@ def get_source_cache_body_path(url: str, cache_dir: str | None = None) -> str:
 
 
 def get_git_history_dir(base_dir: str | None = None) -> str:
-    root = base_dir or get_app_config_dir()
+    root = base_dir or get_config_root_dir()
     return os.path.join(root, GIT_HISTORY_DIRNAME)
+
+
+def build_config_location_report(config_filename: str = CONFIG_FILENAME) -> dict:
+    portable_path = _portable_config_path_candidate(config_filename)
+    local_path = _roaming_config_path(config_filename)
+    portable_active = os.path.isfile(portable_path)
+    active_path = portable_path if portable_active else local_path
+    active_root = os.path.dirname(active_path) or "."
+    return {
+        "schema_version": CONFIG_SCHEMA_VERSION,
+        "mode": "portable" if portable_active else "local",
+        "reason": (
+            "portable config exists beside the executable/script"
+            if portable_active
+            else "no portable config exists beside the executable/script"
+        ),
+        "active_config_path": active_path,
+        "portable_config_path": portable_path,
+        "portable_config_exists": portable_active,
+        "local_config_path": local_path,
+        "local_config_exists": os.path.isfile(local_path),
+        "sidecar_root": active_root,
+        "source_cache_dir": os.path.join(active_root, SOURCE_CACHE_DIRNAME),
+        "git_history_dir": os.path.join(active_root, GIT_HISTORY_DIRNAME),
+        "cli_log_path": os.path.join(active_root, CLI_LOG_FILENAME),
+        "cli_activity_path": os.path.join(active_root, CLI_ACTIVITY_FILENAME),
+    }
+
+
+def format_config_location_report(report: dict) -> str:
+    return "\n".join([
+        "Config Location",
+        f"Mode: {report.get('mode', 'unknown')}",
+        f"Reason: {report.get('reason') or '-'}",
+        f"Active config: {report.get('active_config_path') or '-'}",
+        "",
+        "Candidates:",
+        (
+            f"  Portable: {report.get('portable_config_path') or '-'} "
+            f"({'exists' if report.get('portable_config_exists') else 'missing'})"
+        ),
+        (
+            f"  Local user: {report.get('local_config_path') or '-'} "
+            f"({'exists' if report.get('local_config_exists') else 'missing'})"
+        ),
+        "",
+        "Sidecar paths:",
+        f"  Root: {report.get('sidecar_root') or '-'}",
+        f"  Source cache: {report.get('source_cache_dir') or '-'}",
+        f"  Git history: {report.get('git_history_dir') or '-'}",
+        f"  CLI log: {report.get('cli_log_path') or '-'}",
+        f"  CLI activity: {report.get('cli_activity_path') or '-'}",
+    ])
+
+
+def build_portable_bundle_readme(config_path: str) -> str:
+    return "\n".join([
+        "# HostsFileGet Portable Bundle",
+        "",
+        f"This directory contains `{CONFIG_FILENAME}` for portable mode.",
+        "",
+        "Portable mode becomes active only when the config file sits beside the executable or script that is launched.",
+        f"Config path written: `{config_path}`",
+        "",
+        "Sidecar files such as source cache, optional Git history, CLI logs, and scheduler activity use the same directory when portable mode is active.",
+        "Move or delete the config file to return to the normal per-user config under `%LOCALAPPDATA%\\HostsFileGet`.",
+    ]) + "\n"
+
+
+def write_portable_bundle_config(
+    bundle_dir: str,
+    config_payload: dict | None,
+    default_last_open_dir: str,
+    *,
+    overwrite: bool = False,
+) -> dict:
+    if not isinstance(bundle_dir, str) or not bundle_dir.strip():
+        raise ValueError("Portable bundle directory is required.")
+    target_dir = os.path.abspath(os.path.expanduser(bundle_dir))
+    config_path = os.path.join(target_dir, CONFIG_FILENAME)
+    readme_path = os.path.join(target_dir, PORTABLE_BUNDLE_README_FILENAME)
+    if os.path.exists(config_path) and not overwrite:
+        raise FileExistsError(f"Portable config already exists: {config_path}")
+    os.makedirs(target_dir, exist_ok=True)
+    sanitized = sanitize_config_snapshot(config_payload or {}, default_last_open_dir)
+    write_text_file_atomic(config_path, json.dumps(sanitized, indent=2))
+    write_text_file_atomic(readme_path, build_portable_bundle_readme(config_path))
+    return {
+        "bundle_dir": target_dir,
+        "config_path": config_path,
+        "readme_path": readme_path,
+        "profile_count": len(sanitized.get("profiles", [])),
+        "active_profile_id": sanitized.get("active_profile_id", DEFAULT_PROFILE_ID),
+    }
+
+
+def format_portable_bundle_export_summary(result: dict) -> str:
+    return "\n".join([
+        "Portable Bundle Config",
+        f"Directory: {result.get('bundle_dir') or '-'}",
+        f"Config: {result.get('config_path') or '-'}",
+        f"Readme: {result.get('readme_path') or '-'}",
+        f"Active profile: {result.get('active_profile_id') or DEFAULT_PROFILE_ID}",
+        f"Profiles: {result.get('profile_count', 0)}",
+    ])
 
 
 def resolve_git_executable(git_executable: str | None = None) -> str | None:
@@ -4166,12 +4276,12 @@ def build_scheduler_update_command(
 
 
 def get_cli_log_path(config_dir: str | None = None) -> str:
-    base_dir = config_dir or get_app_config_dir()
+    base_dir = config_dir or get_config_root_dir()
     return os.path.join(base_dir, CLI_LOG_FILENAME)
 
 
 def get_cli_activity_log_path(config_dir: str | None = None) -> str:
-    base_dir = config_dir or get_app_config_dir()
+    base_dir = config_dir or get_config_root_dir()
     return os.path.join(base_dir, CLI_ACTIVITY_FILENAME)
 
 
@@ -6063,7 +6173,7 @@ def format_relative_time(iso_timestamp: str, now: float | None = None) -> str:
 # -------------------------------- Main App -----------------------------------
 class HostsFileEditor:
     HOSTS_FILE_PATH = _default_hosts_file_path()
-    CONFIG_FILENAME = "hosts_editor_config.json"
+    CONFIG_FILENAME = CONFIG_FILENAME
     
     SIDEBAR_WIDTH = 420
 
@@ -12339,7 +12449,7 @@ def _cli_enable_silent_logging() -> str | None:
     """
     global _CLI_LOG_PATH, _CLI_ACTIVITY_PATH
     try:
-        log_dir = get_app_config_dir()
+        log_dir = get_config_root_dir()
         os.makedirs(log_dir, exist_ok=True)
         _CLI_LOG_PATH = get_cli_log_path(log_dir)
         _CLI_ACTIVITY_PATH = get_cli_activity_log_path(log_dir)
@@ -12762,6 +12872,33 @@ def _read_cli_config_payload(config_path: str) -> dict:
     return payload
 
 
+def _cli_config_location() -> int:
+    _cli_print(format_config_location_report(build_config_location_report()))
+    return 0
+
+
+def _cli_portable_export(bundle_dir: str, overwrite: bool = False) -> int:
+    try:
+        config_path = get_primary_config_path(CONFIG_FILENAME)
+        current = _read_cli_config_payload(config_path)
+        result = write_portable_bundle_config(
+            bundle_dir,
+            current,
+            os.path.expanduser("~"),
+            overwrite=overwrite,
+        )
+    except FileExistsError as exc:
+        _cli_print(f"Portable bundle export refused: {exc}")
+        _cli_print("Use --portable-overwrite to replace the existing portable config.")
+        return 2
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Portable bundle export failed: {exc}")
+        return 2
+
+    _cli_print(format_portable_bundle_export_summary(result))
+    return 0
+
+
 def _cli_config_plan(source_path: str) -> int:
     try:
         profile = load_declarative_config_file(source_path)
@@ -12899,9 +13036,12 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--backup",
         "--apply",
         "--update",
+        "--config-location",
         "--config-plan",
         "--config-apply",
         "--config-export",
+        "--portable-export",
+        "--portable-overwrite",
         "--profile-list",
         "--profile-apply",
         "--profile-import",
@@ -12922,6 +13062,7 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     }
     cli_prefixes = (
         "--apply=",
+        "--portable-export=",
         "--config-plan=",
         "--config-apply=",
         "--config-export=",
@@ -12947,9 +13088,12 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--backup", action="store_true", help="Create a timestamped backup of the current hosts file.")
     parser.add_argument("--apply", metavar="PATH", help="Overwrite the hosts file with the contents of PATH (creates backup first).")
     parser.add_argument("--update", action="store_true", help="Re-fetch every source previously imported in the GUI and apply a Cleaned Save of the merged result.")
+    parser.add_argument("--config-location", action="store_true", help="Show whether local-user or portable config is active, plus sidecar paths.")
     parser.add_argument("--config-plan", metavar="PATH", help="Validate a declarative YAML/TOML/JSON profile file and summarize the config change without writing.")
     parser.add_argument("--config-apply", metavar="PATH", help="Apply a declarative YAML/TOML/JSON profile file to the app config without writing the hosts file.")
     parser.add_argument("--config-export", metavar="PATH", help="Export the active app config profile as declarative YAML/TOML/JSON.")
+    parser.add_argument("--portable-export", metavar="DIR", help="Write a managed portable hosts_editor_config.json bundle to DIR.")
+    parser.add_argument("--portable-overwrite", action="store_true", help="Allow --portable-export to replace an existing portable config in DIR.")
     parser.add_argument("--profile-list", action="store_true", help="List saved app profiles without launching the GUI.")
     parser.add_argument("--profile-apply", metavar="ID", help="Make a saved profile active in the app config without writing the hosts file.")
     parser.add_argument("--profile-import", metavar="PATH", help="Import a declarative profile file into the app config without activating it.")
@@ -12989,6 +13133,10 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         return _cli_apply(hosts_path, args.apply)
     if args.update:
         return _cli_update(hosts_path)
+    if args.config_location:
+        return _cli_config_location()
+    if args.portable_export:
+        return _cli_portable_export(args.portable_export, args.portable_overwrite)
     if args.config_plan:
         return _cli_config_plan(args.config_plan)
     if args.config_apply:
