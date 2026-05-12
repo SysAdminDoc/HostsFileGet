@@ -56,6 +56,10 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added Tk smoke tests for patched main-window startup plus About and Preferences modal construction.
 - The smoke tests skip cleanly if Tk cannot create a root and patch admin/config/hosts-load startup paths to avoid system writes or elevation prompts.
 
+**Large-file benchmarks**
+- Added `benchmarks/large_file_benchmark.py` with deterministic large hosts fixtures, parser/cleaner/domain-extraction/category timing, human-readable output, JSON output, and optional local clean-time budgets.
+- Added benchmark smoke coverage that avoids hardware-dependent timing assertions while keeping the harness wired into normal test discovery.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

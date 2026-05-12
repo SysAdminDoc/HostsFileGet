@@ -144,7 +144,7 @@ Keyboard shortcuts:
 Run the regression suite with:
 
 ```powershell
-python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py tests\test_gui_smoke.py
+python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py tests\test_gui_smoke.py tests\test_benchmarks.py benchmarks\large_file_benchmark.py
 python -m unittest discover -s tests -v
 ```
 
@@ -154,13 +154,21 @@ Run a non-admin curated source health report with:
 python hosts_editor.py --source-health --source-health-output source-health-report.json
 ```
 
+Run the deterministic large-file benchmark with:
+
+```powershell
+python benchmarks\large_file_benchmark.py --entries 100000 --repeats 3 --json-output benchmark-report.json
+```
+
 ## Repository Notes
 
 - Main application: `hosts_editor.py`
 - Launcher: `PythonLauncher.ps1`
 - Regression tests: `tests/test_hosts_editor_logic.py`
 - GUI smoke tests: `tests/test_gui_smoke.py`
+- Benchmark smoke tests: `tests/test_benchmarks.py`
 - Golden cleaned-output fixtures: `tests/golden_cleaned/`
+- Large-file benchmark harness: `benchmarks/large_file_benchmark.py`
 - Architecture map: `ARCHITECTURE.md`
 - Troubleshooting and hosts-file limits: `TROUBLESHOOTING.md`
 - Config schema: `docs/config-schema.md`
