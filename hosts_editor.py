@@ -38,12 +38,55 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback path
 
 APP_NAME = "Hosts File Get"
 APP_SLUG = "HostsFileGet"
-APP_VERSION = "2.17.0"
+APP_VERSION = "2.18.0"
 CONFIG_FILENAME = "hosts_editor_config.json"
-CONFIG_SCHEMA_VERSION = 3
+CONFIG_SCHEMA_VERSION = 4
 PROFILE_SCHEMA_VERSION = 1
 DEFAULT_PROFILE_ID = "default"
 PROFILE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+PROFILE_ACTIVATION_SCHEDULE_VERSION = 1
+PROFILE_ACTIVATION_MAX_WINDOWS = 64
+PROFILE_ACTIVATION_WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+PROFILE_ACTIVATION_DAY_ALIASES = {
+    "m": "mon",
+    "mo": "mon",
+    "mon": "mon",
+    "monday": "mon",
+    "t": "tue",
+    "tu": "tue",
+    "tue": "tue",
+    "tues": "tue",
+    "tuesday": "tue",
+    "w": "wed",
+    "we": "wed",
+    "wed": "wed",
+    "wednesday": "wed",
+    "th": "thu",
+    "thu": "thu",
+    "thur": "thu",
+    "thurs": "thu",
+    "thursday": "thu",
+    "f": "fri",
+    "fr": "fri",
+    "fri": "fri",
+    "friday": "fri",
+    "sa": "sat",
+    "sat": "sat",
+    "saturday": "sat",
+    "su": "sun",
+    "sun": "sun",
+    "sunday": "sun",
+}
+PROFILE_ACTIVATION_DAY_GROUPS = {
+    "daily": PROFILE_ACTIVATION_WEEKDAYS,
+    "all": PROFILE_ACTIVATION_WEEKDAYS,
+    "everyday": PROFILE_ACTIVATION_WEEKDAYS,
+    "weekdays": ("mon", "tue", "wed", "thu", "fri"),
+    "weekday": ("mon", "tue", "wed", "thu", "fri"),
+    "workdays": ("mon", "tue", "wed", "thu", "fri"),
+    "weekends": ("sat", "sun"),
+    "weekend": ("sat", "sun"),
+}
 DECLARATIVE_CONFIG_SCHEMA = "hostsfileget.declarative.v1"
 DECLARATIVE_CONFIG_FORMATS = {"json", "yaml", "toml"}
 DECLARATIVE_CONFIG_EXTENSION_FORMATS = {
@@ -4073,6 +4116,11 @@ def sanitize_profile_id(value, fallback: str = DEFAULT_PROFILE_ID) -> str:
     return DEFAULT_PROFILE_ID
 
 
+def _sanitize_profile_id_strict(value) -> str:
+    candidate = str(value).strip().lower() if isinstance(value, str) else ""
+    return candidate if PROFILE_ID_PATTERN.match(candidate) else ""
+
+
 def _unique_profile_id(profile_id: str, used_ids: set[str]) -> str:
     if profile_id not in used_ids:
         return profile_id
@@ -4207,6 +4255,191 @@ def update_active_profile_snapshot(
         break
 
     return sanitized_profiles, active_id
+
+
+def normalize_profile_activation_time(value) -> str:
+    if isinstance(value, datetime.time):
+        return f"{value.hour:02d}:{value.minute:02d}"
+    candidate = str(value or "").strip()
+    match = re.fullmatch(r"([01]?\d|2[0-3]):([0-5]\d)", candidate)
+    if not match:
+        raise ValueError("profile activation time must use HH:MM in 24-hour local time")
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _profile_activation_minutes(value: str) -> int:
+    hour, minute = normalize_profile_activation_time(value).split(":", 1)
+    return int(hour) * 60 + int(minute)
+
+
+def normalize_profile_activation_days(value) -> list[str]:
+    if value is None or value == "":
+        return list(PROFILE_ACTIVATION_WEEKDAYS)
+
+    if isinstance(value, str):
+        candidate = value.strip().lower()
+        if candidate in PROFILE_ACTIVATION_DAY_GROUPS:
+            return list(PROFILE_ACTIVATION_DAY_GROUPS[candidate])
+        parts = [part for part in re.split(r"[\s,;/|]+", candidate) if part]
+    elif isinstance(value, (list, tuple, set)):
+        parts = []
+        for item in value:
+            if isinstance(item, str) and item.strip().lower() in PROFILE_ACTIVATION_DAY_GROUPS:
+                parts.extend(PROFILE_ACTIVATION_DAY_GROUPS[item.strip().lower()])
+            else:
+                parts.append(str(item).strip().lower())
+    else:
+        raise ValueError("profile activation days must be a weekday list or named group")
+
+    normalized: list[str] = []
+    for part in parts:
+        day = PROFILE_ACTIVATION_DAY_ALIASES.get(part)
+        if day is None:
+            raise ValueError(f"unsupported profile activation day: {part}")
+        if day not in normalized:
+            normalized.append(day)
+
+    if not normalized:
+        raise ValueError("profile activation days cannot be empty")
+    order = {day: index for index, day in enumerate(PROFILE_ACTIVATION_WEEKDAYS)}
+    return sorted(normalized, key=order.get)
+
+
+def parse_profile_activation_when(value) -> datetime.datetime:
+    if value is None or value == "":
+        return datetime.datetime.now()
+    if isinstance(value, datetime.datetime):
+        return value
+    if isinstance(value, datetime.date):
+        return datetime.datetime.combine(value, datetime.time.min)
+
+    candidate = str(value).strip()
+    if candidate.endswith("Z"):
+        candidate = candidate[:-1] + "+00:00"
+    try:
+        return datetime.datetime.fromisoformat(candidate)
+    except ValueError as exc:
+        raise ValueError("profile schedule evaluation time must be an ISO local datetime") from exc
+
+
+def _sanitize_profile_activation_window_id(value, fallback: str, used_ids: set[str] | None = None) -> str:
+    candidate = ""
+    if isinstance(value, str):
+        candidate = re.sub(r"[^a-z0-9_-]+", "-", value.strip().lower()).strip("-_")
+    if not candidate:
+        candidate = fallback
+    window_id = sanitize_profile_id(candidate, fallback)
+    if used_ids is None:
+        return window_id
+    window_id = _unique_profile_id(window_id, used_ids)
+    used_ids.add(window_id)
+    return window_id
+
+
+def _coerce_profile_activation_enabled(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        candidate = value.strip().lower()
+        if candidate in {"0", "false", "no", "off", "disabled"}:
+            return False
+        if candidate in {"1", "true", "yes", "on", "enabled"}:
+            return True
+    return bool(value)
+
+
+def sanitize_profile_activation_window(
+    window,
+    valid_profile_ids,
+    fallback_index: int = 1,
+    used_window_ids: set[str] | None = None,
+) -> dict | None:
+    if not isinstance(window, dict):
+        return None
+
+    valid_ids = {_sanitize_profile_id_strict(profile_id) for profile_id in valid_profile_ids}
+    profile_id = _sanitize_profile_id_strict(window.get("profile_id"))
+    if profile_id not in valid_ids:
+        return None
+
+    try:
+        days = normalize_profile_activation_days(window.get("days", "daily"))
+        start_time = normalize_profile_activation_time(window.get("start_time"))
+        end_time = normalize_profile_activation_time(window.get("end_time"))
+    except ValueError:
+        return None
+    if start_time == end_time:
+        return None
+
+    fallback_id = f"schedule-{max(1, fallback_index)}"
+    default_id = f"{profile_id}-{'-'.join(days)}-{start_time.replace(':', '')}-{end_time.replace(':', '')}"
+    window_id = _sanitize_profile_activation_window_id(
+        window.get("id") or default_id,
+        fallback_id,
+        used_window_ids,
+    )
+    name = _sanitize_profile_name(
+        window.get("name"),
+        window_id,
+    )
+
+    return {
+        "id": window_id,
+        "name": name,
+        "profile_id": profile_id,
+        "days": days,
+        "start_time": start_time,
+        "end_time": end_time,
+        "enabled": _coerce_profile_activation_enabled(window.get("enabled", True)),
+    }
+
+
+def sanitize_profile_activation_schedule(schedule, valid_profile_ids) -> list[dict]:
+    if isinstance(schedule, dict):
+        schedule = schedule.get("windows", [])
+    if not isinstance(schedule, list):
+        return []
+
+    sanitized: list[dict] = []
+    used_ids: set[str] = set()
+    for candidate in schedule:
+        window = sanitize_profile_activation_window(
+            candidate,
+            valid_profile_ids,
+            fallback_index=len(sanitized) + 1,
+            used_window_ids=used_ids,
+        )
+        if window is not None:
+            sanitized.append(window)
+        if len(sanitized) >= PROFILE_ACTIVATION_MAX_WINDOWS:
+            break
+    return sanitized
+
+
+def profile_activation_window_matches(window: dict, when) -> bool:
+    try:
+        evaluated_at = parse_profile_activation_when(when)
+        days = normalize_profile_activation_days(window.get("days", []))
+        start_minutes = _profile_activation_minutes(window.get("start_time"))
+        end_minutes = _profile_activation_minutes(window.get("end_time"))
+    except (ValueError, AttributeError):
+        return False
+
+    if not _coerce_profile_activation_enabled(window.get("enabled", True)):
+        return False
+
+    current_day = PROFILE_ACTIVATION_WEEKDAYS[evaluated_at.weekday()]
+    previous_day = PROFILE_ACTIVATION_WEEKDAYS[(evaluated_at.weekday() - 1) % 7]
+    current_minutes = evaluated_at.hour * 60 + evaluated_at.minute
+    if start_minutes < end_minutes:
+        return current_day in days and start_minutes <= current_minutes < end_minutes
+
+    return (
+        (current_day in days and current_minutes >= start_minutes)
+        or (previous_day in days and current_minutes < end_minutes)
+    )
 
 
 def detect_declarative_config_format(path_or_hint: str) -> str:
@@ -4576,6 +4809,100 @@ def set_active_profile_in_config(config: dict, profile_id: str, default_last_ope
     return sanitize_config_snapshot(snapshot, default_last_open_dir)
 
 
+def evaluate_profile_activation_schedule(config: dict, when=None, home_dir: str | None = None) -> dict:
+    default_home = home_dir or os.path.expanduser("~")
+    evaluated_at = parse_profile_activation_when(when)
+    snapshot = sanitize_config_snapshot(config, default_home)
+    windows = list(snapshot.get("profile_activation_schedule", []))
+    active_id = snapshot.get("active_profile_id", DEFAULT_PROFILE_ID)
+    fallback_id = snapshot.get("profile_activation_fallback_id", active_id)
+    profile_ids = {profile["id"] for profile in snapshot.get("profiles", [])}
+    warnings: list[str] = []
+
+    if fallback_id not in profile_ids:
+        warnings.append("Configured fallback profile is missing; keeping the current active profile.")
+        fallback_id = active_id
+
+    matching_window = None
+    for window in windows:
+        if profile_activation_window_matches(window, evaluated_at):
+            matching_window = window
+            break
+
+    if not windows:
+        target_id = active_id
+        target_reason = "no-schedule"
+        warnings.append("No profile activation windows are configured.")
+    elif matching_window is not None:
+        target_id = matching_window["profile_id"]
+        target_reason = "matching-window"
+    else:
+        target_id = fallback_id
+        target_reason = "fallback"
+
+    return {
+        "schema": "hostsfileget.profile-activation-report.v1",
+        "evaluated_at": evaluated_at.isoformat(timespec="seconds"),
+        "active_profile_id": active_id,
+        "fallback_profile_id": fallback_id,
+        "target_profile_id": target_id,
+        "target_reason": target_reason,
+        "switch_required": target_id != active_id,
+        "will_write_hosts_file": False,
+        "matching_window": matching_window,
+        "windows": windows,
+        "warnings": warnings,
+    }
+
+
+def apply_profile_activation_schedule(config: dict, when=None, home_dir: str | None = None) -> tuple[dict, dict]:
+    default_home = home_dir or os.path.expanduser("~")
+    snapshot = sanitize_config_snapshot(config, default_home)
+    report = evaluate_profile_activation_schedule(snapshot, when=when, home_dir=default_home)
+    if report["switch_required"]:
+        snapshot = set_active_profile_in_config(snapshot, report["target_profile_id"], default_home)
+    return snapshot, report
+
+
+def format_profile_activation_schedule_report(report: dict) -> str:
+    lines = [
+        "Profile Activation Schedule",
+        f"Evaluated at: {report.get('evaluated_at', '')}",
+        f"Active profile: {report.get('active_profile_id', '')}",
+        f"Fallback profile: {report.get('fallback_profile_id', '')}",
+        f"Target profile: {report.get('target_profile_id', '')} ({report.get('target_reason', '')})",
+        "Hosts-file write: no",
+    ]
+    if report.get("switch_required"):
+        lines.append("Config switch required: yes")
+    else:
+        lines.append("Config switch required: no")
+
+    matching_window = report.get("matching_window")
+    if matching_window:
+        lines.append(f"Matching window: {matching_window['name']} ({matching_window['id']})")
+
+    warnings = report.get("warnings") or []
+    if warnings:
+        lines.append("")
+        lines.append("Warnings:")
+        lines.extend(f"- {warning}" for warning in warnings)
+
+    lines.append("")
+    lines.append("Windows:")
+    windows = report.get("windows") or []
+    if not windows:
+        lines.append("- None configured.")
+    for window in windows:
+        status = "enabled" if window.get("enabled", True) else "disabled"
+        days = ",".join(window.get("days", []))
+        lines.append(
+            f"- {window.get('id')}: {window.get('name')} -> {window.get('profile_id')} "
+            f"{days} {window.get('start_time')}-{window.get('end_time')} ({status})"
+        )
+    return "\n".join(lines)
+
+
 def format_profile_list_summary(config: dict, default_last_open_dir: str | None = None) -> str:
     sanitized = sanitize_config_snapshot(config, default_last_open_dir or os.path.expanduser("~"))
     active_id = sanitized.get("active_profile_id", DEFAULT_PROFILE_ID)
@@ -4720,6 +5047,16 @@ def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
         config.get("active_profile_id", DEFAULT_PROFILE_ID),
         fallback_profile=fallback_profile,
     )
+    profile_ids = {profile["id"] for profile in profiles}
+    profile_activation_fallback_id = _sanitize_profile_id_strict(
+        config.get("profile_activation_fallback_id")
+    )
+    if profile_activation_fallback_id not in profile_ids:
+        profile_activation_fallback_id = active_profile_id
+    profile_activation_schedule = sanitize_profile_activation_schedule(
+        config.get("profile_activation_schedule", []),
+        profile_ids,
+    )
 
     return {
         "config_version": CONFIG_SCHEMA_VERSION,
@@ -4739,6 +5076,9 @@ def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
         "profile_schema_version": PROFILE_SCHEMA_VERSION,
         "active_profile_id": active_profile_id,
         "profiles": profiles,
+        "profile_activation_schedule_version": PROFILE_ACTIVATION_SCHEDULE_VERSION,
+        "profile_activation_fallback_id": profile_activation_fallback_id,
+        "profile_activation_schedule": profile_activation_schedule,
     }
 
 def resolve_saved_state_hashes(current_hash: str, saved_raw_hash, saved_cleaned_hash) -> tuple[str | None, str | None]:
@@ -9120,6 +9460,9 @@ class HostsFileEditor:
         self.profile_schema_version = PROFILE_SCHEMA_VERSION
         self.active_profile_id = DEFAULT_PROFILE_ID
         self.profiles: list[dict] = [build_default_profile_snapshot({})]
+        self.profile_activation_schedule_version = PROFILE_ACTIVATION_SCHEDULE_VERSION
+        self.profile_activation_fallback_id = DEFAULT_PROFILE_ID
+        self.profile_activation_schedule: list[dict] = []
         # Auto-refresh stale sources on launch (opt-in, off by default).
         self._update_on_launch = False
         # Lock the hosts file with the Windows "read-only" attribute after a
@@ -10575,6 +10918,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="Encrypted DNS Bypass Packs...", command=self.show_encrypted_dns_bypass_packs)
         tools_menu.add_command(label="DNS Rebinding Protection Check...", command=self.show_dns_rebinding_report)
         tools_menu.add_command(label="SafeSearch / Restricted Mode Templates...", command=self.show_safesearch_templates)
+        tools_menu.add_command(label="Profile Activation Schedule...", command=self.show_profile_activation_schedule)
         tools_menu.add_command(label="DNS Interoperability Pack...", command=self.show_dns_integration_pack)
         tools_menu.add_command(label="Cloud DNS Adapters...", command=self.show_cloud_dns_adapters)
         tools_menu.add_command(label="Sources Report...", command=self.show_sources_report)
@@ -11039,6 +11383,15 @@ class HostsFileEditor:
         self.profile_schema_version = sanitized_config.get("profile_schema_version", PROFILE_SCHEMA_VERSION)
         self.active_profile_id = sanitized_config.get("active_profile_id", DEFAULT_PROFILE_ID)
         self.profiles = sanitized_config.get("profiles", [build_default_profile_snapshot(sanitized_config)])
+        self.profile_activation_schedule_version = sanitized_config.get(
+            "profile_activation_schedule_version",
+            PROFILE_ACTIVATION_SCHEDULE_VERSION,
+        )
+        self.profile_activation_fallback_id = sanitized_config.get(
+            "profile_activation_fallback_id",
+            self.active_profile_id,
+        )
+        self.profile_activation_schedule = sanitized_config.get("profile_activation_schedule", [])
         self._update_on_launch = bool(sanitized_config.get("update_on_launch", False))
         self._lock_after_save = bool(sanitized_config.get("lock_after_save", False))
 
@@ -11103,6 +11456,17 @@ class HostsFileEditor:
             "profile_schema_version": self.profile_schema_version,
             "active_profile_id": self.active_profile_id,
             "profiles": self.profiles,
+            "profile_activation_schedule_version": getattr(
+                self,
+                "profile_activation_schedule_version",
+                PROFILE_ACTIVATION_SCHEDULE_VERSION,
+            ),
+            "profile_activation_fallback_id": getattr(
+                self,
+                "profile_activation_fallback_id",
+                self.active_profile_id,
+            ),
+            "profile_activation_schedule": getattr(self, "profile_activation_schedule", []),
         }, self.last_open_dir)
         try:
             self._write_config_payload(config)
@@ -11110,6 +11474,9 @@ class HostsFileEditor:
             self.profile_schema_version = config["profile_schema_version"]
             self.active_profile_id = config["active_profile_id"]
             self.profiles = config["profiles"]
+            self.profile_activation_schedule_version = config["profile_activation_schedule_version"]
+            self.profile_activation_fallback_id = config["profile_activation_fallback_id"]
+            self.profile_activation_schedule = config["profile_activation_schedule"]
             self._source_metadata_dirty = False
             self._update_whitelist_summary()
             return True
@@ -11628,6 +11995,41 @@ class HostsFileEditor:
             tone="warning",
             width=960,
             height=740,
+        )
+
+    def show_profile_activation_schedule(self):
+        try:
+            whitelist_text = self.whitelist_text_area.get('1.0', tk.END).strip()
+        except tk.TclError:
+            whitelist_text = getattr(self, "_last_saved_whitelist_text", "")
+        config = {
+            "whitelist": whitelist_text,
+            "custom_sources": getattr(self, "custom_sources", []),
+            "pinned_domains": sorted(getattr(self, "pinned_domains", set())),
+            "preferred_block_sink": getattr(self, "_preferred_block_sink", "0.0.0.0"),
+            "profile_schema_version": getattr(self, "profile_schema_version", PROFILE_SCHEMA_VERSION),
+            "active_profile_id": getattr(self, "active_profile_id", DEFAULT_PROFILE_ID),
+            "profiles": getattr(self, "profiles", []),
+            "profile_activation_schedule_version": getattr(
+                self,
+                "profile_activation_schedule_version",
+                PROFILE_ACTIVATION_SCHEDULE_VERSION,
+            ),
+            "profile_activation_fallback_id": getattr(
+                self,
+                "profile_activation_fallback_id",
+                getattr(self, "active_profile_id", DEFAULT_PROFILE_ID),
+            ),
+            "profile_activation_schedule": getattr(self, "profile_activation_schedule", []),
+        }
+        report = evaluate_profile_activation_schedule(config, home_dir=self.last_open_dir)
+        self._show_text_report_dialog(
+            "Profile activation schedule",
+            "Review time-bound profile activation rules. Applying the schedule updates app config only; it never writes the hosts file.",
+            format_profile_activation_schedule_report(report),
+            tone="warning" if report.get("switch_required") else "info",
+            width=920,
+            height=680,
         )
 
     def show_dns_rebinding_report(self):
@@ -16280,6 +16682,123 @@ def _cli_profile_export(profile_id: str, output_path: str) -> int:
     return 0
 
 
+def _cli_profile_schedule_list(at_value: str | None = None) -> int:
+    try:
+        config_path = get_primary_config_path("hosts_editor_config.json")
+        current = _read_cli_config_payload(config_path)
+        report = evaluate_profile_activation_schedule(
+            current,
+            when=parse_profile_activation_when(at_value) if at_value else None,
+            home_dir=os.path.expanduser("~"),
+        )
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Profile schedule list failed: {exc}")
+        return 2
+    _cli_print(format_profile_activation_schedule_report(report))
+    _cli_print("No files were changed.")
+    return 0
+
+
+def _cli_profile_schedule_add(
+    profile_id: str,
+    start_time: str,
+    end_time: str,
+    days: str | None = None,
+    name: str | None = None,
+    fallback_id: str | None = None,
+) -> int:
+    try:
+        config_path = get_primary_config_path("hosts_editor_config.json")
+        current = _read_cli_config_payload(config_path)
+        config = sanitize_config_snapshot(current, os.path.expanduser("~"))
+        profile_ids = {profile["id"] for profile in config.get("profiles", [])}
+        safe_profile_id = _sanitize_profile_id_strict(profile_id)
+        if safe_profile_id not in profile_ids:
+            raise ValueError(f"profile not found: {profile_id}")
+
+        safe_fallback_id = _sanitize_profile_id_strict(fallback_id) if fallback_id else config.get("active_profile_id")
+        if safe_fallback_id not in profile_ids:
+            raise ValueError(f"fallback profile not found: {fallback_id}")
+
+        normalized_days = normalize_profile_activation_days(days or "daily")
+        window = sanitize_profile_activation_window(
+            {
+                "name": name or f"{safe_profile_id} {start_time}-{end_time}",
+                "profile_id": safe_profile_id,
+                "days": normalized_days,
+                "start_time": start_time,
+                "end_time": end_time,
+                "enabled": True,
+            },
+            profile_ids,
+            fallback_index=len(config.get("profile_activation_schedule", [])) + 1,
+        )
+        if window is None:
+            raise ValueError("profile schedule window is invalid")
+
+        config["profile_activation_fallback_id"] = safe_fallback_id
+        config["profile_activation_schedule"] = list(config.get("profile_activation_schedule", [])) + [window]
+        config = sanitize_config_snapshot(config, os.path.expanduser("~"))
+        _write_cli_config_payload(config_path, config)
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Profile schedule add failed: {exc}")
+        return 2
+
+    _cli_print(f"Added profile schedule window: {window['id']} -> {window['profile_id']}")
+    _cli_print(f"Wrote config: {config_path}")
+    _cli_print("No hosts file was changed.")
+    return 0
+
+
+def _cli_profile_schedule_apply(at_value: str | None = None) -> int:
+    started_at = _utc_timestamp()
+    try:
+        config_path = get_primary_config_path("hosts_editor_config.json")
+        current = _read_cli_config_payload(config_path)
+        config, report = apply_profile_activation_schedule(
+            current,
+            when=parse_profile_activation_when(at_value) if at_value else None,
+            home_dir=os.path.expanduser("~"),
+        )
+        if report["switch_required"]:
+            _write_cli_config_payload(config_path, config)
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Profile schedule apply failed: {exc}")
+        return 2
+
+    _cli_print(format_profile_activation_schedule_report(report))
+    if report["switch_required"]:
+        _cli_print(f"Wrote config: {config_path}")
+    else:
+        _cli_print("No config write needed.")
+    _cli_print("No hosts file was changed.")
+
+    if _CLI_ACTIVITY_PATH:
+        try:
+            append_cli_activity_event(
+                {
+                    "action": "profile-schedule-apply",
+                    "started_at": started_at,
+                    "finished_at": _utc_timestamp(),
+                    "exit_code": 0,
+                    "outcome": "success",
+                    "summary": (
+                        f"target={report.get('target_profile_id')} "
+                        f"reason={report.get('target_reason')}"
+                    ),
+                    "details": {
+                        "active_profile_id": report.get("active_profile_id"),
+                        "target_profile_id": report.get("target_profile_id"),
+                        "switch_required": bool(report.get("switch_required")),
+                    },
+                },
+                _CLI_ACTIVITY_PATH,
+            )
+        except OSError:
+            pass
+    return 0
+
+
 def _handle_cli_args(argv: list[str]) -> int | None:
     """Return an exit code when a CLI action was performed; else ``None`` to
     continue launching the GUI.
@@ -16304,6 +16823,13 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--profile-apply",
         "--profile-import",
         "--profile-export",
+        "--profile-schedule-list",
+        "--profile-schedule-add",
+        "--profile-schedule-days",
+        "--profile-schedule-name",
+        "--profile-schedule-fallback",
+        "--profile-schedule-apply",
+        "--profile-schedule-at",
         "--history-status",
         "--history-snapshot",
         "--history-restore",
@@ -16351,6 +16877,11 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--profile-apply=",
         "--profile-import=",
         "--profile-export=",
+        "--profile-schedule-add=",
+        "--profile-schedule-days=",
+        "--profile-schedule-name=",
+        "--profile-schedule-fallback=",
+        "--profile-schedule-at=",
         "--history-restore=",
         "--activity-report-output=",
         "--integration-export=",
@@ -16398,6 +16929,18 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--profile-apply", metavar="ID", help="Make a saved profile active in the app config without writing the hosts file.")
     parser.add_argument("--profile-import", metavar="PATH", help="Import a declarative profile file into the app config without activating it.")
     parser.add_argument("--profile-export", nargs=2, metavar=("ID", "PATH"), help="Export a saved profile by ID as declarative YAML/TOML/JSON.")
+    parser.add_argument("--profile-schedule-list", action="store_true", help="Show the time-bound profile activation schedule without writing files.")
+    parser.add_argument(
+        "--profile-schedule-add",
+        nargs=3,
+        metavar=("ID", "START", "END"),
+        help="Add a time-bound app-config profile activation window. START and END use 24-hour HH:MM local time.",
+    )
+    parser.add_argument("--profile-schedule-days", default="daily", metavar="DAYS", help="Days for --profile-schedule-add, such as daily, weekdays, weekends, or mon,tue,wed.")
+    parser.add_argument("--profile-schedule-name", metavar="NAME", help="Optional display name for --profile-schedule-add.")
+    parser.add_argument("--profile-schedule-fallback", metavar="ID", help="Fallback profile when no schedule window matches.")
+    parser.add_argument("--profile-schedule-apply", action="store_true", help="Evaluate schedule time and switch the app config profile only; never writes the hosts file.")
+    parser.add_argument("--profile-schedule-at", metavar="ISO_LOCAL", help="Evaluate --profile-schedule-list or --profile-schedule-apply at an ISO local datetime.")
     parser.add_argument("--history-status", action="store_true", help="Show optional local Git history status and recent snapshots.")
     parser.add_argument("--history-snapshot", action="store_true", help="Commit the current hosts file into the optional local Git history repository.")
     parser.add_argument("--history-restore", metavar="REF", help="Restore the hosts file from an optional local Git history commit ref after creating a normal backup.")
@@ -16525,6 +17068,19 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         return _cli_profile_import(args.profile_import)
     if args.profile_export:
         return _cli_profile_export(args.profile_export[0], args.profile_export[1])
+    if args.profile_schedule_add:
+        return _cli_profile_schedule_add(
+            args.profile_schedule_add[0],
+            args.profile_schedule_add[1],
+            args.profile_schedule_add[2],
+            args.profile_schedule_days,
+            args.profile_schedule_name,
+            args.profile_schedule_fallback,
+        )
+    if args.profile_schedule_apply:
+        return _cli_profile_schedule_apply(args.profile_schedule_at)
+    if args.profile_schedule_list or args.profile_schedule_at:
+        return _cli_profile_schedule_list(args.profile_schedule_at)
     if args.history_status:
         return _cli_history_status()
     if args.history_snapshot:

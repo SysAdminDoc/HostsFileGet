@@ -161,6 +161,12 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added **Tools > SafeSearch / Restricted Mode Templates...**, `--safesearch-template-list`, and `--safesearch-template-plan TEMPLATE OUTPUT` for local review JSON without hosts, DNS, browser, or provider writes.
 - Documented hosts-file limits, DNS CNAME handoffs, provider IP drift, and source basis in `docs/safesearch-restricted-mode.md`.
 
+**Time-bound profile activation**
+- Bumped the config schema to `4` and added sanitized `profile_activation_schedule_version`, `profile_activation_fallback_id`, and `profile_activation_schedule` fields.
+- Added local-time profile schedule evaluation with weekday groups, overnight window support, fallback profile handling, and a read-only **Tools > Profile Activation Schedule...** report.
+- Added `--profile-schedule-list`, `--profile-schedule-add`, `--profile-schedule-apply`, and `--profile-schedule-at` for config-only automation that never writes the system hosts file.
+- Documented the schedule schema, matching rules, and non-enforcement boundaries in `docs/profile-activation-schedule.md`.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

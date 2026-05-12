@@ -77,6 +77,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - profile-ready schema mirror for future named whitelist/source/pin sets
   - declarative YAML/TOML/JSON profile plan, apply, and export commands
   - CLI profile list/import/apply/export commands that never write the hosts file
+  - guarded time-bound profile activation commands that switch app config only
   - scheduled-update activity reports backed by bounded silent-run logs
   - managed portable bundle config export and config-location reporting
   - versioned English string catalog foundation for future localization
@@ -203,6 +204,14 @@ python hosts_editor.py --profile-apply work
 python hosts_editor.py --profile-export work .\work-profile.toml
 ```
 
+Plan or apply time-bound profile activation without writing the system hosts file:
+
+```powershell
+python hosts_editor.py --profile-schedule-list
+python hosts_editor.py --profile-schedule-add kids 16:00 20:00 --profile-schedule-days weekdays --profile-schedule-fallback default
+python hosts_editor.py --profile-schedule-apply
+```
+
 Inspect scheduled-update status and recent silent-run activity with:
 
 ```powershell
@@ -322,6 +331,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Encrypted DNS bypass packs: `docs/encrypted-dns-bypass.md`
 - DNS rebinding protection checks: `docs/dns-rebinding.md`
 - SafeSearch/restricted-mode templates: `docs/safesearch-restricted-mode.md`
+- Profile activation schedule: `docs/profile-activation-schedule.md`
 - Troubleshooting and hosts-file limits: `TROUBLESHOOTING.md`
 - Config schema: `docs/config-schema.md`
 - Curated source manifest: `docs/source-manifest.md`

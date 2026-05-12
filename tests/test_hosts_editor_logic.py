@@ -102,6 +102,8 @@ from hosts_editor import (
     build_dns_rebinding_report,
     build_safesearch_template_plan,
     build_threat_feed_pack_plan,
+    apply_profile_activation_schedule,
+    evaluate_profile_activation_schedule,
     export_lines_as_format,
     export_lines_as_bytes,
     extract_blocking_domains_from_lines,
@@ -133,6 +135,7 @@ from hosts_editor import (
     format_encrypted_dns_bypass_pack_plan,
     format_safesearch_template_catalog,
     format_safesearch_template_plan,
+    format_profile_activation_schedule_report,
     format_portable_bundle_export_summary,
     format_scheduler_activity_report,
     format_source_trust_badges,
@@ -162,6 +165,7 @@ from hosts_editor import (
     migrate_config_snapshot,
     normalize_locale_code,
     normalize_scheduler_start_time,
+    normalize_profile_activation_days,
     normalize_line_to_hosts_entries,
     normalize_custom_source_url,
     normalize_false_positive_domain,
@@ -179,6 +183,7 @@ from hosts_editor import (
     sanitize_cli_activity_event,
     sanitize_custom_sources,
     sanitize_i18n_catalog,
+    sanitize_profile_activation_schedule,
     sanitize_profile_id,
     sanitize_profile_snapshot,
     sanitize_profiles_snapshot,
@@ -1666,6 +1671,151 @@ profile:
             exported = parse_declarative_config_text(export_path.read_text(encoding="utf-8"), "json")
             self.assertEqual(exported["id"], "work")
             self.assertEqual(exported["whitelist"], "work.example")
+
+    def test_profile_activation_schedule_sanitizes_and_evaluates_windows(self):
+        config = sanitize_config_snapshot(
+            {
+                "profiles": [
+                    {"id": "default", "name": "Default", "whitelist": "default.example"},
+                    {"id": "kids", "name": "Kids", "whitelist": "kids.example"},
+                ],
+                "active_profile_id": "default",
+                "profile_activation_fallback_id": "default",
+                "profile_activation_schedule": [
+                    {
+                        "id": "Kids Hours",
+                        "name": "Kids block hours",
+                        "profile_id": "kids",
+                        "days": "weekdays",
+                        "start_time": "16:00",
+                        "end_time": "20:00",
+                    },
+                    {
+                        "profile_id": "missing",
+                        "days": "daily",
+                        "start_time": "09:00",
+                        "end_time": "10:00",
+                    },
+                ],
+            },
+            os.getcwd(),
+        )
+
+        self.assertEqual(normalize_profile_activation_days("weekends"), ["sat", "sun"])
+        self.assertEqual(len(config["profile_activation_schedule"]), 1)
+        self.assertEqual(config["profile_activation_schedule"][0]["id"], "kids-hours")
+
+        report = evaluate_profile_activation_schedule(config, "2026-05-11T17:00:00", os.getcwd())
+        rendered = format_profile_activation_schedule_report(report)
+
+        self.assertEqual(report["target_profile_id"], "kids")
+        self.assertEqual(report["target_reason"], "matching-window")
+        self.assertTrue(report["switch_required"])
+        self.assertFalse(report["will_write_hosts_file"])
+        self.assertIn("Hosts-file write: no", rendered)
+
+        fallback = evaluate_profile_activation_schedule(config, "2026-05-09T17:00:00", os.getcwd())
+        self.assertEqual(fallback["target_profile_id"], "default")
+        self.assertEqual(fallback["target_reason"], "fallback")
+
+    def test_apply_profile_activation_schedule_switches_config_only(self):
+        config = {
+            "whitelist": "default.example",
+            "profiles": [
+                {"id": "default", "name": "Default", "whitelist": "default.example"},
+                {"id": "kids", "name": "Kids", "whitelist": "kids.example", "preferred_block_sink": "127.0.0.1"},
+            ],
+            "active_profile_id": "default",
+            "profile_activation_fallback_id": "default",
+            "profile_activation_schedule": [
+                {
+                    "name": "Kids block hours",
+                    "profile_id": "kids",
+                    "days": ["mon"],
+                    "start_time": "16:00",
+                    "end_time": "20:00",
+                }
+            ],
+        }
+
+        applied, report = apply_profile_activation_schedule(config, "2026-05-11T18:00:00", os.getcwd())
+
+        self.assertTrue(report["switch_required"])
+        self.assertFalse(report["will_write_hosts_file"])
+        self.assertEqual(applied["active_profile_id"], "kids")
+        self.assertEqual(applied["whitelist"], "kids.example")
+        self.assertEqual(applied["preferred_block_sink"], "127.0.0.1")
+
+    def test_cli_profile_schedule_add_list_apply_are_config_only(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "hosts_editor_config.json"
+            config_path.write_text(
+                json.dumps({
+                    "whitelist": "default.example",
+                    "profiles": [
+                        {"id": "default", "name": "Default", "whitelist": "default.example"},
+                        {"id": "kids", "name": "Kids", "whitelist": "kids.example"},
+                    ],
+                    "active_profile_id": "default",
+                }),
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(hosts_editor, "get_primary_config_path", return_value=str(config_path)):
+                with mock.patch.object(hosts_editor, "_cli_print"):
+                    self.assertEqual(
+                        hosts_editor._cli_profile_schedule_add(
+                            "kids",
+                            "16:00",
+                            "20:00",
+                            "weekdays",
+                            "Kids block hours",
+                            "default",
+                        ),
+                        0,
+                    )
+                    self.assertEqual(hosts_editor._cli_profile_schedule_list("2026-05-11T17:00:00"), 0)
+                    self.assertEqual(hosts_editor._cli_profile_schedule_apply("2026-05-11T17:00:00"), 0)
+
+            written = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(written["active_profile_id"], "kids")
+            self.assertEqual(written["whitelist"], "kids.example")
+            self.assertEqual(written["profile_activation_fallback_id"], "default")
+            self.assertEqual(written["profile_activation_schedule"][0]["profile_id"], "kids")
+
+    def test_handle_cli_args_routes_profile_schedule_flags(self):
+        with mock.patch.object(hosts_editor, "_cli_profile_schedule_list", return_value=0) as mocked_list:
+            self.assertEqual(hosts_editor._handle_cli_args(["--profile-schedule-list"]), 0)
+            mocked_list.assert_called_once_with(None)
+
+        with mock.patch.object(hosts_editor, "_cli_profile_schedule_add", return_value=0) as mocked_add:
+            self.assertEqual(
+                hosts_editor._handle_cli_args([
+                    "--profile-schedule-add", "kids", "16:00", "20:00",
+                    "--profile-schedule-days", "weekdays",
+                    "--profile-schedule-name", "Kids block hours",
+                    "--profile-schedule-fallback", "default",
+                ]),
+                0,
+            )
+            mocked_add.assert_called_once_with(
+                "kids",
+                "16:00",
+                "20:00",
+                "weekdays",
+                "Kids block hours",
+                "default",
+            )
+
+        with mock.patch.object(hosts_editor, "_cli_profile_schedule_apply", return_value=0) as mocked_apply:
+            self.assertEqual(
+                hosts_editor._handle_cli_args(["--profile-schedule-apply", "--profile-schedule-at", "2026-05-11T17:00:00"]),
+                0,
+            )
+            mocked_apply.assert_called_once_with("2026-05-11T17:00:00")
 
     def test_config_location_report_switches_sidecars_with_portable_config(self):
         import tempfile
