@@ -48,6 +48,10 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added manifest-driven golden fixtures under `tests/golden_cleaned/` for mixed normalization, custom mappings, and pinned-domain whitelist overrides.
 - The golden harness verifies exact cleaned output plus key discard/transform stats.
 
+**Parser fuzz/property tests**
+- Added deterministic stdlib fuzz coverage for hosts-line parser invariants without adding a new dependency.
+- Added cleaned-output idempotence fuzzing so randomly generated batches stay stable after a second clean pass.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

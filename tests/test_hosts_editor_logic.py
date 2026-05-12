@@ -206,6 +206,83 @@ class HostsEditorLogicTests(unittest.TestCase):
                 for key, expected_value in case.get("stats", {}).items():
                     self.assertEqual(stats[key], expected_value, f"{case['name']}.{key}")
 
+    def _fuzz_domain(self, rng):
+        labels = ["ads", "tracker", "cdn", "safe", "telemetry", "shop", "api", "media"]
+        tlds = ["example", "test", "invalid", "local"]
+        return f"{rng.choice(labels)}-{rng.randrange(100)}.{rng.choice(tlds)}"
+
+    def _fuzz_hosts_line(self, rng):
+        domain = self._fuzz_domain(rng)
+        token_shapes = [
+            domain,
+            domain.upper(),
+            f"*.{domain}",
+            f"http://{domain}/pixel?id={rng.randrange(1000)}",
+            f"https://{domain}/path#frag",
+            f"||{domain}^$third-party",
+            f"address=/{domain}/0.0.0.0",
+            f"local=/{domain}/",
+            f"@@||{domain}^",
+            "localhost",
+            "not a domain",
+            f"[{domain}]",
+            f"({domain})",
+        ]
+        ip_shapes = ["0.0.0.0", "127.0.0.1", "::1", "192.168.1.10", "255.255.255.0", ""]
+        prefix = rng.choice(ip_shapes)
+        token_count = rng.randint(1, 4)
+        tokens = [rng.choice(token_shapes) for _ in range(token_count)]
+        if prefix:
+            tokens.insert(0, prefix)
+        if rng.random() < 0.25:
+            tokens.append("# trailing comment")
+        if rng.random() < 0.10:
+            return rng.choice(["", "   ", "# just a comment", "! adblock comment", "[metadata]"])
+        return rng.choice([" ", "\t", ", ", "; "]).join(tokens)
+
+    def test_parser_fuzzer_preserves_entry_invariants(self):
+        import random
+
+        rng = random.Random(20260512)
+        for index in range(400):
+            line = self._fuzz_hosts_line(rng)
+            with self.subTest(index=index, line=line):
+                parsed_entries, transformed = hosts_editor.parse_hosts_line_entries(line)
+                normalized_entries, domains, normalized_transformed = normalize_line_to_hosts_entries(line)
+
+                self.assertIsInstance(transformed, bool)
+                self.assertEqual(normalized_transformed, transformed)
+                self.assertEqual(normalized_entries, [entry for entry, _, _ in parsed_entries])
+                self.assertEqual(domains, [domain for _, domain, _ in parsed_entries])
+                self.assertEqual(len(normalized_entries), len(set(normalized_entries)))
+
+                for entry, domain, is_block_entry in parsed_entries:
+                    mapping_ip, entry_domain = entry.split(" ", 1)
+                    self.assertEqual(entry_domain, domain)
+                    self.assertEqual(domain, domain.lower())
+                    self.assertTrue(looks_like_domain(domain, allow_single_label=True), (line, domain))
+                    if is_block_entry:
+                        self.assertEqual(mapping_ip, "0.0.0.0")
+
+    def test_cleaned_output_fuzzer_is_idempotent(self):
+        import random
+
+        rng = random.Random(20260513)
+        whitelist_pool = [self._fuzz_domain(rng) for _ in range(30)]
+        pinned_pool = [self._fuzz_domain(rng) for _ in range(30)]
+
+        for batch_index in range(40):
+            lines = [self._fuzz_hosts_line(rng) for _ in range(35)]
+            whitelist = set(rng.sample(whitelist_pool, rng.randrange(0, 5)))
+            pinned = set(rng.sample(pinned_pool, rng.randrange(0, 4)))
+            with self.subTest(batch=batch_index):
+                cleaned, stats = _get_canonical_cleaned_output_and_stats(lines, whitelist, pinned)
+                recleaned, restats = _get_canonical_cleaned_output_and_stats(cleaned, whitelist, pinned)
+
+                self.assertEqual(recleaned, cleaned)
+                self.assertEqual(restats["final_active"], stats["final_active"])
+                self.assertGreaterEqual(stats["total_discarded"], 0)
+
     def test_decode_downloaded_lines_supports_compressed_payloads(self):
         text = "0.0.0.0 compressed.example\n"
 

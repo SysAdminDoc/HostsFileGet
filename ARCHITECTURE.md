@@ -25,7 +25,7 @@ It is not a DNS server, browser ad blocker, cloud filtering service, or endpoint
 | `PythonLauncher.ps1` | Elevated bootstrapper that finds or installs Python, refreshes cached editor code, and launches the app |
 | `HostsFileGet.spec` | PyInstaller build definition |
 | `.github/workflows/source-health.yml` | Scheduled/manual curated-source reachability report |
-| `tests/test_hosts_editor_logic.py` | Regression suite for pure logic, golden cleaned-output fixtures, and selected GUI-adjacent helper paths |
+| `tests/test_hosts_editor_logic.py` | Regression suite for pure logic, deterministic parser fuzzers, golden cleaned-output fixtures, and selected GUI-adjacent helper paths |
 
 ## Repository Layout
 
@@ -206,6 +206,7 @@ Required before large refactors:
 
 - Keep `python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py` green.
 - Keep `python -m unittest discover -s tests -v` green.
+- Keep deterministic fuzz tests seeded; change seeds only when deliberately expanding coverage.
 - Update `tests/golden_cleaned/` fixtures intentionally when parser/normalizer behavior changes.
 - Keep source-manifest schema tests green before changing curated source metadata.
 - Keep source-health tests mocked; live source failures belong in the scheduled report artifact, not normal unit tests.
