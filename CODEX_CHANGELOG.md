@@ -93,6 +93,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F048 complete. Next roadmap item: F049 source freshness and growth charts.
 - Completed F049: added compact per-source metrics history, GUI/CLI fetch recording, a local **Source Freshness & Growth...** report with freshness buckets and ASCII growth charts, docs, and regression tests.
 - Updated `ROADMAP.md` to mark F049 complete. Next roadmap item: F050 virtualized large-list views.
+- Completed F050: added a paged virtual-list helper and converted the Remove Matches review dialog to render bounded pages while preserving global selection state and preview behavior.
+- Updated `ROADMAP.md` to mark F050 complete. Next roadmap item: F051 parallel source fetcher with bounded retries.
 
 ## Scope
 

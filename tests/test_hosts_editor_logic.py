@@ -114,6 +114,7 @@ from hosts_editor import (
     build_profile_tray_availability_report,
     build_safesearch_template_plan,
     build_threat_feed_pack_plan,
+    build_virtual_list_page,
     apply_profile_activation_schedule,
     apply_profile_quick_switch,
     evaluate_profile_activation_schedule,
@@ -1402,6 +1403,29 @@ class HostsEditorLogicTests(unittest.TestCase):
         ]
 
         self.assertEqual(find_keyword_match_line_indices(lines, "tracker"), [2, 4])
+
+    def test_build_virtual_list_page_clamps_bounds_and_slices(self):
+        rows = list(range(1000))
+
+        first = build_virtual_list_page(rows, page_index=-10, page_size=250)
+        self.assertEqual(first["page_index"], 0)
+        self.assertEqual(first["page_count"], 4)
+        self.assertEqual(first["rows"][0], 0)
+        self.assertEqual(first["rows"][-1], 249)
+
+        last = build_virtual_list_page(rows, page_index=99, page_size=250)
+        self.assertEqual(last["page_index"], 3)
+        self.assertEqual(last["start"], 750)
+        self.assertEqual(last["end"], 1000)
+        self.assertEqual(last["rows"][-1], 999)
+
+    def test_build_virtual_list_page_caps_page_size(self):
+        rows = list(range(1200))
+        page = build_virtual_list_page(rows, page_index=1, page_size=10_000)
+
+        self.assertEqual(page["page_size"], 500)
+        self.assertEqual(page["start"], 500)
+        self.assertEqual(page["end"], 1000)
 
     def test_remove_lines_by_indices_removes_selected_entries(self):
         lines = ["a", "b", "c", "d"]

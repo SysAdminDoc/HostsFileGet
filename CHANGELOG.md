@@ -196,6 +196,10 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added compact `source_metrics_history` snapshots after successful GUI imports and CLI `--update` fetches.
 - Added **Source Freshness & Growth...** for freshness buckets, retained domain-count deltas, and ASCII growth charts.
 
+**Virtualized large-list dialogs**
+- Reworked the **Remove Matches** review dialog to render paged checkbox rows instead of thousands of widgets at once.
+- Large match sets now keep per-line review and global select all/none behavior before the final preview.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

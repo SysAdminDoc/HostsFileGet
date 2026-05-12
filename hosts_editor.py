@@ -1214,16 +1214,44 @@ class BulkSelectionDialog(tk.Toplevel):
         self.result = selected
         self.destroy()
 
-# Hard limit on the number of checkboxes the removal dialog will render at
-# once. Above this, Tk's layout engine takes many seconds to pack the widgets
-# and the resulting scrollable frame becomes unusable on slower machines.
-MATCH_REMOVAL_DIALOG_LIMIT = 2000
+# The match-removal dialog pages checkbox rows so large search results stay
+# reviewable without asking Tk to create thousands of widgets at once.
+VIRTUAL_LIST_DEFAULT_PAGE_SIZE = 200
+VIRTUAL_LIST_MAX_PAGE_SIZE = 500
 
 # Hard cap on the number of in-editor search matches we will highlight.
 # A common one-letter query against a multi-megabyte hosts file could
 # otherwise produce hundreds of thousands of matches and hang Tk while it
 # tried to add that many tag ranges.
 SEARCH_MATCH_LIMIT = 50_000
+
+
+def build_virtual_list_page(rows, page_index: int = 0, page_size: int = VIRTUAL_LIST_DEFAULT_PAGE_SIZE) -> dict:
+    """Return one bounded page of rows for Tk list dialogs."""
+    rows = list(rows or [])
+    total = len(rows)
+    try:
+        size = int(page_size)
+    except (TypeError, ValueError):
+        size = VIRTUAL_LIST_DEFAULT_PAGE_SIZE
+    size = max(1, min(size, VIRTUAL_LIST_MAX_PAGE_SIZE))
+    page_count = max(1, (total + size - 1) // size)
+    try:
+        index = int(page_index)
+    except (TypeError, ValueError):
+        index = 0
+    index = max(0, min(index, page_count - 1))
+    start = index * size
+    end = min(total, start + size)
+    return {
+        "total": total,
+        "page_index": index,
+        "page_count": page_count,
+        "page_size": size,
+        "start": start,
+        "end": end,
+        "rows": rows[start:end],
+    }
 
 
 class MatchRemovalDialog(tk.Toplevel):
@@ -1239,6 +1267,10 @@ class MatchRemovalDialog(tk.Toplevel):
         self.grab_set()
 
         self.result = None
+        self.matching_lines = list(matching_lines)
+        self.page_index = 0
+        self.page_size = VIRTUAL_LIST_DEFAULT_PAGE_SIZE
+        self.selected_indices = {line_index for line_index, _line in self.matching_lines}
         self.checkbox_vars = []
 
         header_frame = ttk.Frame(self, padding=(18, 18, 18, 0))
@@ -1265,7 +1297,7 @@ class MatchRemovalDialog(tk.Toplevel):
         self.feedback_label.pack(anchor="w", pady=(6, 0))
         ttk.Label(
             header_frame,
-            text="Unchecked lines stay in the editor. You'll still get a full preview before anything changes.",
+            text="Unchecked lines stay in the editor. Large match sets are paged so only the visible rows are rendered.",
             foreground=PALETTE["overlay1"],
             wraplength=760,
             justify="left",
@@ -1297,8 +1329,44 @@ class MatchRemovalDialog(tk.Toplevel):
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        for line_index, line in matching_lines:
-            var = tk.BooleanVar(value=True)
+        btn_frame = ttk.Frame(self, padding=(18, 14, 18, 18))
+        btn_frame.pack(fill="x", side="bottom")
+
+        left_btns = ttk.Frame(btn_frame)
+        left_btns.pack(side="left")
+        ttk.Button(left_btns, text="Select All", command=self.select_all).pack(side="left", padx=(0, 6))
+        ttk.Button(left_btns, text="Select None", command=self.select_none).pack(side="left", padx=(0, 10))
+        ttk.Button(left_btns, text="Prev", command=self.previous_page).pack(side="left", padx=(0, 6))
+        ttk.Button(left_btns, text="Next", command=self.next_page).pack(side="left", padx=(0, 10))
+        self.page_summary_label = ttk.Label(left_btns, text="", style="SectionBody.TLabel")
+        self.page_summary_label.pack(side="left")
+
+        right_btns = ttk.Frame(btn_frame)
+        right_btns.pack(side="right")
+        ttk.Button(right_btns, text="Remove Selected", command=self.confirm, style="Danger.TButton").pack(side="left", padx=5)
+        ttk.Button(right_btns, text="Cancel", command=self.destroy, style="Secondary.TButton").pack(side="left")
+        self._render_page()
+        self._update_selection_summary()
+
+    def _update_selection_summary(self):
+        total = len(self.matching_lines)
+        selected_count = len(self.selected_indices)
+        self.selection_summary_label.config(text=f"{selected_count} of {total} removable line(s) currently selected")
+
+    def _render_page(self):
+        for child in self.scrollable_frame.winfo_children():
+            child.destroy()
+        page = build_virtual_list_page(self.matching_lines, self.page_index, self.page_size)
+        self.page_index = page["page_index"]
+        self.checkbox_vars = []
+        if page["total"] == 0:
+            ttk.Label(
+                self.scrollable_frame,
+                text="No matching rows are available.",
+                style="SectionBody.TLabel",
+            ).pack(anchor="w", padx=12, pady=12)
+        for line_index, line in page["rows"]:
+            var = tk.BooleanVar(value=line_index in self.selected_indices)
             shell = tk.Frame(
                 self.scrollable_frame,
                 bg=PALETTE["panel_alt"],
@@ -1317,7 +1385,7 @@ class MatchRemovalDialog(tk.Toplevel):
                 row,
                 text=f"Line {line_index + 1:,}",
                 variable=var,
-                command=self._on_selection_changed,
+                command=lambda idx=line_index, v=var: self._on_row_selection_changed(idx, v),
             )
             cb.pack(side="left")
             ttk.Label(row, text=f"{len(line):,} chars", style="SectionBody.TLabel").pack(side="right")
@@ -1329,25 +1397,15 @@ class MatchRemovalDialog(tk.Toplevel):
                 justify="left",
             ).pack(anchor="w", pady=(8, 0))
             self.checkbox_vars.append((line_index, var))
-
-        btn_frame = ttk.Frame(self, padding=(18, 14, 18, 18))
-        btn_frame.pack(fill="x", side="bottom")
-
-        left_btns = ttk.Frame(btn_frame)
-        left_btns.pack(side="left")
-        ttk.Button(left_btns, text="Select All", command=self.select_all).pack(side="left", padx=(0, 6))
-        ttk.Button(left_btns, text="Select None", command=self.select_none).pack(side="left")
-
-        right_btns = ttk.Frame(btn_frame)
-        right_btns.pack(side="right")
-        ttk.Button(right_btns, text="Remove Selected", command=self.confirm, style="Danger.TButton").pack(side="left", padx=5)
-        ttk.Button(right_btns, text="Cancel", command=self.destroy, style="Secondary.TButton").pack(side="left")
+        self.page_summary_label.config(
+            text=(
+                f"Page {page['page_index'] + 1:,}/{page['page_count']:,}; "
+                f"rows {page['start'] + 1:,}-{page['end']:,} of {page['total']:,}"
+            )
+            if page["total"]
+            else "Page 0/0"
+        )
         self._update_selection_summary()
-
-    def _update_selection_summary(self):
-        total = len(self.checkbox_vars)
-        selected_count = sum(1 for _, var in self.checkbox_vars if var.get())
-        self.selection_summary_label.config(text=f"{selected_count} of {total} removable line(s) currently selected")
 
     def _set_feedback(self, message: str):
         self.feedback_label.config(text=message)
@@ -1356,24 +1414,41 @@ class MatchRemovalDialog(tk.Toplevel):
     def _clear_feedback(self):
         self.feedback_label.config(text="")
 
-    def _on_selection_changed(self):
+    def _on_row_selection_changed(self, line_index: int, var: tk.BooleanVar):
+        if var.get():
+            self.selected_indices.add(line_index)
+        else:
+            self.selected_indices.discard(line_index)
         self._clear_feedback()
         self._update_selection_summary()
 
     def select_all(self):
-        for _, var in self.checkbox_vars:
-            var.set(True)
+        self.selected_indices = {line_index for line_index, _line in self.matching_lines}
+        self._render_page()
         self._clear_feedback()
         self._update_selection_summary()
 
     def select_none(self):
-        for _, var in self.checkbox_vars:
-            var.set(False)
+        self.selected_indices.clear()
+        self._render_page()
         self._clear_feedback()
         self._update_selection_summary()
 
+    def previous_page(self):
+        if self.page_index <= 0:
+            return
+        self.page_index -= 1
+        self._render_page()
+
+    def next_page(self):
+        page = build_virtual_list_page(self.matching_lines, self.page_index, self.page_size)
+        if self.page_index >= page["page_count"] - 1:
+            return
+        self.page_index += 1
+        self._render_page()
+
     def confirm(self):
-        selected_indices = {line_index for line_index, var in self.checkbox_vars if var.get()}
+        selected_indices = set(self.selected_indices)
         if not selected_indices:
             self._set_feedback("Select at least one matching line before continuing.")
             return
@@ -18468,31 +18543,15 @@ pause
             self.update_status(f"No removable entries found for '{query}'.", is_error=True)
             return
 
-        if len(matching_indices) > MATCH_REMOVAL_DIALOG_LIMIT:
-            proceed = self._confirm_dialog(
-                "Too many matches for individual review",
-                f"Your search matched {len(matching_indices):,} lines. Building an individual checkbox for each would freeze the UI.",
-                tone="warning",
-                confirm_text="Review all in one preview",
-                cancel_text="Cancel",
-                details=(
-                    f"Remove all {len(matching_indices):,} matching lines in one step instead. "
-                    "A preview will still be shown before the editor changes."
-                ),
-            )
-            if not proceed:
-                return
-            selected_indices = set(matching_indices)
-        else:
-            dialog = MatchRemovalDialog(
-                self,
-                query,
-                [(line_index, current_lines[line_index]) for line_index in matching_indices],
-            )
-            self.root.wait_window(dialog)
-            if not dialog.result:
-                return
-            selected_indices = dialog.result
+        dialog = MatchRemovalDialog(
+            self,
+            query,
+            [(line_index, current_lines[line_index]) for line_index in matching_indices],
+        )
+        self.root.wait_window(dialog)
+        if not dialog.result:
+            return
+        selected_indices = dialog.result
 
         updated_lines = remove_lines_by_indices(current_lines, selected_indices)
         removed_count = len(selected_indices)
