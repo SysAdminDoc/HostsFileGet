@@ -29,6 +29,7 @@ Configs without `config_version` are treated as legacy schema `0`, migrated in m
 | `last_open_dir` | string | Existing local directory path |
 | `source_last_fetched` | object | Source URL to ISO timestamp |
 | `source_cache_metadata` | object | Source URL to validated ETag/Last-Modified/body-cache metadata |
+| `filter_query_history` | array | Recent local Filter Builder queries, newest first |
 | `preferred_block_sink` | string | One of `0.0.0.0`, `127.0.0.1`, `::`, `::1` |
 | `backup_retention` | integer | Clamped to `0..50` |
 | `has_completed_first_run` | boolean | First-run wizard completion |
@@ -141,6 +142,12 @@ Per-source metadata shape:
 | `content_encoding` | string | Optional HTTP content encoding used for decode |
 | `fetched_at` | string | ISO timestamp of the last network body fetch |
 | `validated_at` | string | ISO timestamp of the last network validation, including `304 Not Modified` |
+
+## Filter Query History
+
+`filter_query_history` stores the 25 most recent valid **Tools > Filter Builder...** queries. It is app-level config state, not profile policy.
+
+The sanitizer removes non-string and empty values, collapses control whitespace, caps each query to 240 characters, and deduplicates case-insensitively while preserving newest-first order.
 
 ## Compatibility Rules
 

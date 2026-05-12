@@ -56,6 +56,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `data/i18n/en-US.json` | Versioned English UI string catalog for future localization |
 | `docs/source-manifest.md` | Curated source manifest schema and maintenance rules |
 | `docs/source-bundles.md` | Manifest-defined source bundle selector behavior and validation rules |
+| `docs/filter-builder.md` | Local filter/query builder syntax, query history, and limits |
 | `docs/source-health.md` | Source reachability checker and report format |
 | `docs/source-overlap.md` | Source overlap matrix behavior and limits |
 | `docs/false-positive-triage.md` | Check Domain triage behavior, actions, and limits |
@@ -130,7 +131,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Scheduler activity helpers: `build_scheduler_update_command`, `query_scheduled_task_status`, `append_cli_activity_event`, `build_scheduler_activity_report`, `format_scheduler_activity_report`.
 - Transactional hosts enable/disable helpers: `disable_hosts_file_transactionally`, `enable_hosts_file_transactionally`.
 - Download guards: `read_http_body_limited`, `decode_downloaded_lines`, `looks_like_html_document`.
-- Config sanitation and declarative profiles: `sanitize_custom_sources`, `sanitize_config_snapshot`, `sanitize_profile_snapshot`, `sanitize_profiles_snapshot`, `update_active_profile_snapshot`, `parse_declarative_config_text`, `format_declarative_config_payload`, `upsert_profile_in_config`, `set_active_profile_in_config`, `apply_declarative_profile_to_config`, `build_profile_quick_switch_report`, `apply_profile_quick_switch`, `build_profile_tray_availability_report`, `resolve_saved_state_hashes`.
+- Config sanitation and declarative profiles: `sanitize_custom_sources`, `sanitize_config_snapshot`, `sanitize_filter_query_history`, `sanitize_profile_snapshot`, `sanitize_profiles_snapshot`, `update_active_profile_snapshot`, `parse_declarative_config_text`, `format_declarative_config_payload`, `upsert_profile_in_config`, `set_active_profile_in_config`, `apply_declarative_profile_to_config`, `build_profile_quick_switch_report`, `apply_profile_quick_switch`, `build_profile_tray_availability_report`, `resolve_saved_state_hashes`.
 - Profile schedule helpers: `normalize_profile_activation_days`, `sanitize_profile_activation_schedule`, `evaluate_profile_activation_schedule`, `apply_profile_activation_schedule`, `format_profile_activation_schedule_report`.
 - Config location and portable export: `get_primary_config_path`, `get_config_root_dir`, `build_config_location_report`, `write_portable_bundle_config`, `format_portable_bundle_export_summary`.
 - Source catalog loading: `sanitize_source_manifest`, `load_blocklist_sources_manifest`, `sanitize_source_bundle_catalog`, `load_source_bundle_catalog`, `format_source_bundle_catalog`, `format_source_bundle_report`.
@@ -151,7 +152,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - DNS rebinding checks: `classify_dns_rebinding_mapping`, `build_dns_rebinding_report`, `format_dns_rebinding_report`.
 - SafeSearch and restricted-mode templates: `list_safesearch_templates`, `build_safesearch_template_plan`, `format_safesearch_template_catalog`, `format_safesearch_template_plan`.
 - Cleanup/export/search helpers: `remove_lines_by_indices`, `rewrite_block_sink_ip`, `scan_suspicious_redirects`, `build_export_domain_records`, `build_dns_integration_export`, `build_cloud_dns_adapter_plan`, `format_dns_integration_pack_report`, `format_cloud_dns_adapter_catalog`, `export_lines_as_format`, `export_lines_as_bytes`, `strip_lines_by_category`.
-- Source analytics: `find_sources_containing_domain`, `summarize_source_contributions`, `build_source_domain_index`, `build_source_overlap_report`, `categorize_entries_by_domain_hint`, `classify_source_freshness`.
+- Source analytics: `find_sources_containing_domain`, `summarize_source_contributions`, `build_source_domain_index`, `build_source_overlap_report`, `build_filter_builder_report`, `format_filter_builder_report`, `categorize_entries_by_domain_hint`, `classify_source_freshness`.
 - Provenance and pinned-domain helpers: `append_provenance_event`, `read_provenance_events`, `build_entry_provenance_report`, `format_entry_provenance_report`, `build_pinned_export_payload`, `parse_pinned_import_payload`, `sanitize_pinned_domains`.
 - Log importers: `parse_pihole_ftl_blocked_domains`, `parse_adguard_home_querylog`, `parse_nextdns_log_csv`, `parse_controld_activity_csv`.
 - Migration importers: `parse_switchhosts_export_text`, `parse_gas_mask_archive_path`, `parse_hostsfileeditor_archive_path`.
@@ -172,7 +173,7 @@ Primary responsibilities:
 - Backups, restore, compare, panic restore, hosts disable/enable.
 - Import UI, source catalog, custom sources, manual imports, DNS log imports, whitelist import.
 - Search, removal, find/replace, adblock quarantine, context menu commands.
-- Source reports, source bundle selector, provenance log view, entry provenance, health scan, adblock syntax lint, rule tier report, IDN/homograph report, NRD/DGA threat feed packs, CNAME cloaking workflow, encrypted-DNS bypass packs, DNS rebinding protection check, SafeSearch/restricted-mode templates, profile activation schedule report, profile quick switch and optional tray menu, false-positive triage, preferences, scheduler wizard.
+- Source reports, source bundle selector, Filter Builder, provenance log view, entry provenance, health scan, adblock syntax lint, rule tier report, IDN/homograph report, NRD/DGA threat feed packs, CNAME cloaking workflow, encrypted-DNS bypass packs, DNS rebinding protection check, SafeSearch/restricted-mode templates, profile activation schedule report, profile quick switch and optional tray menu, false-positive triage, preferences, scheduler wizard.
 - Worker thread queue handling and safe Tk callback scheduling with `_safe_after`.
 
 `HostsFileEditor` is large enough that future refactors should split by behavior after tests are in place:
@@ -243,6 +244,7 @@ Admin-required CLI actions must fail clearly when not elevated. Source health ch
 | Curated source manifest | `data/blocklist_sources.json` beside script, exe bundle, or launcher cache | Versioned schema documented in `docs/source-manifest.md` |
 | i18n catalog | `data\i18n\en-US.json` beside script, exe bundle, or launcher cache | Optional versioned UI strings; built-in English fallback is used if the cached catalog is missing |
 | Source response cache | `source_cache\*.bin` beside the active config location | Raw source bodies keyed by normalized URL hash, verified by `source_cache_metadata` |
+| Filter query history | Active config JSON | Recent **Filter Builder** queries under `filter_query_history`; local-only and sanitized on load/save |
 | Provenance log | Config directory JSONL sidecar | Records pin, unpin, and whitelist events |
 | CLI log | `%LOCALAPPDATA%\HostsFileGet\cli.log` | Used by `--silent` |
 | CLI activity log | `%LOCALAPPDATA%\HostsFileGet\cli-activity.jsonl` | Bounded structured records for silent scheduled updates |

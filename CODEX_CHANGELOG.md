@@ -85,6 +85,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F041 complete. Next roadmap item: F042 variant/bundle selector.
 - Completed F042: added manifest-defined source bundle presets, bundle catalog validation/indexing/formatting helpers, **Tools > Source Bundle Selector...**, `docs/source-bundles.md`, roadmap/docs updates, and regression tests.
 - Updated `ROADMAP.md` to mark F042 complete. Next roadmap item: F043 filter builder and query history.
+- Completed F043: added pure filter-builder query/history helpers, persisted `filter_query_history`, **Tools > Filter Builder...**, `docs/filter-builder.md`, config/docs updates, and regression tests.
+- Updated `ROADMAP.md` to mark F043 complete. Next roadmap item: F047 provenance log filters and export.
 
 ## Scope
 

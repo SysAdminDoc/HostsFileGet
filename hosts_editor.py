@@ -32,6 +32,7 @@ import argparse
 import glob
 import unicodedata
 import importlib
+import shlex
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback path
@@ -177,6 +178,9 @@ SOURCE_PREVIEW_MAX_LINES = 80
 SOURCE_CORPUS_CACHE_MAX_ENTRY_BYTES = 2 * 1024 * 1024
 SOURCE_CORPUS_CACHE_MAX_TOTAL_BYTES = 16 * 1024 * 1024
 SOURCE_CORPUS_CACHE_MAX_ENTRIES = 24
+FILTER_QUERY_HISTORY_MAX_ITEMS = 25
+FILTER_QUERY_MAX_LENGTH = 240
+FILTER_BUILDER_MATCH_LIMIT = 50
 MIGRATION_IMPORT_MAX_FILE_BYTES = 10 * 1024 * 1024
 MIGRATION_IMPORT_MAX_TOTAL_BYTES = 50 * 1024 * 1024
 MIGRATION_IMPORT_MAX_FILES = 2_000
@@ -5408,6 +5412,7 @@ def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
 
     custom_sources = sanitize_custom_sources(config.get("custom_sources", []))
     source_cache_metadata = sanitize_source_cache_metadata(config.get("source_cache_metadata", {}))
+    filter_query_history = sanitize_filter_query_history(config.get("filter_query_history", []))
 
     preferred_sink_raw = config.get("preferred_block_sink", "0.0.0.0")
     preferred_sink = _profile_preferred_sink(preferred_sink_raw)
@@ -5452,6 +5457,7 @@ def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
         "last_open_dir": last_open_dir,
         "source_last_fetched": source_last_fetched,
         "source_cache_metadata": source_cache_metadata,
+        "filter_query_history": filter_query_history,
         "preferred_block_sink": preferred_sink,
         "backup_retention": backup_retention,
         "has_completed_first_run": has_completed_first_run,
@@ -8598,6 +8604,393 @@ def format_source_overlap_report(
     return "\n".join(lines)
 
 
+def _normalize_filter_query_text(value: str) -> str:
+    candidate = str(value or "").replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    candidate = " ".join(candidate.split())
+    return candidate[:FILTER_QUERY_MAX_LENGTH]
+
+
+def sanitize_filter_query_history(history, max_items: int = FILTER_QUERY_HISTORY_MAX_ITEMS) -> list[str]:
+    """Return recent filter-builder queries in deterministic, safe display order."""
+    try:
+        limit = int(max_items)
+    except (TypeError, ValueError):
+        limit = FILTER_QUERY_HISTORY_MAX_ITEMS
+    limit = max(0, min(limit, FILTER_QUERY_HISTORY_MAX_ITEMS))
+    if limit == 0 or not isinstance(history, (list, tuple)):
+        return []
+
+    sanitized: list[str] = []
+    seen: set[str] = set()
+    for item in history:
+        if not isinstance(item, str):
+            continue
+        query = _normalize_filter_query_text(item)
+        if not query:
+            continue
+        key = query.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        sanitized.append(query)
+        if len(sanitized) >= limit:
+            break
+    return sanitized
+
+
+def record_filter_query_history(
+    history,
+    query: str,
+    max_items: int = FILTER_QUERY_HISTORY_MAX_ITEMS,
+) -> list[str]:
+    """Move ``query`` to the front of filter-builder history if it is valid."""
+    try:
+        limit = int(max_items)
+    except (TypeError, ValueError):
+        limit = FILTER_QUERY_HISTORY_MAX_ITEMS
+    limit = max(0, min(limit, FILTER_QUERY_HISTORY_MAX_ITEMS))
+    current = sanitize_filter_query_history(history, max_items=limit)
+    normalized = _normalize_filter_query_text(query)
+    if not normalized or limit == 0:
+        return current
+    key = normalized.casefold()
+    return [normalized] + [item for item in current if item.casefold() != key][: max(0, limit - 1)]
+
+
+def parse_filter_builder_query(query: str) -> dict:
+    """Parse a local filter-builder query into fielded terms.
+
+    Supported fields are ``domain:``, ``source:``, ``line:``, and
+    ``history:``. Bare terms search editor lines, fetched-source labels, and
+    catalog source metadata; bare multi-label domains also become domain terms.
+    """
+    normalized = _normalize_filter_query_text(query)
+    parsed = {
+        "query": normalized,
+        "valid": bool(normalized),
+        "tokens": [],
+        "domain_terms": [],
+        "source_terms": [],
+        "line_terms": [],
+        "history_terms": [],
+        "warnings": [],
+    }
+    if not normalized:
+        parsed["warnings"].append("Enter a domain, source name, line term, or fielded query.")
+        return parsed
+
+    try:
+        raw_tokens = shlex.split(normalized)
+    except ValueError as exc:
+        raw_tokens = normalized.split()
+        parsed["warnings"].append(f"Quoted term could not be parsed ({exc}); using whitespace tokens.")
+
+    known_fields = {"domain", "source", "line", "history"}
+    seen_domains: set[str] = set()
+    seen_source_terms: set[str] = set()
+    seen_line_terms: set[str] = set()
+    seen_history_terms: set[str] = set()
+
+    def add_domain(value: str, *, strict: bool) -> None:
+        domain, error = normalize_whitelist_domain(value, allow_single_label=False)
+        if error:
+            if strict:
+                parsed["warnings"].append(error)
+            return
+        key = domain.casefold()
+        if key not in seen_domains:
+            seen_domains.add(key)
+            parsed["domain_terms"].append(domain)
+
+    def add_text_term(collection: list[str], seen: set[str], value: str) -> None:
+        term = _normalize_filter_query_text(value).lower()
+        if not term or term.casefold() in seen:
+            return
+        seen.add(term.casefold())
+        collection.append(term)
+
+    for raw_token in raw_tokens:
+        if ":" in raw_token:
+            field, value = raw_token.split(":", 1)
+            field = field.lower().strip()
+            value = value.strip()
+            if field in known_fields:
+                parsed["tokens"].append({"field": field, "value": value})
+                if field == "domain":
+                    add_domain(value, strict=True)
+                elif field == "source":
+                    add_text_term(parsed["source_terms"], seen_source_terms, value)
+                elif field == "line":
+                    add_text_term(parsed["line_terms"], seen_line_terms, value)
+                elif field == "history":
+                    add_text_term(parsed["history_terms"], seen_history_terms, value)
+                continue
+
+        parsed["tokens"].append({"field": "text", "value": raw_token})
+        add_text_term(parsed["line_terms"], seen_line_terms, raw_token)
+        add_text_term(parsed["source_terms"], seen_source_terms, raw_token)
+        if "." in raw_token:
+            add_domain(raw_token, strict=False)
+
+    if (
+        not parsed["domain_terms"]
+        and not parsed["source_terms"]
+        and not parsed["line_terms"]
+        and not parsed["history_terms"]
+    ):
+        parsed["warnings"].append("No usable query terms were found.")
+    return parsed
+
+
+def _iter_source_catalog_rows(blocklist_sources) -> list[dict]:
+    rows: list[dict] = []
+    if not isinstance(blocklist_sources, dict):
+        return rows
+    for category, sources in blocklist_sources.items():
+        if not isinstance(sources, (list, tuple)):
+            continue
+        for source in sources:
+            if not isinstance(source, (list, tuple)) or len(source) < 2:
+                continue
+            name = str(source[0])
+            url = str(source[1])
+            tooltip = str(source[2]) if len(source) > 2 else ""
+            rows.append({
+                "name": name,
+                "category": str(category),
+                "url": url,
+                "tooltip": tooltip,
+            })
+    return rows
+
+
+def _filter_term_matches_all(haystack: str, terms: list[str]) -> bool:
+    lowered = haystack.lower()
+    return all(term.lower() in lowered for term in terms)
+
+
+def _domain_terms_match_domain(domain_terms: list[str], candidate: str) -> list[str]:
+    matched: list[str] = []
+    target = str(candidate or "").strip().lower().lstrip(".")
+    if not target:
+        return matched
+    for term in domain_terms:
+        if _triage_domain_matches(term, target):
+            matched.append(term)
+    return matched
+
+
+def build_filter_builder_report(
+    query: str,
+    editor_lines: list[str] | None = None,
+    source_corpus: dict[str, object] | None = None,
+    blocklist_sources=None,
+    query_history=None,
+    match_limit: int = FILTER_BUILDER_MATCH_LIMIT,
+) -> dict:
+    """Build a local filter/query report from editor, source, and history state."""
+    parsed = parse_filter_builder_query(query)
+    editor_lines = editor_lines or []
+    source_corpus = source_corpus or {}
+    history = sanitize_filter_query_history(query_history or [])
+    try:
+        limit = max(1, int(match_limit))
+    except (TypeError, ValueError):
+        limit = FILTER_BUILDER_MATCH_LIMIT
+
+    domain_terms = parsed["domain_terms"]
+    source_terms = parsed["source_terms"]
+    line_terms = parsed["line_terms"]
+    if parsed["history_terms"]:
+        history_terms = parsed["history_terms"]
+    elif parsed["query"]:
+        history_terms = domain_terms + source_terms + line_terms + [parsed["query"].lower()]
+    else:
+        history_terms = []
+
+    editor_matches = []
+    editor_total = 0
+    for idx, line in enumerate(editor_lines):
+        matched_by: list[str] = []
+        matched_domains: list[str] = []
+        line_text = str(line)
+        if line_terms and _filter_term_matches_all(line_text, line_terms):
+            matched_by.append("line")
+        parsed_entries, _ = parse_hosts_line_entries(line_text)
+        for _, entry_domain, is_block in parsed_entries:
+            if not is_block:
+                continue
+            matches = _domain_terms_match_domain(domain_terms, entry_domain)
+            if matches:
+                matched_by.append("domain")
+                matched_domains.append(entry_domain)
+        if matched_by:
+            editor_total += 1
+            if len(editor_matches) < limit:
+                editor_matches.append({
+                    "line_no": idx + 1,
+                    "line": line_text.strip(),
+                    "matched_by": sorted(set(matched_by)),
+                    "matched_domains": sorted(set(matched_domains)),
+                })
+
+    source_matches: list[dict] = []
+    seen_sources: set[tuple[str, str]] = set()
+    source_index = build_source_domain_index(source_corpus)
+    for source_name, domains in source_index.items():
+        matched_domains: list[str] = []
+        if domain_terms:
+            for domain in sorted(domains):
+                if _domain_terms_match_domain(domain_terms, domain):
+                    matched_domains.append(domain)
+        label_match = bool(source_terms and _filter_term_matches_all(source_name, source_terms))
+        if not matched_domains and not label_match:
+            continue
+        key = ("fetched", source_name.casefold())
+        if key in seen_sources:
+            continue
+        seen_sources.add(key)
+        source_matches.append({
+            "kind": "fetched",
+            "name": source_name,
+            "category": "fetched this session",
+            "url": "",
+            "matched_domains": matched_domains[:5],
+            "domain_count": len(domains),
+            "matched_by": sorted(set((["domain"] if matched_domains else []) + (["source"] if label_match else []))),
+        })
+
+    for row in _iter_source_catalog_rows(blocklist_sources):
+        haystack = f"{row['category']} {row['name']} {row['url']} {row['tooltip']}"
+        if not source_terms or not _filter_term_matches_all(haystack, source_terms):
+            continue
+        key = ("catalog", row["name"].casefold())
+        if key in seen_sources:
+            continue
+        seen_sources.add(key)
+        source_matches.append({
+            "kind": "catalog",
+            "name": row["name"],
+            "category": row["category"],
+            "url": row["url"],
+            "matched_domains": [],
+            "domain_count": None,
+            "matched_by": ["source"],
+        })
+    source_total = len(source_matches)
+    source_matches = source_matches[:limit]
+
+    history_matches = []
+    if history_terms:
+        for item in history:
+            if item.casefold() == parsed["query"].casefold():
+                continue
+            if any(term in item.lower() for term in history_terms):
+                history_matches.append(item)
+            if len(history_matches) >= min(limit, 10):
+                break
+    elif history:
+        history_matches = history[: min(limit, 10)]
+
+    warnings = list(parsed["warnings"])
+    if editor_total > len(editor_matches):
+        warnings.append(f"Editor matches truncated to {len(editor_matches)} of {editor_total}.")
+    if source_total > len(source_matches):
+        warnings.append(f"Source matches truncated to {len(source_matches)} of {source_total}.")
+
+    return {
+        "schema": "hostsfileget.filter-builder.v1",
+        "query": parsed["query"],
+        "valid": bool(parsed["valid"]),
+        "tokens": parsed["tokens"],
+        "domain_terms": domain_terms,
+        "source_terms": source_terms,
+        "line_terms": line_terms,
+        "history_terms": parsed["history_terms"],
+        "editor_match_count": editor_total,
+        "editor_matches": editor_matches,
+        "source_match_count": source_total,
+        "source_matches": source_matches,
+        "history_matches": history_matches,
+        "warnings": warnings,
+        "references": ["C4", "O7"],
+    }
+
+
+def format_filter_builder_report(report: dict) -> str:
+    """Render a filter-builder report for the GUI."""
+    if not report:
+        return "Filter Builder\n(no report)"
+
+    lines = [
+        "Filter Builder",
+        f"Query: {report.get('query') or '(empty)'}",
+        "",
+        "Parsed terms:",
+    ]
+    for label, key in (
+        ("Domains", "domain_terms"),
+        ("Sources", "source_terms"),
+        ("Lines", "line_terms"),
+        ("History", "history_terms"),
+    ):
+        values = report.get(key) or []
+        lines.append(f"- {label}: {', '.join(values) if values else '-'}")
+
+    lines.extend([
+        "",
+        f"Editor matches: {int(report.get('editor_match_count') or 0):,}",
+    ])
+    editor_matches = report.get("editor_matches") or []
+    if editor_matches:
+        for item in editor_matches:
+            domains = ", ".join(item.get("matched_domains") or [])
+            suffix = f" ({domains})" if domains else ""
+            lines.append(f"- line {item.get('line_no')}: {item.get('line')}{suffix}")
+    else:
+        lines.append("- None found in the current editor.")
+
+    lines.extend([
+        "",
+        f"Source matches: {int(report.get('source_match_count') or 0):,}",
+    ])
+    source_matches = report.get("source_matches") or []
+    if source_matches:
+        for item in source_matches:
+            details = []
+            if item.get("domain_count") is not None:
+                details.append(f"{int(item.get('domain_count') or 0):,} indexed domain(s)")
+            if item.get("matched_domains"):
+                details.append("matches " + ", ".join(item.get("matched_domains") or []))
+            detail_text = f" - {'; '.join(details)}" if details else ""
+            lines.append(
+                f"- {item.get('name')} [{item.get('kind')}, {item.get('category')}]{detail_text}"
+            )
+    else:
+        lines.append("- None found in fetched sources or the curated catalog.")
+
+    lines.extend(["", "Recent matching query history:"])
+    history_matches = report.get("history_matches") or []
+    if history_matches:
+        lines.extend(f"- {item}" for item in history_matches)
+    else:
+        lines.append("- None.")
+
+    warnings = report.get("warnings") or []
+    if warnings:
+        lines.extend(["", "Warnings:"])
+        lines.extend(f"- {warning}" for warning in warnings)
+
+    references = report.get("references") or []
+    if references:
+        lines.extend(["", "Roadmap source IDs:", "- " + ", ".join(references)])
+    lines.extend([
+        "",
+        "Boundary: local report only. It does not fetch sources, contact DNS providers, or write the hosts file.",
+    ])
+    return "\n".join(lines)
+
+
 def fuzzy_score(query: str, target: str) -> int:
     """Score a target string against a query, higher = better match.
 
@@ -9832,6 +10225,7 @@ class HostsFileEditor:
         # fetch. Lets source tooltips surface how stale a feed is.
         self.source_last_fetched: dict[str, str] = {}
         self.source_cache_metadata: dict[str, dict] = {}
+        self.filter_query_history: list[str] = []
         self.source_cache_dir = get_source_cache_dir()
         self._source_metadata_dirty = False
         self._preferred_block_sink = "0.0.0.0"
@@ -11313,6 +11707,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="DNS Interoperability Pack...", command=self.show_dns_integration_pack)
         tools_menu.add_command(label="Cloud DNS Adapters...", command=self.show_cloud_dns_adapters)
         tools_menu.add_command(label="Source Bundle Selector...", command=self.show_source_bundle_selector)
+        tools_menu.add_command(label="Filter Builder...", command=self.show_filter_builder)
         tools_menu.add_command(label="Sources Report...", command=self.show_sources_report)
         tools_menu.add_command(label="Goto Anything...", command=self.show_goto_anything)
         tools_menu.add_command(label="Find and Replace...", command=self.show_find_replace_dialog)
@@ -11772,6 +12167,7 @@ class HostsFileEditor:
         self.last_open_dir = sanitized_config["last_open_dir"]
         self.source_last_fetched = sanitized_config.get("source_last_fetched", {})
         self.source_cache_metadata = sanitized_config.get("source_cache_metadata", {})
+        self.filter_query_history = sanitized_config.get("filter_query_history", [])
         self._preferred_block_sink = sanitized_config.get("preferred_block_sink", "0.0.0.0")
         self._backup_retention = sanitized_config.get("backup_retention", BACKUP_RETENTION)
         self._has_completed_first_run = sanitized_config.get("has_completed_first_run", False)
@@ -11843,6 +12239,7 @@ class HostsFileEditor:
             "last_open_dir": self.last_open_dir,
             "source_last_fetched": self.source_last_fetched,
             "source_cache_metadata": self.source_cache_metadata,
+            "filter_query_history": getattr(self, "filter_query_history", []),
             "preferred_block_sink": self._preferred_block_sink,
             "backup_retention": self._backup_retention,
             "has_completed_first_run": self._has_completed_first_run,
@@ -11873,6 +12270,7 @@ class HostsFileEditor:
             self.profile_activation_schedule_version = config["profile_activation_schedule_version"]
             self.profile_activation_fallback_id = config["profile_activation_fallback_id"]
             self.profile_activation_schedule = config["profile_activation_schedule"]
+            self.filter_query_history = config["filter_query_history"]
             self._source_metadata_dirty = False
             self._update_whitelist_summary()
             return True
@@ -12420,6 +12818,7 @@ class HostsFileEditor:
             "last_open_dir": getattr(self, "last_open_dir", os.path.expanduser("~")),
             "source_last_fetched": getattr(self, "source_last_fetched", {}),
             "source_cache_metadata": getattr(self, "source_cache_metadata", {}),
+            "filter_query_history": getattr(self, "filter_query_history", []),
             "preferred_block_sink": getattr(self, "_preferred_block_sink", "0.0.0.0"),
             "backup_retention": getattr(self, "_backup_retention", BACKUP_RETENTION),
             "has_completed_first_run": getattr(self, "_has_completed_first_run", False),
@@ -12451,6 +12850,7 @@ class HostsFileEditor:
         self.last_open_dir = sanitized_config["last_open_dir"]
         self.source_last_fetched = sanitized_config.get("source_last_fetched", {})
         self.source_cache_metadata = sanitized_config.get("source_cache_metadata", {})
+        self.filter_query_history = sanitized_config.get("filter_query_history", [])
         self._preferred_block_sink = sanitized_config.get("preferred_block_sink", "0.0.0.0")
         self._backup_retention = sanitized_config.get("backup_retention", BACKUP_RETENTION)
         self._has_completed_first_run = sanitized_config.get("has_completed_first_run", False)
@@ -12810,6 +13210,155 @@ class HostsFileEditor:
             width=880,
             height=660,
         )
+
+    # ----------------------------- Filter Builder ----------------------------
+    def show_filter_builder(self, initial_query: str | None = None):
+        dialog = tk.Toplevel(self.root)
+        self._configure_modal_window(
+            dialog,
+            title="Filter Builder",
+            size="900x720",
+            min_size=(760, 620),
+        )
+
+        intro, _ = self._create_sidebar_card(
+            dialog,
+            "Build a local query",
+            "Search current editor lines, fetched-source domains, curated source metadata, and recent queries without contacting providers.",
+            accent=PALETTE["blue"],
+        )
+        ttk.Label(
+            intro,
+            text='Examples: domain:doubleclick.net source:hagezi line:"0.0.0.0" history:ads',
+            style="SectionBody.TLabel",
+            wraplength=740,
+            justify="left",
+        ).pack(anchor="w")
+
+        query_frame = ttk.Frame(dialog, padding=(20, 0, 20, 8))
+        query_frame.pack(fill="x")
+        query_var = tk.StringVar(value=initial_query or "")
+        query_entry = ttk.Entry(query_frame, textvariable=query_var)
+        query_entry.pack(side="left", fill="x", expand=True)
+        query_entry.focus_set()
+        ttk.Button(query_frame, text="Run", command=lambda: run_query(), style="Action.TButton").pack(side="left", padx=(8, 0))
+
+        content = ttk.Frame(dialog, padding=(20, 0, 20, 12))
+        content.pack(fill="both", expand=True)
+        content.columnconfigure(0, weight=0)
+        content.columnconfigure(1, weight=1)
+        content.rowconfigure(0, weight=1)
+
+        history_shell = tk.Frame(
+            content,
+            bg=PALETTE["panel_alt"],
+            highlightthickness=1,
+            highlightbackground=PALETTE["border"],
+            highlightcolor=PALETTE["focus"],
+            bd=0,
+        )
+        history_shell.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        history_inner = ttk.Frame(history_shell, style="Inset.TFrame", padding=(12, 10, 12, 12))
+        history_inner.pack(fill="both", expand=True)
+        ttk.Label(history_inner, text="Recent Queries", style="InsetTitle.TLabel").pack(anchor="w")
+        ttk.Label(
+            history_inner,
+            text="Most recent first; saved in app config.",
+            style="InsetBody.TLabel",
+            wraplength=240,
+            justify="left",
+        ).pack(anchor="w", pady=(4, 8))
+        history_frame = ttk.Frame(history_inner, style="Inset.TFrame")
+        history_frame.pack(fill="both", expand=True)
+        history_list = tk.Listbox(history_frame, height=20, width=32)
+        self._style_listbox_surface(history_list, font_spec=self.mono_small_font)
+        history_list.pack(fill="both", expand=True)
+
+        output = scrolledtext.ScrolledText(content, wrap=tk.WORD)
+        self._style_code_surface(output, font_spec=self.mono_small_font)
+        output.grid(row=0, column=1, sticky="nsew")
+        output.configure(state="disabled")
+
+        def refresh_history():
+            history_list.delete(0, tk.END)
+            for item in sanitize_filter_query_history(getattr(self, "filter_query_history", [])):
+                history_list.insert(tk.END, item)
+
+        def write_output(text):
+            output.configure(state="normal")
+            output.delete("1.0", tk.END)
+            output.insert(tk.END, text)
+            output.configure(state="disabled")
+
+        def selected_history_query() -> str:
+            try:
+                selection = history_list.curselection()
+                if not selection:
+                    return ""
+                return history_list.get(selection[0])
+            except tk.TclError:
+                return ""
+
+        def use_selected_history(_event=None):
+            selected = selected_history_query()
+            if selected:
+                query_var.set(selected)
+                query_entry.focus_set()
+                query_entry.selection_range(0, tk.END)
+            return "break"
+
+        def run_query(_event=None):
+            report = build_filter_builder_report(
+                query_var.get(),
+                self.get_lines(),
+                self._source_corpus_cache,
+                self.BLOCKLIST_SOURCES,
+                getattr(self, "filter_query_history", []),
+            )
+            write_output(format_filter_builder_report(report))
+            if report.get("valid"):
+                self.filter_query_history = record_filter_query_history(
+                    getattr(self, "filter_query_history", []),
+                    report.get("query") or "",
+                )
+                self.save_config()
+                refresh_history()
+                self.update_status(f"Filter Builder matched {report.get('editor_match_count', 0):,} editor line(s).")
+            return "break"
+
+        def copy_report():
+            try:
+                text = output.get("1.0", tk.END).strip()
+                if not text:
+                    return
+                self.root.clipboard_clear()
+                self.root.clipboard_append(text)
+                self.update_status("Copied Filter Builder report.")
+            except tk.TclError as exc:
+                self.update_status(f"Could not copy report: {exc}", is_error=True)
+
+        history_list.bind("<Double-Button-1>", use_selected_history)
+        history_list.bind("<Return>", use_selected_history)
+        query_entry.bind("<Return>", run_query)
+        query_entry.bind("<Escape>", lambda _event: (query_var.set(""), "break")[-1])
+        refresh_history()
+        write_output(format_filter_builder_report(build_filter_builder_report(
+            initial_query or "",
+            self.get_lines(),
+            self._source_corpus_cache,
+            self.BLOCKLIST_SOURCES,
+            getattr(self, "filter_query_history", []),
+        )))
+
+        footer = ttk.Frame(dialog)
+        footer.pack(fill="x", padx=20, pady=(0, 20))
+        ttk.Button(footer, text="Use Selected", command=use_selected_history, style="Secondary.TButton").pack(side="left")
+        ttk.Button(footer, text="Copy Report", command=copy_report, style="Secondary.TButton").pack(side="right", padx=(0, 8))
+        ttk.Button(footer, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
+
+        if initial_query:
+            self._safe_after(50, run_query)
+        dialog.grab_set()
 
     # ----------------------------- Check Domain ------------------------------
     def show_check_domain(self, initial_domain: str | None = None):

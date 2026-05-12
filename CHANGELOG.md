@@ -179,6 +179,11 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added **Tools > Source Bundle Selector...** so bundle imports reuse the existing batch import worker, cache fallback, cancellation, and Raw/Normalized import mode.
 - Added bundle catalog validation, source-name indexing, report formatting helpers, docs, and regression tests.
 
+**Filter Builder**
+- Added **Tools > Filter Builder...** for local fielded queries across current editor lines, fetched-source domains, curated source metadata, and recent queries.
+- Added persisted `filter_query_history` config state with sanitation, dedupe, and newest-first promotion.
+- Documented query syntax and local-only limits in `docs/filter-builder.md`.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**
