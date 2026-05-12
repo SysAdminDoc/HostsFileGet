@@ -188,6 +188,11 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added **Tools > Source Adapter Plugins...** plus `--source-adapter-list` to inspect loaded/skipped plugin manifests and contributed sources.
 - Plugin sources appear in batch import under `Plugin: <category>` and reuse the existing import, cache, retry, and preview-before-write path.
 
+**Local REST API**
+- Added opt-in `--api-serve` loopback-only HTTP facade with mandatory bearer auth.
+- Added read-only `GET /v1/status` and `POST /v1/clean-preview` endpoints; no API endpoint writes the hosts file in this phase.
+- Documented bind, token, endpoint, and non-goal boundaries in `docs/local-rest-api.md`.
+
 **Filter Builder**
 - Added **Tools > Filter Builder...** for local fielded queries across current editor lines, fetched-source domains, curated source metadata, and recent queries.
 - Added persisted `filter_query_history` config state with sanitation, dedupe, and newest-first promotion.

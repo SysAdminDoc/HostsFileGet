@@ -63,6 +63,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `docs/source-overlap.md` | Source overlap matrix behavior and limits |
 | `docs/source-metrics.md` | Source freshness and compact growth history behavior |
 | `docs/parallel-imports.md` | Concurrent source import behavior, retry limits, and cancellation boundary |
+| `docs/local-rest-api.md` | Loopback-only bearer-auth REST facade and read-only endpoint boundary |
 | `docs/false-positive-triage.md` | Check Domain triage behavior, actions, and limits |
 | `docs/virtualized-lists.md` | Paged large-list dialog behavior and constraints |
 | `docs/entry-provenance.md` | Line-level provenance/blame report behavior and limits |
@@ -160,6 +161,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Cleanup/export/search helpers: `remove_lines_by_indices`, `rewrite_block_sink_ip`, `scan_suspicious_redirects`, `build_export_domain_records`, `build_dns_integration_export`, `build_cloud_dns_adapter_plan`, `format_dns_integration_pack_report`, `format_cloud_dns_adapter_catalog`, `export_lines_as_format`, `export_lines_as_bytes`, `strip_lines_by_category`.
 - Large-list helpers: `build_virtual_list_page`; `MatchRemovalDialog` uses it to page checkbox rows while preserving global selection state.
 - Source analytics: `find_sources_containing_domain`, `summarize_source_contributions`, `build_source_domain_index`, `build_source_overlap_report`, `sanitize_source_metrics_history`, `record_source_metrics_snapshot`, `build_source_metrics_report`, `format_source_metrics_report`, `build_filter_builder_report`, `format_filter_builder_report`, `sanitize_watch_expressions`, `build_watch_expression_report`, `format_watch_expression_report`, `categorize_entries_by_domain_hint`, `classify_source_freshness`.
+- Local REST API: `create_local_api_server`, `LocalApiRequestHandler`, `build_local_api_status_payload`, `build_local_api_clean_preview_payload`, `local_api_authorization_valid`.
 - Provenance and pinned-domain helpers: `append_provenance_event`, `read_provenance_events`, `build_entry_provenance_report`, `format_entry_provenance_report`, `build_provenance_log_report`, `format_provenance_log_report`, `filter_provenance_events`, `export_provenance_events`, `build_pinned_export_payload`, `parse_pinned_import_payload`, `sanitize_pinned_domains`.
 - Log importers: `parse_pihole_ftl_blocked_domains`, `parse_adguard_home_querylog`, `parse_nextdns_log_csv`, `parse_controld_activity_csv`.
 - Migration importers: `parse_switchhosts_export_text`, `parse_gas_mask_archive_path`, `parse_hostsfileeditor_archive_path`.
@@ -224,6 +226,7 @@ The CLI functions live near the bottom of `hosts_editor.py` and intentionally sh
 - `_cli_integration_list`
 - `_cli_integration_export`
 - `_cli_source_adapter_list`
+- `_cli_api_serve`
 - `_cli_cloud_adapter_list`
 - `_cli_cloud_adapter_plan`
 - `_cli_cloud_log_import`
