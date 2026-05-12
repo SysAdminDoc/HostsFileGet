@@ -103,7 +103,12 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added `--config-location` to report whether local-user or portable config is active and where sidecar files resolve.
 - Added `--portable-export DIR` with `--portable-overwrite` to create a managed portable `hosts_editor_config.json` bundle.
 - Portable mode now keeps source cache, optional Git history, CLI logs, and scheduler activity under the active config root.
-- Documented format semantics and source references in `docs/export-formats.md`.
+- Documented config resolution and portable bundle behavior in `docs/portable-config.md`.
+
+**DNS interoperability**
+- Added file-only Pi-hole, AdGuard Home/DNS, Technitium DNS Server, and blocky interoperability presets around the cleaned export layer.
+- Added `--integration-list` and `--integration-export PACK INPUT OUTPUT` for non-admin hosts-like file conversion without remote DNS server writes.
+- Documented per-tool import guidance, source references, and hosts-file semantic limits in `docs/dns-integrations.md`.
 
 ## [v2.17.0] - 2026-04-18
 

@@ -83,6 +83,7 @@ from hosts_editor import (
     build_git_history_metadata,
     build_git_history_status_report,
     build_config_location_report,
+    build_dns_integration_export,
     build_portable_bundle_readme,
     build_scheduler_activity_report,
     build_scheduler_update_command,
@@ -103,6 +104,8 @@ from hosts_editor import (
     format_profile_list_summary,
     format_git_history_status_report,
     format_config_location_report,
+    format_dns_integration_export_summary,
+    format_dns_integration_pack_report,
     format_portable_bundle_export_summary,
     format_scheduler_activity_report,
     format_source_trust_badges,
@@ -112,6 +115,7 @@ from hosts_editor import (
     get_source_cache_body_path,
     get_config_root_dir,
     get_git_history_dir,
+    list_dns_integration_packs,
     looks_like_domain,
     looks_like_html_document,
     load_blocklist_sources_manifest,
@@ -1574,6 +1578,45 @@ profile:
             exported = json.loads((bundle_dir / "hosts_editor_config.json").read_text(encoding="utf-8"))
             self.assertEqual(exported["whitelist"], "cli.example")
 
+    def test_cli_integration_export_writes_file_without_remote_writes(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "hosts.txt"
+            output_path = Path(tmpdir) / "adguard.txt"
+            input_path.write_text(
+                "0.0.0.0 ads.example\n0.0.0.0 tracker.example\n192.168.1.10 printer\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(hosts_editor, "_cli_print"):
+                self.assertEqual(hosts_editor._cli_integration_list(), 0)
+                self.assertEqual(
+                    hosts_editor._cli_integration_export("adguard-home", str(input_path), str(output_path)),
+                    0,
+                )
+                self.assertEqual(
+                    hosts_editor._cli_integration_export("unknown", str(input_path), str(output_path)),
+                    2,
+                )
+            self.assertEqual(output_path.read_text(encoding="utf-8").splitlines(), [
+                "||ads.example^",
+                "||tracker.example^",
+            ])
+
+    def test_handle_cli_args_routes_integration_flags(self):
+        with mock.patch.object(hosts_editor, "_cli_integration_list", return_value=0) as mocked_list:
+            self.assertEqual(hosts_editor._handle_cli_args(["--integration-list"]), 0)
+            mocked_list.assert_called_once_with()
+
+        with mock.patch.object(hosts_editor, "_cli_integration_export", return_value=0) as mocked_export:
+            self.assertEqual(
+                hosts_editor._handle_cli_args(["--integration-export", "blocky", "in.txt", "out.txt"]),
+                0,
+            )
+            mocked_export.assert_called_once_with("blocky", "in.txt", "out.txt")
+
     def test_sanitize_config_snapshot_rejects_non_sha256_hashes(self):
         payload = sanitize_config_snapshot(
             {
@@ -2278,6 +2321,10 @@ profile:
             ["||ads.example^", "||tracker.example^"],
         )
         self.assertEqual(
+            export_lines_as_format(lines, "adguard-home").splitlines(),
+            ["||ads.example^", "||tracker.example^"],
+        )
+        self.assertEqual(
             export_lines_as_format(lines, "dnsmasq").splitlines(),
             ["address=/ads.example/0.0.0.0", "address=/tracker.example/0.0.0.0"],
         )
@@ -2312,6 +2359,41 @@ profile:
         self.assertIn("{+block{HostsFileGet blocked domain}}", privoxy)
         self.assertIn("ads.example/", privoxy)
         self.assertIn("tracker.example/", privoxy)
+
+        self.assertEqual(export_lines_as_format(lines, "technitium-dns").splitlines(), ["ads.example", "tracker.example"])
+        self.assertEqual(export_lines_as_format(lines, "blocky").splitlines(), ["ads.example", "tracker.example"])
+
+    def test_dns_integration_pack_report_lists_file_first_presets(self):
+        pack_ids = {pack["id"] for pack in list_dns_integration_packs()}
+        self.assertEqual(pack_ids, {"pihole", "adguard-home", "adguard-dns", "technitium", "blocky"})
+
+        report = format_dns_integration_pack_report()
+        self.assertIn("File-only export", report)
+        self.assertIn("pihole", report)
+        self.assertIn("technitium", report)
+        self.assertIn("blocky", report)
+
+    def test_build_dns_integration_export_uses_pack_format_and_aliases(self):
+        lines = [
+            "0.0.0.0 ads.example",
+            "0.0.0.0 tracker.example",
+            "192.168.1.10 printer",
+            "0.0.0.0 ads.example",
+        ]
+
+        agh = build_dns_integration_export(lines, "agh")
+        self.assertEqual(agh["integration_id"], "adguard-home")
+        self.assertEqual(agh["content"].splitlines(), ["||ads.example^", "||tracker.example^"])
+        self.assertEqual(agh["domain_count"], 2)
+        self.assertIn("does not authenticate", "\n".join(agh["warnings"]))
+
+        technitium = build_dns_integration_export(lines, "technitium-dns-server")
+        self.assertEqual(technitium["content"].splitlines(), ["ads.example", "tracker.example"])
+        self.assertIn("Technitium", format_dns_integration_export_summary(technitium, "out.txt"))
+
+    def test_build_dns_integration_export_rejects_unknown_pack(self):
+        with self.assertRaises(ValueError):
+            build_dns_integration_export(["0.0.0.0 x.example"], "unknown-dns")
 
     def test_export_lines_as_bytes_supports_compressed_hosts(self):
         lines = ["0.0.0.0 ads.example", "# comment", "0.0.0.0 tracker.example"]

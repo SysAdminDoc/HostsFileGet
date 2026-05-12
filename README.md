@@ -54,6 +54,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - entry provenance view for import-section ownership, source matches, and local audit events
 - Export adapters:
   - cleaned hosts, plain domains, Adblock, dnsmasq, and Pi-hole formats
+  - Pi-hole, AdGuard Home/DNS, Technitium DNS Server, and blocky interoperability presets
   - RPZ, Unbound, Privoxy, gzip-compressed hosts, and bzip2-compressed hosts
 - Operational utilities:
   - DNS cache flush
@@ -205,6 +206,13 @@ python hosts_editor.py --portable-export .\portable-bundle
 python hosts_editor.py --portable-export .\portable-bundle --portable-overwrite
 ```
 
+List or generate file-only DNS integration exports:
+
+```powershell
+python hosts_editor.py --integration-list
+python hosts_editor.py --integration-export adguard-home .\cleaned-hosts.txt .\adguard-dns-filter.txt
+```
+
 Run the deterministic large-file benchmark with:
 
 ```powershell
@@ -228,6 +236,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Optional Git history: `docs/git-history.md`
 - Scheduler activity report: `docs/scheduler-activity.md`
 - Portable bundle config: `docs/portable-config.md`
+- DNS interoperability pack: `docs/dns-integrations.md`
 - Troubleshooting and hosts-file limits: `TROUBLESHOOTING.md`
 - Config schema: `docs/config-schema.md`
 - Curated source manifest: `docs/source-manifest.md`

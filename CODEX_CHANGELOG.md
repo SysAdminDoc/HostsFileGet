@@ -59,6 +59,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F028 complete. Next roadmap item: F029 managed portable bundle config.
 - Completed F029: added explicit config-location reporting, managed portable config bundle export/overwrite CLI, portable sidecar-root resolution for cache/history/logs, docs, and regression tests.
 - Updated `ROADMAP.md` to mark F029 complete. Next roadmap item: F030 Pi-hole/AdGuard/Technitium/blocky interoperability pack.
+- Completed F030: added file-only Pi-hole, AdGuard Home/DNS, Technitium DNS Server, and blocky interoperability presets; added `--integration-list`, `--integration-export`, GUI pack reporting, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F030 complete. Next roadmap item: F031 NextDNS and Control D import/export adapters.
 
 ## Scope
 
