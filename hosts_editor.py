@@ -5566,6 +5566,151 @@ CLOUD_DNS_LOG_IMPORT_ALIASES = {
     "control-d": "controld",
     "controld": "controld",
 }
+THREAT_FEED_PACK_WARNINGS = (
+    "Plan-only: HostsFileGet lists vetted feed URLs and review controls; it does not fetch or auto-apply threat feeds.",
+    "NRD and DGA feeds can false-positive newly launched, parked, CDN, or campaign-specific legitimate domains.",
+    "Run source health, review freshness metadata, and triage false positives before including these feeds in a cleaned save.",
+)
+THREAT_FEED_SOURCES = (
+    {
+        "id": "hagezi-tif-mini",
+        "name": "HaGeZi TIF Mini",
+        "family": "threat-intel",
+        "format": "adblock",
+        "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/tif.mini.txt",
+        "risk": "medium",
+        "stale_after_hours": 24,
+        "false_positive_control": "Use as the starter TIF source; run adblock lint before hosts conversion.",
+        "description": "Threat-intelligence mini feed in DNS-compatible adblock syntax.",
+        "source_ids": ("O10", "C1"),
+    },
+    {
+        "id": "hagezi-tif-hosts",
+        "name": "HaGeZi TIF Hosts",
+        "family": "threat-intel",
+        "format": "hosts",
+        "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/tif.txt",
+        "risk": "medium",
+        "stale_after_hours": 24,
+        "false_positive_control": "Prefer a short manual review window before scheduled imports.",
+        "description": "Threat-intelligence feed as hosts entries.",
+        "source_ids": ("O10", "C1"),
+    },
+    {
+        "id": "hagezi-dga-7",
+        "name": "HaGeZi DGA 7-day",
+        "family": "dga",
+        "format": "domains",
+        "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/domains/dga7.txt",
+        "risk": "medium",
+        "stale_after_hours": 12,
+        "false_positive_control": "Import separately so DGA-specific breakage can be removed without dropping baseline protection.",
+        "description": "Short-window DGA domain feed.",
+        "source_ids": ("O10", "S15"),
+    },
+    {
+        "id": "hagezi-dga-14",
+        "name": "HaGeZi DGA 14-day",
+        "family": "dga",
+        "format": "domains",
+        "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/domains/dga14.txt",
+        "risk": "medium",
+        "stale_after_hours": 12,
+        "false_positive_control": "Pair with source overlap and false-positive triage before broad rollout.",
+        "description": "Longer-window DGA domain feed.",
+        "source_ids": ("O10", "S15"),
+    },
+    {
+        "id": "hagezi-nrd-7",
+        "name": "HaGeZi NRD 7-day",
+        "family": "nrd",
+        "format": "domains",
+        "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/domains/nrd7.txt",
+        "risk": "high",
+        "stale_after_hours": 6,
+        "false_positive_control": "Review manually; newly registered legitimate domains are expected false-positive candidates.",
+        "description": "Short-window newly registered domain feed.",
+        "source_ids": ("O10", "A1", "A2", "A3"),
+    },
+    {
+        "id": "hagezi-nrd-14",
+        "name": "HaGeZi NRD 14-day",
+        "family": "nrd",
+        "format": "domains",
+        "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/domains/nrd14.txt",
+        "risk": "high",
+        "stale_after_hours": 6,
+        "false_positive_control": "Keep as review-only unless local policy accepts higher breakage risk.",
+        "description": "Longer-window newly registered domain feed.",
+        "source_ids": ("O10", "A1", "A2", "A3"),
+    },
+)
+THREAT_FEED_PACKS = (
+    {
+        "id": "security-starter",
+        "label": "Security starter",
+        "description": "Low-friction threat-intel starter pack built around HaGeZi TIF Mini.",
+        "source_ids": ("hagezi-tif-mini",),
+        "risk": "medium",
+        "default_action": "import-after-source-health",
+        "review_level": "normal",
+        "controls": (
+            "Run --source-health before adding the feed to a recurring workflow.",
+            "Run --adblock-lint when converting the adblock-formatted feed to hosts rows.",
+        ),
+    },
+    {
+        "id": "dga-watch",
+        "label": "DGA watch",
+        "description": "Feed pack for DGA domains that are hard to detect locally without CTI.",
+        "source_ids": ("hagezi-dga-7", "hagezi-dga-14"),
+        "risk": "medium",
+        "default_action": "import-separately-and-review",
+        "review_level": "guarded",
+        "controls": (
+            "Keep DGA feeds as separate imports so they can be removed independently.",
+            "Use source overlap and entry provenance when a business domain breaks.",
+        ),
+    },
+    {
+        "id": "nrd-review",
+        "label": "NRD review",
+        "description": "High-churn newly registered domain feeds for manual security review.",
+        "source_ids": ("hagezi-nrd-7", "hagezi-nrd-14"),
+        "risk": "high",
+        "default_action": "manual-review-only",
+        "review_level": "high",
+        "controls": (
+            "Do not schedule NRD feeds without an explicit local breakage budget.",
+            "Use whitelist and false-positive triage before saving cleaned output.",
+            "Treat stale NRD data as expired because the signal decays quickly.",
+        ),
+    },
+    {
+        "id": "threat-full-review",
+        "label": "Threat full review",
+        "description": "Broad TIF plus DGA/NRD review pack for security-focused workstations.",
+        "source_ids": ("hagezi-tif-hosts", "hagezi-dga-7", "hagezi-dga-14", "hagezi-nrd-7"),
+        "risk": "high",
+        "default_action": "stage-in-raw-mode",
+        "review_level": "high",
+        "controls": (
+            "Stage in Raw import mode first and inspect source boundaries.",
+            "Promote to scheduled updates only after source health and false-positive reviews are clean.",
+        ),
+    },
+)
+THREAT_FEED_PACK_ALIASES = {
+    "starter": "security-starter",
+    "security": "security-starter",
+    "tif": "security-starter",
+    "dga": "dga-watch",
+    "dga-pack": "dga-watch",
+    "nrd": "nrd-review",
+    "nrd-pack": "nrd-review",
+    "full": "threat-full-review",
+    "threat-full": "threat-full-review",
+}
 
 
 def normalize_export_format(export_format: str) -> str:
@@ -5868,6 +6013,135 @@ def parse_cloud_dns_log_export(provider: str, text: str) -> list[str]:
     if normalized == "controld":
         return parse_controld_activity_csv(text)
     raise ValueError(f"Unknown cloud DNS log provider: {provider!r}. Known providers: nextdns, controld")
+
+
+def normalize_threat_feed_pack_id(pack_id: str) -> str:
+    normalized = (pack_id or "").strip().lower().replace("_", "-")
+    return THREAT_FEED_PACK_ALIASES.get(normalized, normalized)
+
+
+def list_threat_feed_sources() -> list[dict]:
+    return [dict(source) for source in THREAT_FEED_SOURCES]
+
+
+def list_threat_feed_packs() -> list[dict]:
+    return [dict(pack) for pack in THREAT_FEED_PACKS]
+
+
+def find_threat_feed_pack(pack_id: str) -> dict:
+    normalized = normalize_threat_feed_pack_id(pack_id)
+    for pack in THREAT_FEED_PACKS:
+        if pack["id"] == normalized:
+            return dict(pack)
+    known = ", ".join(pack["id"] for pack in THREAT_FEED_PACKS)
+    raise ValueError(f"Unknown threat feed pack: {pack_id!r}. Known packs: {known}")
+
+
+def find_threat_feed_source(source_id: str) -> dict:
+    normalized = (source_id or "").strip().lower().replace("_", "-")
+    for source in THREAT_FEED_SOURCES:
+        if source["id"] == normalized:
+            return dict(source)
+    known = ", ".join(source["id"] for source in THREAT_FEED_SOURCES)
+    raise ValueError(f"Unknown threat feed source: {source_id!r}. Known sources: {known}")
+
+
+def build_threat_feed_pack_plan(pack_id: str) -> dict:
+    pack = find_threat_feed_pack(pack_id)
+    sources = [find_threat_feed_source(source_id) for source_id in pack["source_ids"]]
+    freshness_hours = min(int(source["stale_after_hours"]) for source in sources) if sources else 24
+    references = sorted({
+        reference
+        for source in sources
+        for reference in source.get("source_ids", ())
+    })
+    controls = [
+        f"Treat this pack as stale after {freshness_hours} hour(s); re-run source health before use.",
+        "Keep pack imports isolated by source so false-positive triage can remove one feed without dropping the whole policy.",
+    ]
+    controls.extend(pack.get("controls") or ())
+    source_controls = [
+        f"{source['id']}: {source['false_positive_control']}"
+        for source in sources
+    ]
+    return {
+        "schema": "hostsfileget.threat-feed-pack-plan.v1",
+        "pack_id": pack["id"],
+        "label": pack["label"],
+        "description": pack["description"],
+        "risk": pack["risk"],
+        "review_level": pack["review_level"],
+        "default_action": pack["default_action"],
+        "source_count": len(sources),
+        "source_ids": [source["id"] for source in sources],
+        "sources": sources,
+        "freshness": {
+            "stale_after_hours": freshness_hours,
+            "policy": f"Refresh or re-check this pack within {freshness_hours} hour(s) before applying it.",
+        },
+        "false_positive_controls": controls + source_controls,
+        "warnings": list(THREAT_FEED_PACK_WARNINGS),
+        "references": references,
+    }
+
+
+def format_threat_feed_pack_catalog() -> str:
+    lines = [
+        "NRD/DGA threat feed packs",
+        "",
+        "Packs are local planning aids for curated feeds. HostsFileGet does not fetch, apply, or schedule them from this report.",
+        "",
+        "Supported packs:",
+    ]
+    for pack in THREAT_FEED_PACKS:
+        source_count = len(pack.get("source_ids") or ())
+        lines.extend([
+            f"- {pack['id']}: {pack['label']}",
+            f"  Risk: {pack['risk']} ({pack['review_level']} review)",
+            f"  Sources: {source_count}",
+            f"  Default action: {pack['default_action']}",
+            f"  Description: {pack['description']}",
+        ])
+    lines.extend(["", "Feed sources:"])
+    for source in THREAT_FEED_SOURCES:
+        lines.extend([
+            f"- {source['id']}: {source['name']}",
+            f"  Family: {source['family']} | Format: {source['format']} | Risk: {source['risk']}",
+            f"  Stale after: {source['stale_after_hours']} hours",
+            f"  URL: {source['url']}",
+            f"  Control: {source['false_positive_control']}",
+        ])
+    lines.extend(["", "Warnings:"])
+    lines.extend(f"- {warning}" for warning in THREAT_FEED_PACK_WARNINGS)
+    return "\n".join(lines)
+
+
+def format_threat_feed_pack_plan(plan: dict) -> str:
+    lines = [
+        "Threat Feed Pack Plan",
+        f"Pack: {plan.get('pack_id')} - {plan.get('label')}",
+        f"Risk: {plan.get('risk')} ({plan.get('review_level')} review)",
+        f"Default action: {plan.get('default_action')}",
+        f"Sources: {int(plan.get('source_count') or 0):,}",
+        f"Freshness: {plan.get('freshness', {}).get('policy')}",
+        "",
+        "Source URLs:",
+    ]
+    for source in plan.get("sources") or []:
+        lines.append(
+            f"- {source.get('id')}: {source.get('url')} "
+            f"({source.get('family')}, {source.get('format')}, risk={source.get('risk')})"
+        )
+    lines.extend(["", "False-positive controls:"])
+    for control in plan.get("false_positive_controls") or []:
+        lines.append(f"- {control}")
+    lines.extend(["", "Warnings:"])
+    for warning in plan.get("warnings") or THREAT_FEED_PACK_WARNINGS:
+        lines.append(f"- {warning}")
+    references = plan.get("references") or []
+    if references:
+        lines.extend(["", "Roadmap source IDs:", f"- {', '.join(references)}"])
+    return "\n".join(lines)
 
 
 def build_export_domain_records(lines: list[str]) -> list[dict[str, str]]:
@@ -8982,6 +9256,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="Adblock Syntax Lint...", command=self.show_adblock_syntax_lint)
         tools_menu.add_command(label="Rule Tier Report...", command=self.show_rule_tier_report)
         tools_menu.add_command(label="IDN / Homograph Report...", command=self.show_idn_homograph_report)
+        tools_menu.add_command(label="NRD / DGA Threat Feed Packs...", command=self.show_threat_feed_packs)
         tools_menu.add_command(label="DNS Bypass Diagnostics...", command=self.show_dns_bypass_diagnostics)
         tools_menu.add_command(label="DNS Interoperability Pack...", command=self.show_dns_integration_pack)
         tools_menu.add_command(label="Cloud DNS Adapters...", command=self.show_cloud_dns_adapters)
@@ -9996,6 +10271,16 @@ class HostsFileEditor:
             tone="warning" if report["warning_count"] else "info",
             width=920,
             height=680,
+        )
+
+    def show_threat_feed_packs(self):
+        self._show_text_report_dialog(
+            "NRD/DGA threat feed packs",
+            "Curated threat-intel, DGA, and newly registered domain feed packs with freshness and false-positive controls.",
+            format_threat_feed_pack_catalog(),
+            tone="warning",
+            width=940,
+            height=700,
         )
 
     def show_dns_integration_pack(self):
@@ -14232,6 +14517,26 @@ def _cli_cloud_log_import(provider: str, input_path: str, output_path: str) -> i
     return 0
 
 
+def _cli_threat_feed_list() -> int:
+    _cli_print(format_threat_feed_pack_catalog())
+    return 0
+
+
+def _cli_threat_feed_plan(pack_id: str, output_path: str) -> int:
+    try:
+        plan = build_threat_feed_pack_plan(pack_id)
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        write_text_file_atomic(output_path, json.dumps(plan, indent=2))
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Threat feed pack plan failed: {exc}")
+        return 2
+    _cli_print(format_threat_feed_pack_plan(plan))
+    _cli_print(f"Wrote threat feed pack plan to {output_path}")
+    return 0
+
+
 def _cli_adblock_lint(input_path: str, output_path: str | None = None) -> int:
     try:
         lines = read_text_file_lines(input_path)
@@ -14569,6 +14874,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--cloud-adapter-plan",
         "--cloud-profile-id",
         "--cloud-log-import",
+        "--threat-feed-list",
+        "--threat-feed-plan",
         "--adblock-lint",
         "--adblock-lint-output",
         "--adblock-quarantine",
@@ -14600,6 +14907,7 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--cloud-adapter-plan=",
         "--cloud-profile-id=",
         "--cloud-log-import=",
+        "--threat-feed-plan=",
         "--adblock-lint=",
         "--adblock-lint-output=",
         "--adblock-quarantine=",
@@ -14659,6 +14967,13 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         nargs=3,
         metavar=("PROVIDER", "INPUT", "OUTPUT"),
         help="Extract blocked domains from a NextDNS or Control D CSV log export into OUTPUT.",
+    )
+    parser.add_argument("--threat-feed-list", action="store_true", help="List curated NRD/DGA/TIF threat feed packs.")
+    parser.add_argument(
+        "--threat-feed-plan",
+        nargs=2,
+        metavar=("PACK", "OUTPUT"),
+        help="Write a local JSON plan for an NRD/DGA/TIF threat feed PACK to OUTPUT. No feeds are fetched or applied.",
     )
     parser.add_argument("--adblock-lint", metavar="INPUT", help="Lint INPUT for browser-only or unsafe adblock rules without launching the GUI.")
     parser.add_argument("--adblock-lint-output", metavar="PATH", help="Write the detailed adblock syntax lint JSON report to PATH.")
@@ -14751,6 +15066,10 @@ def _handle_cli_args(argv: list[str]) -> int | None:
             args.cloud_log_import[1],
             args.cloud_log_import[2],
         )
+    if args.threat_feed_list:
+        return _cli_threat_feed_list()
+    if args.threat_feed_plan:
+        return _cli_threat_feed_plan(args.threat_feed_plan[0], args.threat_feed_plan[1])
     if args.adblock_lint or args.adblock_lint_output:
         if not args.adblock_lint:
             parser.error("--adblock-lint-output requires --adblock-lint INPUT")

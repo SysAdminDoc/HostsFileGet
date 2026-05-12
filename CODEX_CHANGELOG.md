@@ -69,6 +69,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F033 complete. Next roadmap item: F034 IDN/punycode and homograph warnings.
 - Completed F034: added IDN/Punycode classification, mixed-script and small Cyrillic/Greek confusable warnings, GUI and CLI reports with JSON output, docs, and regression tests.
 - Updated `ROADMAP.md` to mark F034 complete. Next roadmap item: F035 NRD/DGA threat feed pack.
+- Completed F035: added guarded TIF/DGA/NRD threat feed pack planning, source-manifest feed entries, GUI and CLI catalog/plan surfaces, JSON plan output, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F035 complete. Next roadmap item: F036 CNAME cloaking source and explanation workflow.
 
 ## Scope
 

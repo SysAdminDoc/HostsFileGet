@@ -1,7 +1,7 @@
 # HostsFileGet Roadmap
 
 Version: 2026-05-12 roadmap execution update
-Repo state basis: `main` at `4749083` plus external research current to 2026-05-12
+Repo state basis: `main` through F035 implementation plus external research current to 2026-05-12
 Scope: Windows-first desktop hosts-file editor, importer, cleaner, diagnostics, and safe writer
 
 This document supersedes the earlier broad idea dump. Useful shipped history has been preserved as baseline context, but the forward roadmap is now source-backed and tiered. Every active candidate cites at least one source ID from the appendix.
@@ -54,6 +54,7 @@ Non-negotiables:
 - [x] F032 - Adblock syntax linter and cosmetic-rule quarantine (`docs/adblock-lint.md`, lint/quarantine CLI, browser-only rule guards)
 - [x] F033 - Regex/exact/wildcard rule tiers with hosts warnings (`docs/rule-tiers.md`, rule tier CLI/report, provider-only warnings)
 - [x] F034 - IDN/punycode and homograph warnings (`docs/idn-homograph.md`, IDN report CLI, deterministic mixed-script/confusable warnings)
+- [x] F035 - NRD/DGA threat feed pack (`docs/threat-feed-packs.md`, guarded TIF/DGA/NRD pack plans, source-manifest entries)
 
 ## State Of The Repo
 
@@ -62,8 +63,8 @@ Non-negotiables:
 - Language and runtime: Python 3.x, Tkinter desktop UI, Windows-first assumptions, PowerShell launcher.
 - Entry points: `hosts_editor.py` for GUI and CLI, `PythonLauncher.ps1` for elevated launch/bootstrap, `HostsFileGet.spec` for PyInstaller.
 - Packaging: PyInstaller one-file Windows EXE with `uac_admin=True`; build artifacts exist locally under `build/` and `dist/` but are not tracked.
-- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 219 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation, migration importer fixtures, export-format fixtures, DNS integration fixtures, cloud DNS adapter fixtures, adblock syntax lint/quarantine fixtures, rule tier fixtures, IDN/homograph fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, NextDNS/Control D CSV logs, and find/replace.
-- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/cloud-dns-adapters.md`, `docs/adblock-lint.md`, `docs/rule-tiers.md`, `docs/idn-homograph.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `LICENSE`, and this roadmap.
+- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 223 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation, migration importer fixtures, export-format fixtures, DNS integration fixtures, cloud DNS adapter fixtures, adblock syntax lint/quarantine fixtures, rule tier fixtures, IDN/homograph fixtures, threat-feed pack fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, NextDNS/Control D CSV logs, and find/replace.
+- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/cloud-dns-adapters.md`, `docs/adblock-lint.md`, `docs/rule-tiers.md`, `docs/idn-homograph.md`, `docs/threat-feed-packs.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `LICENSE`, and this roadmap.
 - License: MIT.
 
 ### Product Reality
@@ -82,6 +83,7 @@ HostsFileGet already provides:
 - `--adblock-lint`, `--adblock-lint-output`, and `--adblock-quarantine` review mixed filter lists and quarantine browser-only rules before hosts-file conversion.
 - `--rule-tier-report` and `--rule-tier-output` explain exact, subdomain, wildcard, regex, path, exception, and browser-only tiers before hosts-file conversion.
 - `--idn-report` and `--idn-output` explain IDN/Punycode, mixed-script, and obvious confusable homograph candidates without changing cleaned output.
+- `--threat-feed-list` and `--threat-feed-plan` expose guarded TIF/DGA/NRD feed packs with local JSON plans, freshness policy, and false-positive controls.
 - Optional local Git-backed history commands for snapshot, status, and admin-gated rollback with normal `.bak` backup creation.
 - Live stats, category hints, source report, health scan, DNS flush, domain check, find/replace, cleanup commands, import-section removal, backup diff, pinned domains, and export formats.
 
@@ -223,7 +225,7 @@ Legend:
 | F032 | Adblock syntax linter and cosmetic-rule quarantine | Data, UX | common | Yes | 4 | 4 | Must distinguish DNS-compatible rules from browser-only syntax. | Next | O7, O17, K4, K7, C12, C13, C14 |
 | F033 | Regex/exact/wildcard rule tiers with hosts warnings | UX, data | common | Yes | 5 | 4 | Must warn hosts cannot natively express wildcards. | Next | C3, C12, K9, S12 |
 | F034 | IDN/punycode and homograph warnings | Security, i18n | common | Yes | 4 | 3 | Use deterministic checks; do not over-block. | Next | C1, S1, S13, S14 |
-| F035 | NRD/DGA threat feed pack | Security | common | Yes | 4 | 3 | Needs freshness and false-positive controls. | Next | C1, O10, A1, A2, A3 |
+| F035 | NRD/DGA threat feed pack | Security | common | Yes | 4 | 3 | Needs freshness and false-positive controls. | Next | C1, O10, A1, A2, A3, S15 |
 | F036 | CNAME cloaking source and explanation workflow | Security, privacy | common | Yes | 4 | 3 | Hosts cannot resolve CNAME dynamically; keep as feed/import guidance. | Next | C1, O8, S11, A4, A5 |
 | F037 | Encrypted DNS resolver bypass pack | Security, platform | common | Guarded | 4 | 3 | DNS-only block is incomplete; pair with router/firewall docs. | Next | O10, S7, S8, K1 |
 | F038 | DNS rebinding protection checks | Security | common | Yes | 4 | 3 | Need careful LAN/private-range distinction to avoid breaking dev labs. | Next | C1, O7, O8, O10 |
@@ -301,12 +303,13 @@ Legend:
 15. Completed - Guarded cloud DNS adapters: F031.
 16. Completed - Adblock syntax lint and quarantine: F032.
 17. Completed - Rule tier warnings: F033.
+18. Completed - IDN and threat feed security reviews: F034, F035.
 
 Rationale: these items reduce maintenance risk, make the current product more trustworthy, and create the internal contracts needed for the larger profile/integration work.
 
 ### Next
 
-1. Security packs and rule intelligence: F035, F036, F037, F038, F039, F040.
+1. Security packs and rule intelligence: F036, F037, F038, F039, F040.
 2. Faster large-scale operations: F041, F042, F043, F047, F048, F049, F050, F051.
 3. Packaging, plugin, collaboration growth: F045, F046, F052, F053, F054, F055.
 5. Recovery spike: F044.
@@ -458,6 +461,7 @@ A hostile reviewer would likely object to four things:
 | S12 | https://stackoverflow.com/questions/61707242/can-i-use-wildcards-for-blocking-websites-in-hosts-files | Hosts wildcard limitation confirmation |
 | S13 | https://www.rfc-editor.org/rfc/rfc5890 | IDNA A-label/U-label definitions and Punycode prefix semantics |
 | S14 | https://unicode.org/reports/tr46/ | Unicode IDNA compatibility processing and confusables security caveat |
+| S15 | https://www.first.org/global/sigs/dns/stakeholder-advice/detection/dga | DGA detection guidance and CTI feed/RPZ/protective DNS caveat |
 
 ### Academic, Research, And Engineering Sources
 
