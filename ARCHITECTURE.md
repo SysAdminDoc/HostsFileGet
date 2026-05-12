@@ -36,6 +36,8 @@ It is not a DNS server, browser ad blocker, cloud filtering service, or endpoint
 | `ARCHITECTURE.md` | Current implementation map |
 | `TROUBLESHOOTING.md` | Hosts-file limitations and operational recovery guide |
 | `CODEX_CHANGELOG.md` | Development-agent handoff notes |
+| `data/blocklist_sources.json` | Versioned curated blocklist catalog loaded at startup |
+| `docs/source-manifest.md` | Curated source manifest schema and maintenance rules |
 | `CLAUDE.md` | Compact architecture and gotchas snapshot for agents |
 | `default.txt` | Sample/default hosts content |
 | `icon.png` | App branding asset |
@@ -50,6 +52,7 @@ The app is currently a single large module with four layers mixed in one file. K
 The top of the file defines application metadata, source limits, import limits, default hosts paths, UI colors, and policy constants. Important constraints live here:
 
 - `APP_NAME`, `APP_VERSION`
+- `CONFIG_SCHEMA_VERSION`, `SOURCE_MANIFEST_SCHEMA_VERSION`
 - `MAX_DOWNLOAD_BYTES`
 - `SOURCE_PREVIEW_MAX_BYTES`
 - `NDIFF_LINE_LIMIT`
@@ -81,6 +84,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Transactional hosts enable/disable helpers: `disable_hosts_file_transactionally`, `enable_hosts_file_transactionally`.
 - Download guards: `read_http_body_limited`, `decode_downloaded_lines`, `looks_like_html_document`.
 - Config sanitation: `sanitize_custom_sources`, `sanitize_config_snapshot`, `resolve_saved_state_hashes`.
+- Source catalog loading: `sanitize_source_manifest`, `load_blocklist_sources_manifest`.
 - Cleanup/export/search helpers: `remove_lines_by_indices`, `rewrite_block_sink_ip`, `scan_suspicious_redirects`, `export_lines_as_format`, `strip_lines_by_category`.
 - Source analytics: `find_sources_containing_domain`, `summarize_source_contributions`, `categorize_entries_by_domain_hint`, `classify_source_freshness`.
 - Provenance and pinned-domain helpers: `append_provenance_event`, `read_provenance_events`, `build_pinned_export_payload`, `parse_pinned_import_payload`, `sanitize_pinned_domains`.
@@ -137,6 +141,7 @@ Admin-required CLI actions must fail clearly when not elevated. Silent mode writ
 | --- | --- | --- |
 | Primary config | `%LOCALAPPDATA%\HostsFileGet\hosts_editor_config.json` | Default per-user config; schema documented in `docs/config-schema.md` |
 | Portable config | `hosts_editor_config.json` next to script/exe | Used when present; same schema as primary config |
+| Curated source manifest | `data/blocklist_sources.json` beside script, exe bundle, or launcher cache | Versioned schema documented in `docs/source-manifest.md` |
 | Provenance log | Config directory JSONL sidecar | Records pin, unpin, and whitelist events |
 | CLI log | `%LOCALAPPDATA%\HostsFileGet\cli.log` | Used by `--silent` |
 | Hosts backups | Sibling of system hosts file | Rolling `.bak` plus timestamped snapshots |
@@ -149,11 +154,12 @@ All writes that can affect the system hosts file should remain previewed or expl
 Current import flow:
 
 1. User selects curated/custom/manual/log source.
-2. Download or file parse happens with size limits and encoding guards.
-3. Source content is decoded and obvious HTML/error pages are rejected.
-4. Import mode determines whether entries are appended raw or normalized.
-5. Generated import sections are marked with sanitized source names.
-6. UI updates stats, warnings, source freshness metadata, and unsaved state.
+2. Curated source metadata comes from the validated bundled source manifest.
+3. Download or file parse happens with size limits and encoding guards.
+4. Source content is decoded and obvious HTML/error pages are rejected.
+5. Import mode determines whether entries are appended raw or normalized.
+6. Generated import sections are marked with sanitized source names.
+7. UI updates stats, warnings, source freshness metadata, and unsaved state.
 
 Important invariants:
 
@@ -185,14 +191,14 @@ Required before large refactors:
 - Keep `python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py` green.
 - Keep `python -m unittest discover -s tests -v` green.
 - Add golden-file fixtures for cleaned output before changing parser/normalizer behavior.
-- Add source-manifest schema tests before moving curated source metadata out of code.
+- Keep source-manifest schema tests green before changing curated source metadata.
 - Add a minimal GUI smoke test only after CI is available.
 
 ## Known Risk Areas
 
 - Full-text rescans during editor changes can lag on very large hosts files.
 - Tkinter `Text` is not virtualized; performance work must be measured before large UI rewrites.
-- Import source URLs embedded in code are difficult to audit and should move to a validated manifest.
+- Curated source edits must update `data/blocklist_sources.json`; invalid manifests fail startup and launcher validation.
 - PowerShell launcher changes need parser validation because quoting and elevation paths are easy to break.
 - PyInstaller packaging should be built from pinned dependencies and scanned for the PyInstaller CVE class noted in the roadmap.
 - DNS-over-HTTPS, DNS-over-QUIC, browser private DNS, VPN DNS, and hardcoded device resolvers can bypass the hosts file entirely.

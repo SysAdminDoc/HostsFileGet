@@ -5,6 +5,16 @@ This file is a handoff note for future agents, including Claude.
 ## Date
 
 - 2026-04-15
+- 2026-05-12
+
+## 2026-05-12 Roadmap Execution Notes
+
+- Completed F006: moved the curated blocklist catalog from `HostsFileEditor.BLOCKLIST_SOURCES` into `data/blocklist_sources.json`.
+- Added manifest schema validation through `SOURCE_MANIFEST_SCHEMA_VERSION`, `sanitize_source_manifest(...)`, and `load_blocklist_sources_manifest(...)`.
+- Updated `PythonLauncher.ps1` to download and validate the manifest beside the cached editor before launch.
+- Updated `HostsFileGet.spec` so PyInstaller bundles the manifest under `data\`.
+- Added `docs/source-manifest.md` and regression tests for manifest loading, schema enforcement, duplicate detection, URL validation, and control-character rejection.
+- Updated `ROADMAP.md` to mark F006 complete. Next roadmap item: F007 source health checker.
 
 ## Scope
 

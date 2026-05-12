@@ -9,6 +9,7 @@ HostsFileGet release builds are Windows-only until the roadmap explicitly adds a
 - Security tooling: `requirements-security.txt`.
 - PyInstaller spec: `HostsFileGet.spec`.
 - Application entry point: `hosts_editor.py`.
+- Curated source manifest: `data/blocklist_sources.json`.
 - Launcher script: `PythonLauncher.ps1`.
 
 ## Local Build
@@ -62,12 +63,13 @@ The workflow:
 6. Audits pinned build dependencies.
 7. Parses `PythonLauncher.ps1`.
 8. Builds `dist\HostsFileGet.exe` with PyInstaller.
-9. Signs the executable when signing secrets are configured.
-10. Records Authenticode signature status.
-11. Writes `dist\HostsFileGet.exe.sha256`.
-12. Writes `dist\HostsFileGet.sbom.cdx.json`.
-13. Uploads release files as workflow artifacts.
-14. On tag builds, creates or updates the matching GitHub release assets.
+9. Bundles `data/blocklist_sources.json` into the executable runtime.
+10. Signs the executable when signing secrets are configured.
+11. Records Authenticode signature status.
+12. Writes `dist\HostsFileGet.exe.sha256`.
+13. Writes `dist\HostsFileGet.sbom.cdx.json`.
+14. Uploads release files as workflow artifacts.
+15. On tag builds, creates or updates the matching GitHub release assets.
 
 ## Code Signing
 
@@ -84,6 +86,7 @@ Before tagging:
 
 - Confirm `CHANGELOG.md` includes the release version and date.
 - Confirm `APP_VERSION` in `hosts_editor.py` matches the intended release.
+- Confirm `data/blocklist_sources.json` validates through the unit tests.
 - Run the local validation commands above.
 - Confirm the worktree is clean.
 - Tag using `vMAJOR.MINOR.PATCH`.

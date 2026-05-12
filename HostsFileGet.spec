@@ -9,6 +9,9 @@ if (project_root / "icon.png").exists():
     datas.append(("icon.png", "."))
 if (project_root / "icon.ico").exists():
     datas.append(("icon.ico", "."))
+source_manifest_path = project_root / "data" / "blocklist_sources.json"
+if source_manifest_path.exists():
+    datas.append((str(source_manifest_path), "data"))
 
 icon_args = []
 if (project_root / "icon.ico").exists():

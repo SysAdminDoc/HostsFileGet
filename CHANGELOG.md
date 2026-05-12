@@ -2,6 +2,12 @@
 
 All notable changes to HostsFileGet will be documented in this file.
 
+## [Unreleased]
+
+**Curated source manifest**
+- Moved the built-in curated blocklist catalog to `data/blocklist_sources.json` with schema validation and regression coverage.
+- Updated the launcher and PyInstaller spec so the manifest is validated and bundled with raw-script and executable launches.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

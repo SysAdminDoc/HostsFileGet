@@ -13,9 +13,12 @@
 $AppName = "Hosts File Get"
 $AppSlug = "HostsFileGet"
 $EditorUrl = "https://raw.githubusercontent.com/SysAdminDoc/HostsFileGet/refs/heads/main/hosts_editor.py"
+$SourceManifestUrl = "https://raw.githubusercontent.com/SysAdminDoc/HostsFileGet/refs/heads/main/data/blocklist_sources.json"
 $EditorCacheBase = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
 $EditorCacheRoot = Join-Path $EditorCacheBase $AppSlug
 $EditorPath = Join-Path $EditorCacheRoot "hosts_editor.py"
+$SourceManifestDir = Join-Path $EditorCacheRoot "data"
+$SourceManifestPath = Join-Path $SourceManifestDir "blocklist_sources.json"
 $LogPath = Join-Path $EditorCacheRoot "launcher.log"
 
 # Persist a transcript so unattended launches (scheduled tasks, helpdesk
@@ -374,6 +377,58 @@ function Test-EditorSyntax {
     }
 }
 
+function Test-ValidSourceManifestFile {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+
+    try {
+        $item = Get-Item -LiteralPath $Path -ErrorAction Stop
+        if ($item.Length -lt 100) {
+            return $false
+        }
+        if ($item.Length -gt 1MB) {
+            return $false
+        }
+
+        $content = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+        if ($content -match "<html" -or $content -match "<!DOCTYPE html") {
+            return $false
+        }
+
+        $payload = $content | ConvertFrom-Json -ErrorAction Stop
+        if ($payload.schema_version -ne 1) {
+            return $false
+        }
+        if (@($payload.categories).Count -lt 1) {
+            return $false
+        }
+
+        foreach ($category in @($payload.categories)) {
+            if ([string]::IsNullOrWhiteSpace($category.name)) {
+                return $false
+            }
+            if (@($category.sources).Count -lt 1) {
+                return $false
+            }
+            foreach ($source in @($category.sources)) {
+                if ([string]::IsNullOrWhiteSpace($source.name) -or [string]::IsNullOrWhiteSpace($source.url)) {
+                    return $false
+                }
+                if ($source.url -notmatch '^https?://') {
+                    return $false
+                }
+            }
+        }
+
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 # ==========================================================
 # 4. DOWNLOAD AND RUN EDITOR
 # ==========================================================
@@ -384,11 +439,16 @@ function Invoke-EditorBootstrap {
     
     try {
         Initialize-CacheDirectory -Path $EditorCacheRoot
+        Initialize-CacheDirectory -Path $SourceManifestDir
         $temporaryDownloadPath = Join-Path $EditorCacheRoot "hosts_editor.download.py"
+        $temporaryManifestDownloadPath = Join-Path $SourceManifestDir "blocklist_sources.download.json"
         $editorPathToLaunch = $EditorPath
 
         if (Test-Path -LiteralPath $temporaryDownloadPath) {
             Remove-Item -LiteralPath $temporaryDownloadPath -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path -LiteralPath $temporaryManifestDownloadPath) {
+            Remove-Item -LiteralPath $temporaryManifestDownloadPath -Force -ErrorAction SilentlyContinue
         }
 
         if (Invoke-FileDownload -Uri $EditorUrl -OutFile $temporaryDownloadPath) {
@@ -406,6 +466,19 @@ function Invoke-EditorBootstrap {
         } else {
             throw "Download failed and no valid cached editor is available."
         }
+
+        Write-LauncherStatus "Preparing curated source manifest..."
+        if (Invoke-FileDownload -Uri $SourceManifestUrl -OutFile $temporaryManifestDownloadPath) {
+            if (-not (Test-ValidSourceManifestFile -Path $temporaryManifestDownloadPath)) {
+                throw "Downloaded source manifest failed validation."
+            }
+            Move-Item -LiteralPath $temporaryManifestDownloadPath -Destination $SourceManifestPath -Force
+            Write-LauncherStatus "Source manifest ready."
+        } elseif (Test-ValidSourceManifestFile -Path $SourceManifestPath) {
+            Write-LauncherStatus "Source manifest download failed. Using cached manifest."
+        } else {
+            throw "Source manifest download failed and no valid cached manifest is available."
+        }
     }
     catch {
         Write-LauncherStatus "ERROR: Failed to prepare editor"
@@ -415,6 +488,9 @@ function Invoke-EditorBootstrap {
     finally {
         if ($temporaryDownloadPath -and (Test-Path -LiteralPath $temporaryDownloadPath)) {
             Remove-Item -LiteralPath $temporaryDownloadPath -Force -ErrorAction SilentlyContinue
+        }
+        if ($temporaryManifestDownloadPath -and (Test-Path -LiteralPath $temporaryManifestDownloadPath)) {
+            Remove-Item -LiteralPath $temporaryManifestDownloadPath -Force -ErrorAction SilentlyContinue
         }
     }
 
