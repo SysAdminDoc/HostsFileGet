@@ -24,7 +24,7 @@ Non-negotiables:
 - [x] F002 - CI for compile, unit tests, PowerShell parser (`.github/workflows/ci.yml`)
 - [x] F003 - PyInstaller release workflow (`.github/workflows/release.yml`, `requirements-build.txt`, `docs/release.md`)
 - [x] F004 - Code signing, checksums, SBOM, dependency advisory scan (`requirements-security.txt`, optional signing hook, release SBOM/checksum assets, CI advisory scan)
-- [ ] F005 - Versioned config schema and migrator tests
+- [x] F005 - Versioned config schema and migrator tests (`CONFIG_SCHEMA_VERSION`, `migrate_config_snapshot`, `docs/config-schema.md`)
 - [ ] F006 - External curated source manifest
 - [ ] F007 - Source health checker
 - [ ] F008 - ETag/Last-Modified cache
