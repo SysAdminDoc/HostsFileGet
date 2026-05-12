@@ -27,6 +27,7 @@ from hosts_editor import (
     STALE_WARN_HOURS,
     append_provenance_event,
     add_domain_to_whitelist_text,
+    build_accessibility_audit_report,
     build_false_positive_triage_report,
     build_entry_provenance_report,
     build_pinned_export_payload,
@@ -42,6 +43,7 @@ from hosts_editor import (
     classify_source_freshness,
     collect_recent_windows_dns_client_queries,
     collect_dns_bypass_policy_snapshot,
+    contrast_ratio,
     dns_bypass_policy_status,
     parse_pinned_import_payload,
     read_provenance_events,
@@ -73,6 +75,7 @@ from hosts_editor import (
     format_relative_time,
     format_entry_provenance_report,
     format_false_positive_triage_report,
+    format_accessibility_audit_report,
     format_source_trust_badges,
     format_source_overlap_report,
     format_dns_bypass_diagnostics,
@@ -145,6 +148,20 @@ class HostsEditorLogicTests(unittest.TestCase):
 
     def test_count_nonempty_lines_ignores_blank_rows(self):
         self.assertEqual(count_nonempty_lines("\nalpha\n \n beta \n"), 2)
+
+    def test_accessibility_contrast_audit_passes_tracked_pairs(self):
+        report = build_accessibility_audit_report()
+
+        self.assertEqual(
+            report["summary"]["passing_pairs"],
+            report["summary"]["total_pairs"],
+            format_accessibility_audit_report(report),
+        )
+        self.assertIn("Primary commands use visible text labels", "\n".join(report["assistive_tech_checks"]))
+
+    def test_contrast_ratio_matches_wcag_examples(self):
+        self.assertAlmostEqual(contrast_ratio("#000000", "#ffffff"), 21.0, places=1)
+        self.assertAlmostEqual(contrast_ratio("#777777", "#ffffff"), 4.48, places=1)
 
     def test_cleaning_deduplicates_and_whitelists_multi_entry_lines(self):
         cleaned, stats = _get_canonical_cleaned_output_and_stats(
