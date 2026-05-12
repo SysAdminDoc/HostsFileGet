@@ -141,6 +141,9 @@ python -m unittest discover -s tests -v
 - Main application: `hosts_editor.py`
 - Launcher: `PythonLauncher.ps1`
 - Regression tests: `tests/test_hosts_editor_logic.py`
+- Architecture map: `ARCHITECTURE.md`
+- Troubleshooting and hosts-file limits: `TROUBLESHOOTING.md`
+- Sourced implementation plan: `ROADMAP.md`
 - Codex handoff notes: `CODEX_CHANGELOG.md`
 
 ## License
