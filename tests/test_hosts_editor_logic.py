@@ -32,6 +32,7 @@ from hosts_editor import (
     build_accessibility_audit_report,
     build_adblock_syntax_report,
     build_false_positive_triage_report,
+    build_idn_homograph_report,
     build_i18n_catalog_report,
     build_entry_provenance_report,
     build_pinned_export_payload,
@@ -46,6 +47,7 @@ from hosts_editor import (
     check_source_health_record,
     check_source_health_records,
     classify_adblock_rule_line,
+    classify_idn_domain,
     classify_rule_tier_line,
     classify_source_freshness,
     collect_recent_windows_dns_client_queries,
@@ -107,6 +109,7 @@ from hosts_editor import (
     format_false_positive_triage_report,
     format_accessibility_audit_report,
     format_adblock_syntax_report,
+    format_idn_homograph_report,
     format_i18n_catalog_report,
     format_rule_tier_report,
     format_declarative_config_payload,
@@ -283,6 +286,43 @@ class HostsEditorLogicTests(unittest.TestCase):
         rendered = format_rule_tier_report(report)
         self.assertIn("Rule tier report", rendered)
         self.assertIn("Windows hosts files are exact hostname mappings", rendered)
+
+    def test_idn_classifier_decodes_punycode_and_flags_homographs(self):
+        homograph = classify_idn_domain("xn--pple-43d.com")
+        latin_idn = classify_idn_domain("m\u00fcnich.example")
+        latin_punycode = classify_idn_domain("xn--mnich-kva.example")
+        invalid = classify_idn_domain("xn--bad.com")
+
+        self.assertEqual(homograph["category"], "homograph-risk")
+        self.assertEqual(homograph["unicode"], "\u0430pple.com")
+        self.assertEqual(homograph["confusable_skeleton"], "apple.com")
+        self.assertIn("xn--pple-43d.com", homograph["ascii"])
+        self.assertEqual(latin_idn["category"], "idn")
+        self.assertEqual(latin_idn["ascii"], "xn--mnich-kva.example")
+        self.assertEqual(latin_punycode["category"], "punycode")
+        self.assertEqual(latin_punycode["unicode"], "m\u00fcnich.example")
+        self.assertEqual(invalid["category"], "invalid-punycode")
+
+    def test_idn_homograph_report_scans_hosts_urls_and_adblock_tokens(self):
+        lines = [
+            "0.0.0.0 xn--pple-43d.com",
+            "0.0.0.0 m\u00fcnich.example",
+            "||xn--mnich-kva.example^$important",
+            "https://xn--ypal-43d9g.com/login",
+            "# xn--ignored-9d0b.example",
+        ]
+
+        report = build_idn_homograph_report(lines)
+        self.assertEqual(report["candidate_domains"], 4)
+        self.assertEqual(report["warning_count"], 2)
+        self.assertEqual(report["counts"]["homograph-risk"], 2)
+        self.assertEqual(report["counts"]["idn"], 1)
+        self.assertEqual(report["counts"]["punycode"], 1)
+
+        rendered = format_idn_homograph_report(report)
+        self.assertIn("IDN and homograph report", rendered)
+        self.assertIn("apple.com", rendered)
+        self.assertIn("Punycode A-labels", rendered)
 
     def test_clean_stats_do_not_go_negative(self):
         stats = compute_clean_impact_stats(["example.com"], set())
@@ -1794,6 +1834,27 @@ profile:
             self.assertEqual(report["warning_count"], 3)
             self.assertEqual(report["tiers"]["wildcard"], 1)
 
+    def test_cli_idn_homograph_report_writes_review_file(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "idn.txt"
+            report_path = Path(tmpdir) / "idn-report.json"
+            input_path.write_text(
+                "0.0.0.0 xn--pple-43d.com\n"
+                "0.0.0.0 m\u00fcnich.example\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(hosts_editor, "_cli_print"):
+                self.assertEqual(hosts_editor._cli_idn_homograph_report(str(input_path), str(report_path)), 0)
+
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["candidate_domains"], 2)
+            self.assertEqual(report["warning_count"], 1)
+            self.assertEqual(report["counts"]["homograph-risk"], 1)
+
     def test_handle_cli_args_routes_integration_flags(self):
         with mock.patch.object(hosts_editor, "_cli_integration_list", return_value=0) as mocked_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--integration-list"]), 0)
@@ -1850,6 +1911,14 @@ profile:
                 0,
             )
             mocked_report.assert_called_once_with("filters.txt", "tiers.json")
+
+    def test_handle_cli_args_routes_idn_report_flags(self):
+        with mock.patch.object(hosts_editor, "_cli_idn_homograph_report", return_value=0) as mocked_report:
+            self.assertEqual(
+                hosts_editor._handle_cli_args(["--idn-report", "hosts.txt", "--idn-output", "idn.json"]),
+                0,
+            )
+            mocked_report.assert_called_once_with("hosts.txt", "idn.json")
 
     def test_sanitize_config_snapshot_rejects_non_sha256_hashes(self):
         payload = sanitize_config_snapshot(

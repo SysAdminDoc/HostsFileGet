@@ -67,6 +67,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F032 complete. Next roadmap item: F033 Regex/exact/wildcard rule tiers with hosts warnings.
 - Completed F033: added rule tier classification for exact, subdomain-scoped, wildcard, regex, path, exception, browser-only, hosts exact, and custom mapping rows; added GUI and CLI reports with JSON output, docs, and regression tests.
 - Updated `ROADMAP.md` to mark F033 complete. Next roadmap item: F034 IDN/punycode and homograph warnings.
+- Completed F034: added IDN/Punycode classification, mixed-script and small Cyrillic/Greek confusable warnings, GUI and CLI reports with JSON output, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F034 complete. Next roadmap item: F035 NRD/DGA threat feed pack.
 
 ## Scope
 
