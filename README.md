@@ -58,6 +58,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - CNAME cloaking workflow planning that separates hosts-reviewable disguised domains from DNS-only CNAME target feeds
   - encrypted-DNS bypass pack planning that separates hosts-reviewable resolver names from router/firewall handoffs
   - DNS rebinding protection checks for external-looking domains mapped to private, local, loopback, link-local, ULA, or CGNAT ranges
+  - SafeSearch and restricted-mode template plans that separate hosts-reviewable search mappings from DNS CNAME handoffs
   - false-positive triage for whitelist, pin, source-match, and upstream report decisions
   - entry provenance view for import-section ownership, source matches, and local audit events
 - Export adapters:
@@ -280,6 +281,14 @@ python hosts_editor.py --dns-rebinding-report .\hosts.txt --dns-rebinding-output
 python hosts_editor.py --dns-rebinding-report .\hosts.txt --dns-rebinding-trusted-suffix lab.example
 ```
 
+List SafeSearch/restricted-mode templates or write a local JSON plan without applying hosts or DNS changes:
+
+```powershell
+python hosts_editor.py --safesearch-template-list
+python hosts_editor.py --safesearch-template-plan google .\google-safesearch-plan.json
+python hosts_editor.py --safesearch-template-plan youtube .\youtube-restricted-plan.json
+```
+
 Run the deterministic large-file benchmark with:
 
 ```powershell
@@ -312,6 +321,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - CNAME cloaking workflow: `docs/cname-cloaking.md`
 - Encrypted DNS bypass packs: `docs/encrypted-dns-bypass.md`
 - DNS rebinding protection checks: `docs/dns-rebinding.md`
+- SafeSearch/restricted-mode templates: `docs/safesearch-restricted-mode.md`
 - Troubleshooting and hosts-file limits: `TROUBLESHOOTING.md`
 - Config schema: `docs/config-schema.md`
 - Curated source manifest: `docs/source-manifest.md`

@@ -14,6 +14,8 @@ Encrypted-DNS bypass blocking follows the same rule: HostsFileGet can plan hosts
 
 DNS rebinding protection is also advisory. HostsFileGet can report static hosts entries that map external-looking names to private, local, loopback, link-local, ULA, CGNAT, or special-use ranges, but live DNS rebinding enforcement belongs in the resolver, router, or managed endpoint policy.
 
+SafeSearch and restricted-mode templates follow the same boundary. HostsFileGet can produce reviewable hosts-line and DNS CNAME plans for Google, Bing, DuckDuckGo, and YouTube, but it does not apply parental controls, create DNS records, install browser policy, or enforce account/device controls.
+
 ## Runtime Targets
 
 - Primary OS: Windows.
@@ -71,6 +73,7 @@ DNS rebinding protection is also advisory. HostsFileGet can report static hosts 
 | `docs/cname-cloaking.md` | CNAME cloaking source packs, hosts-file limits, and DNS handoff guidance |
 | `docs/encrypted-dns-bypass.md` | Encrypted-DNS bypass source packs and router/firewall handoff guidance |
 | `docs/dns-rebinding.md` | Static DNS rebinding-sensitive hosts mapping report behavior and limits |
+| `docs/safesearch-restricted-mode.md` | SafeSearch and YouTube Restricted Mode template behavior and provider limits |
 | `docs/accessibility.md` | Contrast audit, font assumptions, and manual Windows accessibility release checks |
 | `docs/i18n.md` | String catalog schema, fallback behavior, and localization guardrails |
 | `CLAUDE.md` | Compact architecture and gotchas snapshot for agents |
@@ -138,6 +141,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - CNAME cloaking workflow planning: `list_cname_cloaking_packs`, `build_cname_cloaking_plan`, `format_cname_cloaking_catalog`, `format_cname_cloaking_plan`.
 - Encrypted-DNS bypass pack planning: `list_encrypted_dns_bypass_packs`, `build_encrypted_dns_bypass_pack_plan`, `format_encrypted_dns_bypass_catalog`, `format_encrypted_dns_bypass_pack_plan`.
 - DNS rebinding checks: `classify_dns_rebinding_mapping`, `build_dns_rebinding_report`, `format_dns_rebinding_report`.
+- SafeSearch and restricted-mode templates: `list_safesearch_templates`, `build_safesearch_template_plan`, `format_safesearch_template_catalog`, `format_safesearch_template_plan`.
 - Cleanup/export/search helpers: `remove_lines_by_indices`, `rewrite_block_sink_ip`, `scan_suspicious_redirects`, `build_export_domain_records`, `build_dns_integration_export`, `build_cloud_dns_adapter_plan`, `format_dns_integration_pack_report`, `format_cloud_dns_adapter_catalog`, `export_lines_as_format`, `export_lines_as_bytes`, `strip_lines_by_category`.
 - Source analytics: `find_sources_containing_domain`, `summarize_source_contributions`, `build_source_domain_index`, `build_source_overlap_report`, `categorize_entries_by_domain_hint`, `classify_source_freshness`.
 - Provenance and pinned-domain helpers: `append_provenance_event`, `read_provenance_events`, `build_entry_provenance_report`, `format_entry_provenance_report`, `build_pinned_export_payload`, `parse_pinned_import_payload`, `sanitize_pinned_domains`.
@@ -160,7 +164,7 @@ Primary responsibilities:
 - Backups, restore, compare, panic restore, hosts disable/enable.
 - Import UI, source catalog, custom sources, manual imports, DNS log imports, whitelist import.
 - Search, removal, find/replace, adblock quarantine, context menu commands.
-- Source reports, provenance log view, entry provenance, health scan, adblock syntax lint, rule tier report, IDN/homograph report, NRD/DGA threat feed packs, CNAME cloaking workflow, encrypted-DNS bypass packs, DNS rebinding protection check, false-positive triage, preferences, scheduler wizard.
+- Source reports, provenance log view, entry provenance, health scan, adblock syntax lint, rule tier report, IDN/homograph report, NRD/DGA threat feed packs, CNAME cloaking workflow, encrypted-DNS bypass packs, DNS rebinding protection check, SafeSearch/restricted-mode templates, false-positive triage, preferences, scheduler wizard.
 - Worker thread queue handling and safe Tk callback scheduling with `_safe_after`.
 
 `HostsFileEditor` is large enough that future refactors should split by behavior after tests are in place:
