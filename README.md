@@ -144,7 +144,7 @@ Keyboard shortcuts:
 Run the regression suite with:
 
 ```powershell
-python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py
+python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py tests\test_gui_smoke.py
 python -m unittest discover -s tests -v
 ```
 
@@ -159,6 +159,7 @@ python hosts_editor.py --source-health --source-health-output source-health-repo
 - Main application: `hosts_editor.py`
 - Launcher: `PythonLauncher.ps1`
 - Regression tests: `tests/test_hosts_editor_logic.py`
+- GUI smoke tests: `tests/test_gui_smoke.py`
 - Golden cleaned-output fixtures: `tests/golden_cleaned/`
 - Architecture map: `ARCHITECTURE.md`
 - Troubleshooting and hosts-file limits: `TROUBLESHOOTING.md`

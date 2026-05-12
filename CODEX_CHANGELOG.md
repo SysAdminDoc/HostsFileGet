@@ -37,6 +37,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F016 complete. Next roadmap item: F017 property-based parser/fuzzer tests.
 - Completed F017: added deterministic stdlib fuzz tests for parser output invariants plus cleaned-output idempotence across random batches, avoiding a Hypothesis dependency for now.
 - Updated `ROADMAP.md` to mark F017 complete. Next roadmap item: F018 GUI smoke tests.
+- Completed F018: added `tests/test_gui_smoke.py` with patched Tk startup coverage and About/Preferences modal construction smoke tests, skipping cleanly when no Tk root is available.
+- Updated `ROADMAP.md` to mark F018 complete. Next roadmap item: F019 large-file benchmark suite.
 
 ## Scope
 
