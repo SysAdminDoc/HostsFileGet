@@ -27,7 +27,9 @@ from hosts_editor import (
     add_domain_to_whitelist_text,
     build_false_positive_triage_report,
     build_pinned_export_payload,
+    build_source_domain_index,
     build_source_health_report,
+    build_source_overlap_report,
     build_source_request_headers,
     build_source_trust_badges,
     categorize_entries_by_domain_hint,
@@ -56,12 +58,14 @@ from hosts_editor import (
     parse_pihole_ftl_blocked_domains,
     summarize_source_contributions,
     export_lines_as_format,
+    extract_blocking_domains_from_lines,
     fetch_source_with_cache,
     find_keyword_match_line_indices,
     find_sources_containing_domain,
     format_relative_time,
     format_false_positive_triage_report,
     format_source_trust_badges,
+    format_source_overlap_report,
     build_schtasks_create_command,
     get_source_cache_body_path,
     looks_like_domain,
@@ -1820,6 +1824,52 @@ class HostsEditorLogicTests(unittest.TestCase):
         self.assertIn("(outside imports / manual edits)", names)
         big = next(b for b in report if b["name"] == "BigSource [Normalized]")
         self.assertEqual(big["blocking_entries"], 3)
+
+    def test_extract_blocking_domains_from_lines_skips_custom_mappings(self):
+        domains = extract_blocking_domains_from_lines([
+            "0.0.0.0 ads.example",
+            "||tracker.example^",
+            "192.168.1.10 printer.example",
+            "# 0.0.0.0 ignored.example",
+        ])
+
+        self.assertEqual(domains, {"ads.example", "tracker.example"})
+
+    def test_build_source_domain_index_reads_structured_and_legacy_corpus(self):
+        index = build_source_domain_index({
+            "https://one.example/hosts": {
+                "name": "One",
+                "url": "https://one.example/hosts",
+                "text": "0.0.0.0 a.example\n0.0.0.0 b.example\n",
+            },
+            "Legacy": "0.0.0.0 c.example\n# 0.0.0.0 ignored.example\n",
+        })
+
+        self.assertEqual(index["One"], {"a.example", "b.example"})
+        self.assertEqual(index["Legacy"], {"c.example"})
+
+    def test_build_source_overlap_report_ranks_shared_domains(self):
+        report = build_source_overlap_report({
+            "one": {"name": "One", "text": "0.0.0.0 a.example\n0.0.0.0 b.example\n0.0.0.0 c.example\n"},
+            "two": {"name": "Two", "text": "0.0.0.0 b.example\n0.0.0.0 c.example\n0.0.0.0 d.example\n"},
+            "three": {"name": "Three", "text": "0.0.0.0 z.example\n"},
+        })
+
+        self.assertEqual(report["source_count"], 3)
+        self.assertEqual(report["total_unique_domains"], 5)
+        self.assertEqual(report["domains_seen_in_multiple_sources"], 2)
+        one_row = next(row for row in report["source_rows"] if row["source"] == "One")
+        self.assertEqual(one_row["unique_domains"], 1)
+        self.assertEqual(one_row["overlap_domains"], 2)
+        top_pair = report["pairs"][0]
+        self.assertEqual((top_pair["source_a"], top_pair["source_b"]), ("One", "Two"))
+        self.assertEqual(top_pair["shared_domains"], 2)
+        self.assertEqual(top_pair["sample_domains"], ["b.example", "c.example"])
+        formatted = format_source_overlap_report(report)
+        self.assertIn("Fetched source overlap matrix", formatted)
+        self.assertIn("Top overlapping pairs", formatted)
+        self.assertIn("One", formatted)
+        self.assertIn("Two", formatted)
 
     # ---- sanitize_config_snapshot: backup_retention + first_run ----
     def test_sanitize_config_snapshot_clamps_backup_retention(self):

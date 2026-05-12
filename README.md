@@ -39,6 +39,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - source health reporting for curated feed reachability
   - ETag / Last-Modified refresh cache with cached-body fallback
   - source trust badges for transport, upstream report path, local freshness, cache integrity, and catalog/license caveats
+  - source overlap matrix for fetched feeds
   - batch import with filtering and progress
   - custom persistent sources
   - pfSense DNSBL log import
@@ -158,6 +159,7 @@ python hosts_editor.py --source-health --source-health-output source-health-repo
 - Curated source manifest: `docs/source-manifest.md`
 - Source health checks: `docs/source-health.md`
 - Source trust badges: `docs/source-trust.md`
+- Source overlap matrix: `docs/source-overlap.md`
 - False-positive triage: `docs/false-positive-triage.md`
 - Sourced implementation plan: `ROADMAP.md`
 - Release build notes: `docs/release.md`
