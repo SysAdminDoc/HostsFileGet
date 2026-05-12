@@ -143,6 +143,7 @@ python -m unittest discover -s tests -v
 - Regression tests: `tests/test_hosts_editor_logic.py`
 - Architecture map: `ARCHITECTURE.md`
 - Troubleshooting and hosts-file limits: `TROUBLESHOOTING.md`
+- Config schema: `docs/config-schema.md`
 - Sourced implementation plan: `ROADMAP.md`
 - Release build notes: `docs/release.md`
 - Codex handoff notes: `CODEX_CHANGELOG.md`

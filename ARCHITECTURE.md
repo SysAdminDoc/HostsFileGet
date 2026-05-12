@@ -135,8 +135,8 @@ Admin-required CLI actions must fail clearly when not elevated. Silent mode writ
 
 | Data | Location | Notes |
 | --- | --- | --- |
-| Primary config | `%LOCALAPPDATA%\HostsFileGet\hosts_editor_config.json` | Default per-user config |
-| Portable config | `hosts_editor_config.json` next to script/exe | Used when present |
+| Primary config | `%LOCALAPPDATA%\HostsFileGet\hosts_editor_config.json` | Default per-user config; schema documented in `docs/config-schema.md` |
+| Portable config | `hosts_editor_config.json` next to script/exe | Used when present; same schema as primary config |
 | Provenance log | Config directory JSONL sidecar | Records pin, unpin, and whitelist events |
 | CLI log | `%LOCALAPPDATA%\HostsFileGet\cli.log` | Used by `--silent` |
 | Hosts backups | Sibling of system hosts file | Rolling `.bak` plus timestamped snapshots |

@@ -13,6 +13,7 @@ import hosts_editor
 from hosts_editor import (
     AGH_BLOCK_REASONS,
     BLOCK_SINK_IPS,
+    CONFIG_SCHEMA_VERSION,
     DOMAIN_CATEGORY_RULES,
     FTL_BLOCKED_STATUS_CODES,
     HostsFileEditor,
@@ -51,6 +52,7 @@ from hosts_editor import (
     build_schtasks_create_command,
     looks_like_domain,
     looks_like_html_document,
+    migrate_config_snapshot,
     normalize_scheduler_start_time,
     normalize_line_to_hosts_entries,
     normalize_custom_source_url,
@@ -287,6 +289,54 @@ class HostsEditorLogicTests(unittest.TestCase):
         # Whitespace-padded valid hash is accepted and stripped.
         self.assertEqual(payload["last_applied_cleaned_hash"], "b" * 64)
         self.assertEqual(payload["last_open_dir"], tmpdir)
+        self.assertEqual(payload["config_version"], CONFIG_SCHEMA_VERSION)
+
+    def test_migrate_config_snapshot_stamps_current_version(self):
+        migrated = migrate_config_snapshot({"config_version": CONFIG_SCHEMA_VERSION})
+
+        self.assertEqual(migrated["config_version"], CONFIG_SCHEMA_VERSION)
+
+    def test_sanitize_config_snapshot_migrates_missing_version(self):
+        payload = sanitize_config_snapshot({"whitelist": "legacy.example"}, os.getcwd())
+
+        self.assertEqual(payload["config_version"], CONFIG_SCHEMA_VERSION)
+        self.assertEqual(payload["whitelist"], "legacy.example")
+
+    def test_sanitize_config_snapshot_normalizes_invalid_and_future_versions(self):
+        future_payload = sanitize_config_snapshot(
+            {"config_version": CONFIG_SCHEMA_VERSION + 100, "whitelist": "future.example"},
+            os.getcwd(),
+        )
+        invalid_payload = sanitize_config_snapshot(
+            {"config_version": True, "whitelist": "bool.example"},
+            os.getcwd(),
+        )
+
+        self.assertEqual(future_payload["config_version"], CONFIG_SCHEMA_VERSION)
+        self.assertEqual(future_payload["whitelist"], "future.example")
+        self.assertEqual(invalid_payload["config_version"], CONFIG_SCHEMA_VERSION)
+        self.assertEqual(invalid_payload["whitelist"], "bool.example")
+
+    def test_sanitize_config_snapshot_migrates_legacy_aliases(self):
+        stamp = datetime.datetime.now().isoformat(timespec="seconds")
+        payload = sanitize_config_snapshot(
+            {
+                "sources": [{"name": "Legacy", "url": "https://example.com/legacy.txt"}],
+                "whitelist_domains": ["keep.example", "safe.example"],
+                "last_fetched": {"https://example.com/legacy.txt": stamp},
+                "block_sink": "::1",
+            },
+            os.getcwd(),
+        )
+
+        self.assertEqual(payload["config_version"], CONFIG_SCHEMA_VERSION)
+        self.assertEqual(
+            payload["custom_sources"],
+            [{"name": "Legacy", "url": "https://example.com/legacy.txt"}],
+        )
+        self.assertEqual(payload["whitelist"], "keep.example\nsafe.example")
+        self.assertEqual(payload["source_last_fetched"], {"https://example.com/legacy.txt": stamp})
+        self.assertEqual(payload["preferred_block_sink"], "::1")
 
     def test_sanitize_config_snapshot_rejects_non_sha256_hashes(self):
         payload = sanitize_config_snapshot(

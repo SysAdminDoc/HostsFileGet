@@ -31,6 +31,7 @@ import glob
 APP_NAME = "Hosts File Get"
 APP_SLUG = "HostsFileGet"
 APP_VERSION = "2.17.0"
+CONFIG_SCHEMA_VERSION = 1
 ELEVATION_ATTEMPT_FLAG = "--hostsfileget-elevation-attempted"
 
 # Hard cap for any single downloaded feed/whitelist payload (50 MB decompressed).
@@ -1568,7 +1569,48 @@ def sanitize_custom_sources(custom_sources) -> list[dict[str, str]]:
 
     return sanitized_sources
 
+def _coerce_config_schema_version(value) -> int:
+    if isinstance(value, bool):
+        return 0
+    try:
+        version = int(value)
+    except (TypeError, ValueError):
+        return 0
+    if version < 0 or version > CONFIG_SCHEMA_VERSION:
+        return 0
+    return version
+
+
+def migrate_config_snapshot(config) -> dict:
+    """Return a config payload upgraded to the current schema shape.
+
+    Older builds did not write an explicit schema version. This migration layer
+    keeps the sanitizer as the single gate for persisted config while giving
+    future changes a stable place to translate renamed keys.
+    """
+    if not isinstance(config, dict):
+        config = {}
+
+    migrated = dict(config)
+    source_version = _coerce_config_schema_version(migrated.get("config_version", 0))
+
+    if source_version == 0:
+        legacy_aliases = {
+            "sources": "custom_sources",
+            "whitelist_domains": "whitelist",
+            "last_fetched": "source_last_fetched",
+            "block_sink": "preferred_block_sink",
+        }
+        for legacy_key, current_key in legacy_aliases.items():
+            if current_key not in migrated and legacy_key in migrated:
+                migrated[current_key] = migrated[legacy_key]
+
+    migrated["config_version"] = CONFIG_SCHEMA_VERSION
+    return migrated
+
+
 def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
+    config = migrate_config_snapshot(config)
     if not isinstance(config, dict):
         config = {}
 
@@ -1636,6 +1678,7 @@ def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
     has_completed_first_run = bool(config.get("has_completed_first_run", False))
 
     return {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "whitelist": whitelist_text,
         "custom_sources": sanitize_custom_sources(config.get("custom_sources", [])),
         "last_applied_raw_hash": _normalize_hash(config.get("last_applied_raw_hash")),
@@ -4691,6 +4734,7 @@ class HostsFileEditor:
             whitelist_text = self._last_saved_whitelist_text or ""
 
         config = sanitize_config_snapshot({
+            "config_version": CONFIG_SCHEMA_VERSION,
             "whitelist": whitelist_text,
             "custom_sources": self.custom_sources,
             "last_applied_raw_hash": self._last_applied_raw_hash,
@@ -8695,5 +8739,3 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = HostsFileEditor(root)
     root.mainloop()
-
-

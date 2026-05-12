@@ -270,6 +270,26 @@ The Codex pass added keyboard shortcuts (`Ctrl+F`, `Ctrl+S`, `Ctrl+Shift+S`, `F5
 
 - F005: version the config schema and add migrator tests around persisted config compatibility.
 
+## Autonomous Roadmap Progress — 2026-05-12 Config Schema
+
+### Completed
+
+- F005: Added `CONFIG_SCHEMA_VERSION = 1` and `migrate_config_snapshot(...)` so persisted configs have an explicit version and legacy aliases have a single upgrade point before sanitation.
+- `sanitize_config_snapshot(...)` now stamps `config_version` into every sanitized payload.
+- `save_config(...)` includes the current schema version before sanitation, keeping fresh saves explicit.
+- Added `docs/config-schema.md` documenting the current JSON schema, legacy aliases, and compatibility rules.
+- Updated `README.md`, `ARCHITECTURE.md`, and `ROADMAP.md` to reference the config schema work and mark F005 complete.
+- Added regression tests for current schema stamping, missing-version migration, invalid/future version normalization, and legacy alias migration.
+
+### Validation
+
+- `python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py`
+- `python -m unittest discover -s tests -v`
+
+### Next
+
+- F006: externalize the curated source catalog into a validated manifest.
+
 ## Codex Follow-Up — 2026-04-15
 
 ### Additional hardening completed
