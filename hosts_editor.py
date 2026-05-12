@@ -1260,6 +1260,16 @@ COMMENT_PREFIXES = ('#', '!', '[')
 LOCAL_DOMAINS = {'localhost', 'localhost.localdomain', '::1'}
 HOST_LABEL_REGEX = re.compile(r'^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$')
 STANDARD_BLOCKING_IPS = {"0.0.0.0", "127.0.0.1", "::1"}
+ADBLOCK_COSMETIC_MARKERS = (
+    ("#@%#", "scriptlet exception"),
+    ("#%#", "scriptlet"),
+    ("#@?#", "extended cosmetic exception"),
+    ("#?#", "extended cosmetic"),
+    ("#@#", "cosmetic exception"),
+    ("#$#", "CSS injection"),
+    ("##", "cosmetic"),
+)
+ADBLOCK_QUARANTINE_COMMENT_PREFIX = "# HostsFileGet quarantined browser-only rule:"
 
 def looks_like_domain(token: str, allow_single_label: bool = False) -> bool:
     if len(token) > 253: return False
@@ -1338,10 +1348,152 @@ def _extract_domain_from_token(token: str, allow_single_label: bool = False) -> 
 
     return domain, transformed
 
+
+def _find_adblock_cosmetic_marker(stripped: str) -> tuple[str, str] | None:
+    matches = []
+    for marker, label in ADBLOCK_COSMETIC_MARKERS:
+        index = stripped.find(marker)
+        if index >= 0:
+            matches.append((index, -len(marker), marker, label))
+    if not matches:
+        return None
+    _, _, marker, label = sorted(matches)[0]
+    return marker, label
+
+
+def _adblock_pattern_has_url_path(pattern: str) -> bool:
+    candidate = pattern.strip().strip("|")
+    if not candidate:
+        return False
+    if candidate.lower().startswith(("http://", "https://", "ftp://")):
+        try:
+            parsed = urllib.parse.urlsplit(candidate)
+        except ValueError:
+            return False
+        return bool(parsed.hostname and parsed.path and parsed.path != "/")
+    host_mask = candidate.split("^", 1)[0]
+    return "/" in host_mask
+
+
+def classify_adblock_rule_line(line: str) -> dict:
+    """Classify a line by how safely it can be represented in a hosts file."""
+    stripped = (line or "").strip()
+    result = {
+        "line": line,
+        "category": "blank",
+        "severity": "info",
+        "dns_compatible": False,
+        "quarantine": False,
+        "domain": None,
+        "normalized": None,
+        "reason": "Blank line.",
+    }
+    if not stripped:
+        return result
+
+    if stripped.startswith(ADBLOCK_QUARANTINE_COMMENT_PREFIX):
+        result.update({
+            "category": "quarantine-comment",
+            "reason": "Already marked as a HostsFileGet quarantine comment.",
+        })
+        return result
+
+    cosmetic_marker = _find_adblock_cosmetic_marker(stripped)
+    if cosmetic_marker:
+        marker, label = cosmetic_marker
+        result.update({
+            "category": "browser-only",
+            "severity": "warning",
+            "quarantine": True,
+            "reason": f"Browser-only {label} rule uses {marker}; hosts files cannot hide page elements or run scriptlets.",
+        })
+        return result
+
+    if _is_comment_line(stripped):
+        result.update({"category": "comment", "reason": "Comment or metadata line."})
+        return result
+
+    if stripped.startswith("@@"):
+        result.update({
+            "category": "exception",
+            "severity": "warning",
+            "quarantine": True,
+            "reason": "Adblock exception/allow rules cannot be represented as blocking hosts entries.",
+        })
+        return result
+
+    pattern = stripped.split("$", 1)[0].strip()
+    if pattern.startswith("||") and _adblock_pattern_has_url_path(pattern[2:]):
+        result.update({
+            "category": "path-network",
+            "severity": "warning",
+            "quarantine": True,
+            "reason": "Path-level network filter would over-block if reduced to a hosts domain.",
+        })
+        return result
+    if pattern.startswith("|") and _adblock_pattern_has_url_path(pattern):
+        result.update({
+            "category": "path-network",
+            "severity": "warning",
+            "quarantine": True,
+            "reason": "URL-anchored network filter has path semantics that hosts files cannot express.",
+        })
+        return result
+
+    if pattern.startswith("/") and pattern.endswith("/") and len(pattern) > 2:
+        result.update({
+            "category": "regex",
+            "severity": "warning",
+            "quarantine": True,
+            "reason": "Regex filter can be DNS-provider syntax, but hosts files cannot represent regex matching.",
+        })
+        return result
+
+    domain, transformed = _extract_domain_from_token(stripped, allow_single_label=False)
+    if domain:
+        category = "adblock-dns" if transformed or stripped.startswith(("||", "|")) or "$" in stripped else "domain"
+        result.update({
+            "category": category,
+            "dns_compatible": True,
+            "domain": domain,
+            "normalized": f"0.0.0.0 {domain}",
+            "reason": "Exact or hostname-scoped rule can be represented as a hosts entry.",
+        })
+        return result
+
+    tokens = [token for token in TOKEN_SPLITTER.split(stripped.split("#", 1)[0].strip()) if token]
+    if tokens and _looks_like_ip_token(tokens[0]):
+        domains = []
+        for token in tokens[1:]:
+            token_domain, _ = _extract_domain_from_token(token, allow_single_label=True)
+            if token_domain:
+                domains.append(token_domain)
+        if domains:
+            result.update({
+                "category": "hosts",
+                "dns_compatible": True,
+                "domain": domains[0],
+                "normalized": f"{_normalize_mapping_ip(tokens[0])[0]} {domains[0]}",
+                "reason": "Hosts-style mapping can be represented directly.",
+            })
+            return result
+
+    result.update({
+        "category": "invalid",
+        "severity": "warning",
+        "quarantine": True,
+        "reason": "Line is not a valid hosts entry or exact DNS-compatible filter rule.",
+    })
+    return result
+
 def parse_hosts_line_entries(line: str) -> tuple[list[tuple[str, str, bool]], bool]:
     stripped = line.strip()
     if not stripped or _is_comment_line(stripped):
         return [], False
+
+    lint = classify_adblock_rule_line(line)
+    if lint.get("quarantine"):
+        return [], True
 
     processed = stripped.split('#', 1)[0].strip()
     if not processed:
@@ -1391,6 +1543,97 @@ def normalize_line_to_hosts_entry(line: str) -> tuple[str | None, str | None, bo
     if normalized_entries:
         return normalized_entries[0], domains[0], transformed
     return None, None, False
+
+
+def build_adblock_syntax_report(lines: list[str], max_findings: int = 50) -> dict:
+    counts: dict[str, int] = {}
+    findings: list[dict] = []
+    dns_compatible = 0
+    quarantined = 0
+    for index, line in enumerate(lines, start=1):
+        classification = classify_adblock_rule_line(line)
+        category = classification["category"]
+        counts[category] = counts.get(category, 0) + 1
+        if classification.get("dns_compatible"):
+            dns_compatible += 1
+        if classification.get("quarantine"):
+            quarantined += 1
+            if len(findings) < max_findings:
+                findings.append({
+                    "line_number": index,
+                    "category": category,
+                    "reason": classification["reason"],
+                    "line": line,
+                    "domain": classification.get("domain"),
+                })
+    return {
+        "schema": "hostsfileget.adblock-syntax-report.v1",
+        "total_lines": len(lines),
+        "dns_compatible": dns_compatible,
+        "quarantined": quarantined,
+        "counts": counts,
+        "findings": findings,
+        "finding_limit": max_findings,
+        "truncated_findings": max(0, quarantined - len(findings)),
+        "warnings": [
+            "Browser cosmetic, scriptlet, exception, regex, and path-level adblock rules are not hosts-file entries.",
+            "Path-level rules are quarantined because reducing them to a domain can over-block unrelated content.",
+            "DNS-compatible adblock domain rules can be normalized to exact hosts entries, but provider-only modifiers are stripped.",
+        ],
+    }
+
+
+def format_adblock_syntax_report(report: dict) -> str:
+    counts = report.get("counts") or {}
+    lines = [
+        "Adblock syntax lint",
+        f"Lines: {int(report.get('total_lines') or 0):,}",
+        f"DNS-compatible / hosts-compatible: {int(report.get('dns_compatible') or 0):,}",
+        f"Quarantined candidates: {int(report.get('quarantined') or 0):,}",
+        "",
+        "Counts:",
+    ]
+    for category in sorted(counts):
+        lines.append(f"- {category}: {int(counts[category]):,}")
+    lines.extend(["", "Warnings:"])
+    for warning in report.get("warnings") or []:
+        lines.append(f"- {warning}")
+    findings = report.get("findings") or []
+    if findings:
+        lines.extend(["", "Findings:"])
+        for finding in findings:
+            line_preview = str(finding.get("line") or "").strip()
+            if len(line_preview) > 140:
+                line_preview = line_preview[:137] + "..."
+            lines.append(
+                f"- Line {finding.get('line_number')}: {finding.get('category')} - "
+                f"{finding.get('reason')} [{line_preview}]"
+            )
+        truncated = int(report.get("truncated_findings") or 0)
+        if truncated:
+            lines.append(f"- ... {truncated:,} additional finding(s) omitted.")
+    else:
+        lines.extend(["", "Findings: none"])
+    return "\n".join(lines)
+
+
+def quarantine_adblock_rule_lines(lines: list[str]) -> tuple[list[str], dict]:
+    quarantined_lines: list[str] = []
+    changed = 0
+    report = build_adblock_syntax_report(lines)
+    for line in lines:
+        classification = classify_adblock_rule_line(line)
+        if classification.get("quarantine"):
+            stripped = line.strip()
+            if stripped.startswith(ADBLOCK_QUARANTINE_COMMENT_PREFIX):
+                quarantined_lines.append(line)
+                continue
+            quarantined_lines.append(f"{ADBLOCK_QUARANTINE_COMMENT_PREFIX} {stripped}")
+            changed += 1
+        else:
+            quarantined_lines.append(line)
+    report["changed_lines"] = changed
+    return quarantined_lines, report
 
 # -------------------------------- Canonical Output Builder -----------------------------------
 
@@ -8088,6 +8331,7 @@ class HostsFileEditor:
         cleanup_menu.add_command(label="Remove Comments Only", command=self.cleanup_comments_only)
         cleanup_menu.add_command(label="Remove Blank Lines Only", command=self.cleanup_blanks_only)
         cleanup_menu.add_command(label="Remove Invalid Lines Only", command=self.cleanup_invalid_only)
+        cleanup_menu.add_command(label="Quarantine Browser-Only Adblock Rules...", command=self.quarantine_adblock_rules)
         cleanup_menu.add_separator()
         cleanup_menu.add_command(label="Remove Import Section...", command=self.show_remove_import_section)
         tools_menu.add_cascade(label="Targeted Cleanup", menu=cleanup_menu)
@@ -8095,6 +8339,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="Check Domain...", command=self.show_check_domain)
         tools_menu.add_command(label="Entry Provenance...", command=self.show_entry_provenance_panel)
         tools_menu.add_command(label="Hosts Health Scan...", command=self.show_health_scan)
+        tools_menu.add_command(label="Adblock Syntax Lint...", command=self.show_adblock_syntax_lint)
         tools_menu.add_command(label="DNS Bypass Diagnostics...", command=self.show_dns_bypass_diagnostics)
         tools_menu.add_command(label="DNS Interoperability Pack...", command=self.show_dns_integration_pack)
         tools_menu.add_command(label="Cloud DNS Adapters...", command=self.show_cloud_dns_adapters)
@@ -9076,6 +9321,17 @@ class HostsFileEditor:
             tone="warning" if policy_snapshot else "info",
             width=860,
             height=620,
+        )
+
+    def show_adblock_syntax_lint(self):
+        report = build_adblock_syntax_report(self.get_lines())
+        self._show_text_report_dialog(
+            "Adblock syntax lint",
+            "Find browser-only adblock rules that hosts files cannot safely represent.",
+            format_adblock_syntax_report(report),
+            tone="warning" if report["quarantined"] else "info",
+            width=920,
+            height=680,
         )
 
     def show_dns_integration_pack(self):
@@ -10286,6 +10542,29 @@ class HostsFileEditor:
 
     def cleanup_invalid_only(self):
         self._granular_cleanup(drop_invalid=True, label="Remove Invalid Lines")
+
+    def quarantine_adblock_rules(self):
+        if self._block_during_import("Quarantine Adblock Rules"):
+            return
+        original = self.get_lines()
+        quarantined, report = quarantine_adblock_rule_lines(original)
+        changed = int(report.get("changed_lines") or 0)
+        if changed == 0:
+            self.update_status("Adblock quarantine: no browser-only or unsafe adblock rules found.")
+            return
+
+        def apply_to_editor(approved_lines):
+            self.set_text(approved_lines)
+            self.update_status(f"Adblock quarantine: commented {changed:,} browser-only or unsafe rule(s).")
+
+        PreviewWindow(
+            self,
+            original,
+            quarantined,
+            title="Preview: Quarantine Browser-Only Adblock Rules",
+            on_apply_callback=apply_to_editor,
+            apply_label="Apply Quarantine",
+        )
 
     # ----------------------------- Kill Import Section -----------------------
     def show_remove_import_section(self):
@@ -13289,6 +13568,42 @@ def _cli_cloud_log_import(provider: str, input_path: str, output_path: str) -> i
     return 0
 
 
+def _cli_adblock_lint(input_path: str, output_path: str | None = None) -> int:
+    try:
+        lines = read_text_file_lines(input_path)
+        report = build_adblock_syntax_report(lines)
+        if output_path:
+            output_dir = os.path.dirname(os.path.abspath(output_path))
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+            write_text_file_atomic(output_path, json.dumps(report, indent=2))
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Adblock syntax lint failed: {exc}")
+        return 2
+    _cli_print(format_adblock_syntax_report(report))
+    if output_path:
+        _cli_print(f"Wrote adblock syntax report to {output_path}")
+    return 1 if report.get("quarantined") else 0
+
+
+def _cli_adblock_quarantine(input_path: str, output_path: str) -> int:
+    try:
+        lines = read_text_file_lines(input_path)
+        quarantined, report = quarantine_adblock_rule_lines(lines)
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        write_text_file_atomic(output_path, "\n".join(quarantined))
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Adblock quarantine failed: {exc}")
+        return 2
+    _cli_print(
+        f"Quarantined {int(report.get('changed_lines') or 0):,} browser-only or unsafe adblock rule(s) "
+        f"to {output_path}"
+    )
+    return 0
+
+
 def _cli_activity_report(output_path: str | None) -> int:
     report = build_scheduler_activity_report()
     _cli_print(format_scheduler_activity_report(report))
@@ -13554,6 +13869,9 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--cloud-adapter-plan",
         "--cloud-profile-id",
         "--cloud-log-import",
+        "--adblock-lint",
+        "--adblock-lint-output",
+        "--adblock-quarantine",
         "--source-health",
         "--source-health-output",
         "--source-health-timeout",
@@ -13578,6 +13896,9 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--cloud-adapter-plan=",
         "--cloud-profile-id=",
         "--cloud-log-import=",
+        "--adblock-lint=",
+        "--adblock-lint-output=",
+        "--adblock-quarantine=",
         "--source-health-output=",
         "--source-health-timeout=",
         "--source-health-workers=",
@@ -13630,6 +13951,14 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         nargs=3,
         metavar=("PROVIDER", "INPUT", "OUTPUT"),
         help="Extract blocked domains from a NextDNS or Control D CSV log export into OUTPUT.",
+    )
+    parser.add_argument("--adblock-lint", metavar="INPUT", help="Lint INPUT for browser-only or unsafe adblock rules without launching the GUI.")
+    parser.add_argument("--adblock-lint-output", metavar="PATH", help="Write the detailed adblock syntax lint JSON report to PATH.")
+    parser.add_argument(
+        "--adblock-quarantine",
+        nargs=2,
+        metavar=("INPUT", "OUTPUT"),
+        help="Comment browser-only or unsafe adblock rules from INPUT into OUTPUT for review.",
     )
     parser.add_argument("--source-health", action="store_true", help="Check curated source reachability and print a summary without launching the GUI.")
     parser.add_argument("--source-health-output", metavar="PATH", help="Write detailed source-health JSON to PATH.")
@@ -13710,6 +14039,12 @@ def _handle_cli_args(argv: list[str]) -> int | None:
             args.cloud_log_import[1],
             args.cloud_log_import[2],
         )
+    if args.adblock_lint or args.adblock_lint_output:
+        if not args.adblock_lint:
+            parser.error("--adblock-lint-output requires --adblock-lint INPUT")
+        return _cli_adblock_lint(args.adblock_lint, args.adblock_lint_output)
+    if args.adblock_quarantine:
+        return _cli_adblock_quarantine(args.adblock_quarantine[0], args.adblock_quarantine[1])
     if args.source_health:
         return _cli_source_health(
             args.source_health_output,
