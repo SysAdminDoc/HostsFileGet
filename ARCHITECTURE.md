@@ -54,6 +54,7 @@ It is not a DNS server, browser ad blocker, cloud filtering service, or endpoint
 | `docs/declarative-config.md` | YAML/TOML/JSON profile source-of-truth CLI behavior |
 | `docs/cli-profiles.md` | CLI profile list/import/apply/export behavior |
 | `docs/git-history.md` | Optional local Git-backed hosts snapshot and restore behavior |
+| `docs/scheduler-activity.md` | Scheduled-update silent logging and activity report behavior |
 | `docs/accessibility.md` | Contrast audit, font assumptions, and manual Windows accessibility release checks |
 | `docs/i18n.md` | String catalog schema, fallback behavior, and localization guardrails |
 | `CLAUDE.md` | Compact architecture and gotchas snapshot for agents |
@@ -100,6 +101,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Hosts parsing and normalization: `parse_hosts_line_entries`, `normalize_line_to_hosts_entries`, `_get_canonical_cleaned_output_and_stats`, `compute_clean_impact_stats`.
 - File IO helpers: `decode_text_bytes`, `read_text_file_lines`, `write_text_file_atomic`.
 - Optional Git history helpers: `write_git_history_snapshot`, `list_git_history_snapshots`, `read_git_history_snapshot`, `build_git_history_status_report`.
+- Scheduler activity helpers: `build_scheduler_update_command`, `query_scheduled_task_status`, `append_cli_activity_event`, `build_scheduler_activity_report`, `format_scheduler_activity_report`.
 - Transactional hosts enable/disable helpers: `disable_hosts_file_transactionally`, `enable_hosts_file_transactionally`.
 - Download guards: `read_http_body_limited`, `decode_downloaded_lines`, `looks_like_html_document`.
 - Config sanitation and declarative profiles: `sanitize_custom_sources`, `sanitize_config_snapshot`, `sanitize_profile_snapshot`, `sanitize_profiles_snapshot`, `update_active_profile_snapshot`, `parse_declarative_config_text`, `format_declarative_config_payload`, `upsert_profile_in_config`, `set_active_profile_in_config`, `apply_declarative_profile_to_config`, `resolve_saved_state_hashes`.
@@ -169,10 +171,11 @@ The CLI functions live near the bottom of `hosts_editor.py` and intentionally sh
 - `_cli_history_status`
 - `_cli_history_snapshot`
 - `_cli_history_restore`
+- `_cli_activity_report`
 - `_cli_source_health`
 - `_handle_cli_args`
 
-Admin-required CLI actions must fail clearly when not elevated. Source health checks are read-only and do not require elevation. Silent mode writes progress to the local CLI log instead of producing noisy scheduler output.
+Admin-required CLI actions must fail clearly when not elevated. Source health checks and activity reports are read-only and do not require elevation. Silent mode writes progress to the local CLI log and structured activity JSONL instead of producing noisy scheduler output.
 
 ## Data And State Files
 
@@ -185,6 +188,7 @@ Admin-required CLI actions must fail clearly when not elevated. Source health ch
 | Source response cache | `source_cache\*.bin` beside the active config location | Raw source bodies keyed by normalized URL hash, verified by `source_cache_metadata` |
 | Provenance log | Config directory JSONL sidecar | Records pin, unpin, and whitelist events |
 | CLI log | `%LOCALAPPDATA%\HostsFileGet\cli.log` | Used by `--silent` |
+| CLI activity log | `%LOCALAPPDATA%\HostsFileGet\cli-activity.jsonl` | Bounded structured records for silent scheduled updates |
 | Hosts backups | Sibling of system hosts file | Rolling `.bak` plus timestamped snapshots |
 | Disabled marker | `hosts.disabled` sibling | Preserves real hosts while disabled |
 
