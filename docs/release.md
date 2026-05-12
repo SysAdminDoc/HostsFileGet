@@ -6,6 +6,7 @@ HostsFileGet release builds are Windows-only until the roadmap explicitly adds a
 
 - Python: pinned by workflow to Python 3.12.
 - Build dependencies: `requirements-build.txt`.
+- Security tooling: `requirements-security.txt`.
 - PyInstaller spec: `HostsFileGet.spec`.
 - Application entry point: `hosts_editor.py`.
 - Launcher script: `PythonLauncher.ps1`.
@@ -17,8 +18,10 @@ Run from the repository root:
 ```powershell
 python -m pip install --upgrade pip
 python -m pip install -r requirements-build.txt
+python -m pip install -r requirements-security.txt
 python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py
 python -m unittest discover -s tests -v
+python -m pip_audit -r requirements-build.txt --strict
 
 $tokens = $null
 $errors = $null
@@ -31,12 +34,14 @@ if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; 
 
 python -m PyInstaller --clean --noconfirm HostsFileGet.spec
 Get-FileHash -Algorithm SHA256 dist\HostsFileGet.exe
+python -m pip_audit -r requirements-build.txt --strict --format cyclonedx-json --output dist\HostsFileGet.sbom.cdx.json
 ```
 
 Expected output:
 
 - `dist\HostsFileGet.exe`
-- SHA-256 checksum for the executable
+- `dist\HostsFileGet.exe.sha256`
+- `dist\HostsFileGet.sbom.cdx.json`
 
 ## GitHub Actions
 
@@ -54,11 +59,24 @@ The workflow:
 3. Installs pinned build dependencies from `requirements-build.txt`.
 4. Compiles Python sources.
 5. Runs unit tests.
-6. Parses `PythonLauncher.ps1`.
-7. Builds `dist\HostsFileGet.exe` with PyInstaller.
-8. Writes `dist\HostsFileGet.exe.sha256`.
-9. Uploads both files as workflow artifacts.
-10. On tag builds, creates or updates the matching GitHub release assets.
+6. Audits pinned build dependencies.
+7. Parses `PythonLauncher.ps1`.
+8. Builds `dist\HostsFileGet.exe` with PyInstaller.
+9. Signs the executable when signing secrets are configured.
+10. Records Authenticode signature status.
+11. Writes `dist\HostsFileGet.exe.sha256`.
+12. Writes `dist\HostsFileGet.sbom.cdx.json`.
+13. Uploads release files as workflow artifacts.
+14. On tag builds, creates or updates the matching GitHub release assets.
+
+## Code Signing
+
+The workflow supports Authenticode signing when these GitHub Actions secrets exist:
+
+- `WINDOWS_SIGNING_CERTIFICATE_PFX_BASE64`: base64-encoded PFX certificate.
+- `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`: PFX password.
+
+If `WINDOWS_SIGNING_CERTIFICATE_PFX_BASE64` is absent, the workflow leaves `HostsFileGet.exe` unsigned and prints that status. This keeps unsigned local/community builds explicit while allowing the same workflow to sign official releases after a certificate is available.
 
 ## Release Checklist
 
@@ -74,10 +92,7 @@ After the workflow completes:
 
 - Download the artifact or release asset.
 - Verify the SHA-256 checksum.
+- Review the SBOM and dependency audit output.
 - Launch the executable on Windows.
 - Confirm UAC elevation appears for real hosts-file writes.
 - Confirm Help/About displays the expected version.
-
-## Signing
-
-The current workflow does not sign `HostsFileGet.exe`. Code signing is tracked separately as F004 because it requires certificate procurement and release-key handling.

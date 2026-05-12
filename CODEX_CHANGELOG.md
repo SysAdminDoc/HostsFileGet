@@ -247,6 +247,29 @@ The Codex pass added keyboard shortcuts (`Ctrl+F`, `Ctrl+S`, `Ctrl+Shift+S`, `F5
 
 - F004: add checksum/SBOM/advisory scanning and document the code-signing boundary.
 
+## Autonomous Roadmap Progress — 2026-05-12 Release Security
+
+### Completed
+
+- F004: Added `requirements-security.txt` pinning `pip-audit`.
+- Updated CI to install security tooling and audit `requirements-build.txt`.
+- Updated the release workflow to install security tooling, optionally Authenticode-sign `dist\HostsFileGet.exe` when signing secrets are configured, record Authenticode status, generate `dist\HostsFileGet.exe.sha256`, generate `dist\HostsFileGet.sbom.cdx.json`, and publish the SBOM with release artifacts.
+- Updated `docs/release.md` with local audit/SBOM commands, required signing secrets, unsigned-build behavior, and release review steps.
+- Updated `ROADMAP.md` to mark F004 complete.
+
+### Validation
+
+- `python -m pip install pip-audit==2.10.0`
+- `python -m pip_audit -r requirements-build.txt --strict --format cyclonedx-json --output build\pip-audit-sbom.test.json`
+- `python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py`
+- `python -m unittest discover -s tests -v`
+- PowerShell parser validation for `PythonLauncher.ps1`
+- `python -m PyInstaller --clean --noconfirm HostsFileGet.spec`
+
+### Next
+
+- F005: version the config schema and add migrator tests around persisted config compatibility.
+
 ## Codex Follow-Up — 2026-04-15
 
 ### Additional hardening completed
