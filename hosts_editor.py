@@ -4635,6 +4635,54 @@ DNS_INTEGRATION_PACK_ALIASES = {
     "technitium-dns-server": "technitium",
     "blocky-dns": "blocky",
 }
+CLOUD_DNS_ADAPTER_WARNINGS = (
+    "Plan-only: HostsFileGet does not store API keys or execute cloud DNS writes.",
+    "Review provider quotas and profile scope before replaying generated requests.",
+    "Logs can expose browsing history; imported CSV files stay local to this machine.",
+)
+CLOUD_DNS_ADAPTERS = (
+    {
+        "id": "nextdns-denylist",
+        "provider": "NextDNS",
+        "operation": "denylist.add",
+        "request_shape": "one POST per domain",
+        "auth": "X-Api-Key header",
+        "source_url": "https://nextdns.github.io/api/",
+    },
+    {
+        "id": "nextdns-allowlist",
+        "provider": "NextDNS",
+        "operation": "allowlist.add",
+        "request_shape": "one POST per domain",
+        "auth": "X-Api-Key header",
+        "source_url": "https://nextdns.github.io/api/",
+    },
+    {
+        "id": "controld-block-rules",
+        "provider": "Control D",
+        "operation": "custom-rules.block",
+        "request_shape": "one bulk POST with hostnames[]",
+        "auth": "Authorization: Bearer header",
+        "source_url": "https://docs.controld.com/reference/post_profiles-profile-id-rules",
+    },
+)
+CLOUD_DNS_ADAPTER_ALIASES = {
+    "nextdns": "nextdns-denylist",
+    "nextdns-block": "nextdns-denylist",
+    "nextdns-deny": "nextdns-denylist",
+    "nextdns-deny-list": "nextdns-denylist",
+    "nextdns-allow": "nextdns-allowlist",
+    "control-d": "controld-block-rules",
+    "controld": "controld-block-rules",
+    "controld-block": "controld-block-rules",
+    "control-d-block": "controld-block-rules",
+}
+CLOUD_DNS_LOG_IMPORT_ALIASES = {
+    "nextdns": "nextdns",
+    "next-dns": "nextdns",
+    "control-d": "controld",
+    "controld": "controld",
+}
 
 
 def normalize_export_format(export_format: str) -> str:
@@ -4752,6 +4800,191 @@ def format_dns_integration_export_summary(export_report: dict, output_path: str 
     for warning in export_report.get("warnings") or DNS_INTEGRATION_PACK_WARNINGS:
         lines.append(f"- {warning}")
     return "\n".join(lines)
+
+
+def _csv_field_map(fieldnames: list[str] | None) -> dict[str, str]:
+    return {
+        (fieldname or "").strip().lstrip("\ufeff").lower(): fieldname
+        for fieldname in (fieldnames or [])
+        if (fieldname or "").strip()
+    }
+
+
+def _normalized_import_domain(value: str | None) -> str | None:
+    candidate = (value or "").strip()
+    if not candidate:
+        return None
+    domain, _ = _extract_domain_from_token(candidate)
+    if not domain:
+        return None
+    domain = domain.rstrip(".").lower()
+    return domain if looks_like_domain(domain) else None
+
+
+def _append_unique_domain(target: list[str], seen: set[str], value: str | None) -> None:
+    domain = _normalized_import_domain(value)
+    if domain and domain not in seen:
+        seen.add(domain)
+        target.append(domain)
+
+
+def parse_nextdns_log_csv(text: str) -> list[str]:
+    """Extract blocked domains from a NextDNS downloaded query-log CSV."""
+    content = (text or "").strip()
+    if not content:
+        return []
+    reader = csv.DictReader(io.StringIO(content))
+    fields = _csv_field_map(reader.fieldnames)
+    if "domain" not in fields or "status" not in fields:
+        raise ValueError("Missing required NextDNS CSV columns ('domain', 'status').")
+
+    domains: list[str] = []
+    seen: set[str] = set()
+    domain_key = fields["domain"]
+    status_key = fields["status"]
+    for row in reader:
+        if (row.get(status_key) or "").strip().lower() == "blocked":
+            _append_unique_domain(domains, seen, row.get(domain_key))
+    return domains
+
+
+def parse_controld_activity_csv(text: str) -> list[str]:
+    """Extract blocked domains from Control D activity-log CSV exports."""
+    content = (text or "").strip()
+    if not content:
+        return []
+    reader = csv.DictReader(io.StringIO(content))
+    fields = _csv_field_map(reader.fieldnames)
+    domain_key = fields.get("question") or fields.get("query")
+    action_key = fields.get("action") or fields.get("controld_action")
+    if not domain_key or not action_key:
+        raise ValueError("Missing required Control D CSV columns ('question'/'query', 'action'/'controld_action').")
+
+    domains: list[str] = []
+    seen: set[str] = set()
+    for row in reader:
+        action = (row.get(action_key) or "").strip().lower()
+        if action in {"0", "block", "blocked"}:
+            _append_unique_domain(domains, seen, row.get(domain_key))
+    return domains
+
+
+def normalize_cloud_dns_adapter_id(adapter_id: str) -> str:
+    normalized = (adapter_id or "").strip().lower().replace("_", "-")
+    return CLOUD_DNS_ADAPTER_ALIASES.get(normalized, normalized)
+
+
+def list_cloud_dns_adapters() -> list[dict[str, str]]:
+    return [dict(adapter) for adapter in CLOUD_DNS_ADAPTERS]
+
+
+def find_cloud_dns_adapter(adapter_id: str) -> dict[str, str]:
+    normalized = normalize_cloud_dns_adapter_id(adapter_id)
+    for adapter in CLOUD_DNS_ADAPTERS:
+        if adapter["id"] == normalized:
+            return dict(adapter)
+    known = ", ".join(adapter["id"] for adapter in CLOUD_DNS_ADAPTERS)
+    raise ValueError(f"Unknown cloud DNS adapter: {adapter_id!r}. Known adapters: {known}")
+
+
+def build_cloud_dns_adapter_plan(
+    lines: list[str],
+    adapter_id: str,
+    profile_id: str = "PROFILE_ID",
+) -> dict:
+    adapter = find_cloud_dns_adapter(adapter_id)
+    records = build_export_domain_records(lines)
+    domains = [record["domain"] for record in records]
+    profile = (profile_id or "PROFILE_ID").strip() or "PROFILE_ID"
+    encoded_profile = urllib.parse.quote(profile, safe="")
+
+    requests: list[dict] = []
+    if adapter["id"].startswith("nextdns-"):
+        list_name = "allowlist" if adapter["id"] == "nextdns-allowlist" else "denylist"
+        for domain in domains:
+            requests.append({
+                "method": "POST",
+                "url": f"https://api.nextdns.io/profiles/{encoded_profile}/{list_name}",
+                "headers": {"X-Api-Key": "<NEXTDNS_API_KEY>"},
+                "json": {"id": domain, "active": True},
+            })
+    elif adapter["id"] == "controld-block-rules" and domains:
+        requests.append({
+            "method": "POST",
+            "url": f"https://api.controld.com/profiles/{encoded_profile}/rules",
+            "headers": {"Authorization": "Bearer <CONTROL_D_API_TOKEN>"},
+            "form": {"do": 0, "status": 1, "hostnames[]": domains},
+        })
+
+    return {
+        "schema": "hostsfileget.cloud-dns-adapter-plan.v1",
+        "adapter_id": adapter["id"],
+        "provider": adapter["provider"],
+        "operation": adapter["operation"],
+        "profile_id": profile,
+        "domain_count": len(domains),
+        "request_count": len(requests),
+        "request_shape": adapter["request_shape"],
+        "auth": adapter["auth"],
+        "warnings": list(CLOUD_DNS_ADAPTER_WARNINGS),
+        "source_url": adapter["source_url"],
+        "domains": domains,
+        "requests": requests,
+    }
+
+
+def format_cloud_dns_adapter_report(plan: dict) -> str:
+    lines = [
+        "Cloud DNS Adapter Plan",
+        f"Adapter: {plan.get('adapter_id')} ({plan.get('provider')})",
+        f"Operation: {plan.get('operation')}",
+        f"Profile: {plan.get('profile_id')}",
+        f"Domains: {int(plan.get('domain_count') or 0):,}",
+        f"Requests: {int(plan.get('request_count') or 0):,} ({plan.get('request_shape')})",
+        f"Auth: {plan.get('auth')}",
+        f"Source: {plan.get('source_url')}",
+        "Warnings:",
+    ]
+    for warning in plan.get("warnings") or CLOUD_DNS_ADAPTER_WARNINGS:
+        lines.append(f"- {warning}")
+    return "\n".join(lines)
+
+
+def format_cloud_dns_adapter_catalog() -> str:
+    lines = [
+        "Cloud DNS adapters",
+        "",
+        "Adapters generate local replay plans only. HostsFileGet does not store API keys or execute provider writes.",
+        "",
+        "Supported adapters:",
+    ]
+    for adapter in CLOUD_DNS_ADAPTERS:
+        lines.extend([
+            f"- {adapter['id']}: {adapter['provider']} {adapter['operation']}",
+            f"  Request shape: {adapter['request_shape']}",
+            f"  Auth: {adapter['auth']}",
+            f"  Source: {adapter['source_url']}",
+        ])
+    lines.extend([
+        "",
+        "Supported log imports:",
+        "- nextdns: blocked domains from NextDNS CSV exports with domain/status columns",
+        "- controld: blocked domains from Control D activity CSV exports with question/action or query/controld_action columns",
+        "",
+        "Warnings:",
+    ])
+    for warning in CLOUD_DNS_ADAPTER_WARNINGS:
+        lines.append(f"- {warning}")
+    return "\n".join(lines)
+
+
+def parse_cloud_dns_log_export(provider: str, text: str) -> list[str]:
+    normalized = CLOUD_DNS_LOG_IMPORT_ALIASES.get((provider or "").strip().lower().replace("_", "-"))
+    if normalized == "nextdns":
+        return parse_nextdns_log_csv(text)
+    if normalized == "controld":
+        return parse_controld_activity_csv(text)
+    raise ValueError(f"Unknown cloud DNS log provider: {provider!r}. Known providers: nextdns, controld")
 
 
 def build_export_domain_records(lines: list[str]) -> list[dict[str, str]]:
@@ -6730,6 +6963,9 @@ class HostsFileEditor:
             self._btn(local_import_frame, "From NextDNS Log (CSV)", self.import_nextdns_log, "Import blocked domains from a NextDNS Query Log CSV.")
         ).pack(fill="x", pady=2)
         self._register_import_widget(
+            self._btn(local_import_frame, "From Control D Log (CSV)", self.import_controld_activity_log, "Import blocked domains from a Control D Activity Log CSV.")
+        ).pack(fill="x", pady=2)
+        self._register_import_widget(
             self._btn(local_import_frame, "From Windows DNS Snapshot", self.import_windows_dns_client_snapshot, "Read recent local Windows DNS Client query events.")
         ).pack(fill="x", pady=2)
 
@@ -7861,6 +8097,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="Hosts Health Scan...", command=self.show_health_scan)
         tools_menu.add_command(label="DNS Bypass Diagnostics...", command=self.show_dns_bypass_diagnostics)
         tools_menu.add_command(label="DNS Interoperability Pack...", command=self.show_dns_integration_pack)
+        tools_menu.add_command(label="Cloud DNS Adapters...", command=self.show_cloud_dns_adapters)
         tools_menu.add_command(label="Sources Report...", command=self.show_sources_report)
         tools_menu.add_command(label="Goto Anything...", command=self.show_goto_anything)
         tools_menu.add_command(label="Find and Replace...", command=self.show_find_replace_dialog)
@@ -7871,6 +8108,7 @@ class HostsFileEditor:
                               activebackground=PALETTE["blue"], activeforeground="#0b1020")
         import_menu.add_command(label="From pfSense DNSBL log...", command=self.import_pfsense_log)
         import_menu.add_command(label="From NextDNS query log (CSV)...", command=self.import_nextdns_log)
+        import_menu.add_command(label="From Control D activity log (CSV)...", command=self.import_controld_activity_log)
         import_menu.add_command(label="From Pi-hole FTL (pihole-FTL.db)...", command=self.import_pihole_ftl)
         import_menu.add_command(label="From AdGuard Home query log...", command=self.import_adguard_home_querylog)
         import_menu.add_command(label="From Windows DNS Client snapshot...", command=self.import_windows_dns_client_snapshot)
@@ -8848,6 +9086,16 @@ class HostsFileEditor:
             tone="info",
             width=860,
             height=620,
+        )
+
+    def show_cloud_dns_adapters(self):
+        self._show_text_report_dialog(
+            "Cloud DNS adapters",
+            "Plan-only NextDNS and Control D import/export adapters. No API keys are stored or used.",
+            format_cloud_dns_adapter_catalog(),
+            tone="info",
+            width=880,
+            height=660,
         )
 
     # ----------------------------- Check Domain ------------------------------
@@ -11488,39 +11736,46 @@ class HostsFileEditor:
 
         filename = os.path.basename(filepath)
         try:
-            content = read_text_file_content(filepath).strip()
-            if not content:
-                raise ValueError("The selected CSV file is empty.")
-
-            reader = csv.DictReader(io.StringIO(content))
-            extracted_domains = set()
-
-            raw_fieldnames = reader.fieldnames or []
-            fieldnames = [name.strip().lower() if name else "" for name in raw_fieldnames]
-            if 'domain' not in fieldnames or 'status' not in fieldnames:
-                raise ValueError("Missing required CSV columns ('domain', 'status').")
-
-            domain_key = raw_fieldnames[fieldnames.index('domain')]
-            status_key = raw_fieldnames[fieldnames.index('status')]
-
-            for row in reader:
-                domain = row.get(domain_key, '').strip()
-                status = row.get(status_key, '').strip().lower()
-
-                if domain and status == 'blocked':
-                    extracted_domains.add(domain)
+            extracted_domains = parse_nextdns_log_csv(read_text_file_content(filepath))
 
             if not extracted_domains:
                 self.update_status(f"No blocked domains were detected in '{filename}'.", is_error=True)
                 return
 
-            self.fetch_and_append_hosts(f"NextDNS Log: {filename}", lines_to_add=sorted(list(extracted_domains)))
+            self.fetch_and_append_hosts(f"NextDNS Log: {filename}", lines_to_add=extracted_domains)
 
         except Exception as e:
             self.update_status(f"Error importing NextDNS log file: {e}", is_error=True)
             self._show_notice_dialog(
                 "Could not import NextDNS log",
                 "An unexpected error occurred while processing the selected NextDNS query log file.",
+                tone="error",
+                details=str(e),
+            )
+
+    def import_controld_activity_log(self):
+        filepath = self._choose_file(
+            title="Select Control D Activity Log CSV File",
+            filetypes=(("CSV files", "*.csv"), ("All files", "*.*")),
+        )
+        if not filepath:
+            return
+
+        filename = os.path.basename(filepath)
+        try:
+            extracted_domains = parse_controld_activity_csv(read_text_file_content(filepath))
+
+            if not extracted_domains:
+                self.update_status(f"No blocked domains were detected in '{filename}'.", is_error=True)
+                return
+
+            self.fetch_and_append_hosts(f"Control D Log: {filename}", lines_to_add=extracted_domains)
+
+        except Exception as e:
+            self.update_status(f"Error importing Control D log file: {e}", is_error=True)
+            self._show_notice_dialog(
+                "Could not import Control D log",
+                "An unexpected error occurred while processing the selected Control D activity log file.",
                 tone="error",
                 details=str(e),
             )
@@ -12999,6 +13254,41 @@ def _cli_integration_export(pack_id: str, input_path: str, output_path: str) -> 
     return 0
 
 
+def _cli_cloud_adapter_list() -> int:
+    _cli_print(format_cloud_dns_adapter_catalog())
+    return 0
+
+
+def _cli_cloud_adapter_plan(adapter_id: str, input_path: str, output_path: str, profile_id: str) -> int:
+    try:
+        source_lines = read_text_file_lines(input_path)
+        plan = build_cloud_dns_adapter_plan(source_lines, adapter_id, profile_id=profile_id)
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        write_text_file_atomic(output_path, json.dumps(plan, indent=2))
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Cloud DNS adapter plan failed: {exc}")
+        return 2
+    _cli_print(format_cloud_dns_adapter_report(plan))
+    _cli_print(f"Wrote cloud DNS adapter plan to {output_path}")
+    return 0
+
+
+def _cli_cloud_log_import(provider: str, input_path: str, output_path: str) -> int:
+    try:
+        domains = parse_cloud_dns_log_export(provider, read_text_file_content(input_path))
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        write_text_file_atomic(output_path, "\n".join(domains))
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Cloud DNS log import failed: {exc}")
+        return 2
+    _cli_print(f"Imported {len(domains):,} blocked domain(s) from {provider} log export to {output_path}")
+    return 0
+
+
 def _cli_activity_report(output_path: str | None) -> int:
     report = build_scheduler_activity_report()
     _cli_print(format_scheduler_activity_report(report))
@@ -13260,6 +13550,10 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--activity-report-output",
         "--integration-list",
         "--integration-export",
+        "--cloud-adapter-list",
+        "--cloud-adapter-plan",
+        "--cloud-profile-id",
+        "--cloud-log-import",
         "--source-health",
         "--source-health-output",
         "--source-health-timeout",
@@ -13281,6 +13575,9 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--history-restore=",
         "--activity-report-output=",
         "--integration-export=",
+        "--cloud-adapter-plan=",
+        "--cloud-profile-id=",
+        "--cloud-log-import=",
         "--source-health-output=",
         "--source-health-timeout=",
         "--source-health-workers=",
@@ -13319,6 +13616,20 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         nargs=3,
         metavar=("PACK", "INPUT", "OUTPUT"),
         help="Export INPUT hosts-like text through a DNS integration PACK to OUTPUT without remote writes.",
+    )
+    parser.add_argument("--cloud-adapter-list", action="store_true", help="List plan-only NextDNS and Control D cloud DNS adapters.")
+    parser.add_argument(
+        "--cloud-adapter-plan",
+        nargs=3,
+        metavar=("ADAPTER", "INPUT", "OUTPUT"),
+        help="Write a local JSON replay plan for ADAPTER from INPUT hosts-like text to OUTPUT. No remote writes are performed.",
+    )
+    parser.add_argument("--cloud-profile-id", default="PROFILE_ID", metavar="ID", help="Provider profile ID placeholder to include in --cloud-adapter-plan URLs.")
+    parser.add_argument(
+        "--cloud-log-import",
+        nargs=3,
+        metavar=("PROVIDER", "INPUT", "OUTPUT"),
+        help="Extract blocked domains from a NextDNS or Control D CSV log export into OUTPUT.",
     )
     parser.add_argument("--source-health", action="store_true", help="Check curated source reachability and print a summary without launching the GUI.")
     parser.add_argument("--source-health-output", metavar="PATH", help="Write detailed source-health JSON to PATH.")
@@ -13383,6 +13694,21 @@ def _handle_cli_args(argv: list[str]) -> int | None:
             args.integration_export[0],
             args.integration_export[1],
             args.integration_export[2],
+        )
+    if args.cloud_adapter_list:
+        return _cli_cloud_adapter_list()
+    if args.cloud_adapter_plan:
+        return _cli_cloud_adapter_plan(
+            args.cloud_adapter_plan[0],
+            args.cloud_adapter_plan[1],
+            args.cloud_adapter_plan[2],
+            args.cloud_profile_id,
+        )
+    if args.cloud_log_import:
+        return _cli_cloud_log_import(
+            args.cloud_log_import[0],
+            args.cloud_log_import[1],
+            args.cloud_log_import[2],
         )
     if args.source_health:
         return _cli_source_health(

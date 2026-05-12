@@ -48,6 +48,8 @@ from hosts_editor import (
     collect_dns_bypass_policy_snapshot,
     contrast_ratio,
     dns_bypass_policy_status,
+    parse_cloud_dns_log_export,
+    parse_controld_activity_csv,
     parse_pinned_import_payload,
     read_provenance_events,
     IPV4_REGEX,
@@ -67,6 +69,7 @@ from hosts_editor import (
     discover_import_sections,
     fuzzy_score,
     parse_adguard_home_querylog,
+    parse_nextdns_log_csv,
     parse_gas_mask_archive_path,
     parse_hostsfileeditor_archive_path,
     parse_declarative_config_text,
@@ -82,6 +85,7 @@ from hosts_editor import (
     build_export_domain_records,
     build_git_history_metadata,
     build_git_history_status_report,
+    build_cloud_dns_adapter_plan,
     build_config_location_report,
     build_dns_integration_export,
     build_portable_bundle_readme,
@@ -103,6 +107,8 @@ from hosts_editor import (
     format_declarative_profile_summary,
     format_profile_list_summary,
     format_git_history_status_report,
+    format_cloud_dns_adapter_catalog,
+    format_cloud_dns_adapter_report,
     format_config_location_report,
     format_dns_integration_export_summary,
     format_dns_integration_pack_report,
@@ -115,6 +121,7 @@ from hosts_editor import (
     get_source_cache_body_path,
     get_config_root_dir,
     get_git_history_dir,
+    list_cloud_dns_adapters,
     list_dns_integration_packs,
     looks_like_domain,
     looks_like_html_document,
@@ -1605,6 +1612,48 @@ profile:
                 "||tracker.example^",
             ])
 
+    def test_cli_cloud_adapters_write_plan_and_log_import(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "hosts.txt"
+            plan_path = Path(tmpdir) / "nextdns-plan.json"
+            log_path = Path(tmpdir) / "controld.csv"
+            domains_path = Path(tmpdir) / "domains.txt"
+            input_path.write_text(
+                "0.0.0.0 ads.example\n0.0.0.0 tracker.example\n192.168.1.10 printer\n",
+                encoding="utf-8",
+            )
+            log_path.write_text(
+                "timestamp,question,action\n"
+                "2026-05-12T10:00:00Z,ads.example,0\n"
+                "2026-05-12T10:01:00Z,allowed.example,1\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(hosts_editor, "_cli_print"):
+                self.assertEqual(hosts_editor._cli_cloud_adapter_list(), 0)
+                self.assertEqual(
+                    hosts_editor._cli_cloud_adapter_plan(
+                        "nextdns", str(input_path), str(plan_path), "profile-1"
+                    ),
+                    0,
+                )
+                self.assertEqual(
+                    hosts_editor._cli_cloud_log_import("controld", str(log_path), str(domains_path)),
+                    0,
+                )
+                self.assertEqual(
+                    hosts_editor._cli_cloud_adapter_plan("unknown", str(input_path), str(plan_path), "profile-1"),
+                    2,
+                )
+
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            self.assertEqual(plan["adapter_id"], "nextdns-denylist")
+            self.assertEqual(plan["requests"][0]["headers"], {"X-Api-Key": "<NEXTDNS_API_KEY>"})
+            self.assertEqual(domains_path.read_text(encoding="utf-8").splitlines(), ["ads.example"])
+
     def test_handle_cli_args_routes_integration_flags(self):
         with mock.patch.object(hosts_editor, "_cli_integration_list", return_value=0) as mocked_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--integration-list"]), 0)
@@ -1616,6 +1665,28 @@ profile:
                 0,
             )
             mocked_export.assert_called_once_with("blocky", "in.txt", "out.txt")
+
+    def test_handle_cli_args_routes_cloud_dns_flags(self):
+        with mock.patch.object(hosts_editor, "_cli_cloud_adapter_list", return_value=0) as mocked_list:
+            self.assertEqual(hosts_editor._handle_cli_args(["--cloud-adapter-list"]), 0)
+            mocked_list.assert_called_once_with()
+
+        with mock.patch.object(hosts_editor, "_cli_cloud_adapter_plan", return_value=0) as mocked_plan:
+            self.assertEqual(
+                hosts_editor._handle_cli_args([
+                    "--cloud-adapter-plan", "nextdns", "in.txt", "plan.json",
+                    "--cloud-profile-id", "profile-1",
+                ]),
+                0,
+            )
+            mocked_plan.assert_called_once_with("nextdns", "in.txt", "plan.json", "profile-1")
+
+        with mock.patch.object(hosts_editor, "_cli_cloud_log_import", return_value=0) as mocked_import:
+            self.assertEqual(
+                hosts_editor._handle_cli_args(["--cloud-log-import", "controld", "log.csv", "domains.txt"]),
+                0,
+            )
+            mocked_import.assert_called_once_with("controld", "log.csv", "domains.txt")
 
     def test_sanitize_config_snapshot_rejects_non_sha256_hashes(self):
         payload = sanitize_config_snapshot(
@@ -2394,6 +2465,73 @@ profile:
     def test_build_dns_integration_export_rejects_unknown_pack(self):
         with self.assertRaises(ValueError):
             build_dns_integration_export(["0.0.0.0 x.example"], "unknown-dns")
+
+    def test_parse_nextdns_log_csv_extracts_blocked_domains(self):
+        csv_text = (
+            "Time,Domain,Status\n"
+            "2026-05-12T10:00:00Z,Ads.Example.,blocked\n"
+            "2026-05-12T10:01:00Z,allowed.example,allowed\n"
+            "2026-05-12T10:02:00Z,https://tracker.example/path,Blocked\n"
+            "2026-05-12T10:03:00Z,ads.example,blocked\n"
+            "2026-05-12T10:04:00Z,not a domain,blocked\n"
+        )
+        self.assertEqual(parse_nextdns_log_csv(csv_text), ["ads.example", "tracker.example"])
+        with self.assertRaises(ValueError):
+            parse_nextdns_log_csv("domain,reason\nexample.com,blocked\n")
+
+    def test_parse_controld_activity_csv_extracts_blocked_domains(self):
+        csv_text = (
+            "timestamp,question,action\n"
+            "2026-05-12T10:00:00Z,Ads.Example,0\n"
+            "2026-05-12T10:01:00Z,bypass.example,1\n"
+            "2026-05-12T10:02:00Z,tracker.example,blocked\n"
+            "2026-05-12T10:03:00Z,tracker.example,block\n"
+        )
+        self.assertEqual(parse_controld_activity_csv(csv_text), ["ads.example", "tracker.example"])
+
+        siem_text = "time,query,controld_action\n2026-05-12T10:00:00Z,siem.example,0\n"
+        self.assertEqual(parse_cloud_dns_log_export("control-d", siem_text), ["siem.example"])
+        with self.assertRaises(ValueError):
+            parse_controld_activity_csv("domain,status\nexample.com,blocked\n")
+
+    def test_cloud_dns_adapter_catalog_lists_plan_only_adapters(self):
+        adapter_ids = {adapter["id"] for adapter in list_cloud_dns_adapters()}
+        self.assertEqual(adapter_ids, {"nextdns-denylist", "nextdns-allowlist", "controld-block-rules"})
+
+        catalog = format_cloud_dns_adapter_catalog()
+        self.assertIn("Plan-only", catalog)
+        self.assertIn("nextdns-denylist", catalog)
+        self.assertIn("controld-block-rules", catalog)
+
+    def test_build_cloud_dns_adapter_plan_generates_placeholder_requests(self):
+        lines = [
+            "0.0.0.0 ads.example",
+            "0.0.0.0 tracker.example",
+            "0.0.0.0 ads.example",
+            "192.168.1.10 printer",
+        ]
+
+        nextdns = build_cloud_dns_adapter_plan(lines, "nextdns-deny", profile_id="abc 123")
+        self.assertEqual(nextdns["adapter_id"], "nextdns-denylist")
+        self.assertEqual(nextdns["domain_count"], 2)
+        self.assertEqual(nextdns["request_count"], 2)
+        self.assertEqual(nextdns["domains"], ["ads.example", "tracker.example"])
+        self.assertEqual(nextdns["requests"][0]["headers"], {"X-Api-Key": "<NEXTDNS_API_KEY>"})
+        self.assertEqual(nextdns["requests"][0]["json"], {"id": "ads.example", "active": True})
+        self.assertIn("/profiles/abc%20123/denylist", nextdns["requests"][0]["url"])
+        self.assertNotIn("API_KEY", json.dumps(nextdns["domains"]))
+        self.assertIn("Cloud DNS Adapter Plan", format_cloud_dns_adapter_report(nextdns))
+
+        controld = build_cloud_dns_adapter_plan(lines, "control-d", profile_id="profile-1")
+        self.assertEqual(controld["adapter_id"], "controld-block-rules")
+        self.assertEqual(controld["request_count"], 1)
+        self.assertEqual(controld["requests"][0]["headers"], {"Authorization": "Bearer <CONTROL_D_API_TOKEN>"})
+        self.assertEqual(controld["requests"][0]["form"]["do"], 0)
+        self.assertEqual(controld["requests"][0]["form"]["status"], 1)
+        self.assertEqual(controld["requests"][0]["form"]["hostnames[]"], ["ads.example", "tracker.example"])
+
+        with self.assertRaises(ValueError):
+            build_cloud_dns_adapter_plan(lines, "unknown-cloud")
 
     def test_export_lines_as_bytes_supports_compressed_hosts(self):
         lines = ["0.0.0.0 ads.example", "# comment", "0.0.0.0 tracker.example"]

@@ -110,6 +110,12 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added `--integration-list` and `--integration-export PACK INPUT OUTPUT` for non-admin hosts-like file conversion without remote DNS server writes.
 - Documented per-tool import guidance, source references, and hosts-file semantic limits in `docs/dns-integrations.md`.
 
+**Cloud DNS adapters**
+- Added plan-only NextDNS denylist/allowlist and Control D custom-rule export adapters with placeholder auth headers.
+- Added `--cloud-adapter-list`, `--cloud-adapter-plan`, and `--cloud-log-import` for non-admin adapter planning and local blocked-domain CSV extraction.
+- Added a Control D activity-log CSV importer alongside the existing NextDNS CSV importer and moved NextDNS parsing through the shared pure parser.
+- Documented provider source references, privacy limits, and replay boundaries in `docs/cloud-dns-adapters.md`.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

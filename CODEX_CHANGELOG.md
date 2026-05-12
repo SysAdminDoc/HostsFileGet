@@ -61,6 +61,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F029 complete. Next roadmap item: F030 Pi-hole/AdGuard/Technitium/blocky interoperability pack.
 - Completed F030: added file-only Pi-hole, AdGuard Home/DNS, Technitium DNS Server, and blocky interoperability presets; added `--integration-list`, `--integration-export`, GUI pack reporting, docs, and regression tests.
 - Updated `ROADMAP.md` to mark F030 complete. Next roadmap item: F031 NextDNS and Control D import/export adapters.
+- Completed F031: added plan-only NextDNS denylist/allowlist and Control D custom-rule adapter plans, Control D CSV log import, shared NextDNS/Control D log parsers, `--cloud-adapter-list`, `--cloud-adapter-plan`, `--cloud-log-import`, GUI adapter reporting, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F031 complete. Next roadmap item: F032 Adblock syntax linter and cosmetic-rule quarantine.
 
 ## Scope
 
