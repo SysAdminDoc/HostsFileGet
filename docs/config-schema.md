@@ -4,29 +4,30 @@ HostsFileGet stores user settings in JSON. The primary path is `%LOCALAPPDATA%\H
 
 ## Version
 
-Current schema version: `1`
+Current schema version: `2`
 
 Every saved config now includes:
 
 ```json
 {
-  "config_version": 1
+  "config_version": 2
 }
 ```
 
-Configs without `config_version` are treated as legacy schema `0`, migrated in memory, sanitized, and written back as schema `1` on the next save or legacy-path migration.
+Configs without `config_version` are treated as legacy schema `0`, migrated in memory, sanitized, and written back as schema `2` on the next save or legacy-path migration.
 
 ## Keys
 
 | Key | Type | Notes |
 | --- | --- | --- |
-| `config_version` | integer | Current value is `1` |
+| `config_version` | integer | Current value is `2` |
 | `whitelist` | string | Newline-separated whitelist text |
 | `custom_sources` | array | Objects with `name` and `url` |
 | `last_applied_raw_hash` | string or null | SHA-256 hex digest for saved raw state |
 | `last_applied_cleaned_hash` | string or null | SHA-256 hex digest for saved cleaned state |
 | `last_open_dir` | string | Existing local directory path |
 | `source_last_fetched` | object | Source URL to ISO timestamp |
+| `source_cache_metadata` | object | Source URL to validated ETag/Last-Modified/body-cache metadata |
 | `preferred_block_sink` | string | One of `0.0.0.0`, `127.0.0.1`, `::`, `::1` |
 | `backup_retention` | integer | Clamped to `0..50` |
 | `has_completed_first_run` | boolean | First-run wizard completion |
@@ -49,7 +50,24 @@ Schema `0` includes all configs without a valid `config_version`. The migrator r
 
 If both the current key and legacy alias are present, the current key wins.
 
-Invalid, negative, future, or boolean `config_version` values are treated as legacy schema `0`. The known fields are still sanitized and emitted as current schema `1`.
+Invalid, negative, future, or boolean `config_version` values are treated as legacy schema `0`. The known fields are still sanitized and emitted as current schema `2`.
+
+## Source Cache Metadata
+
+Schema `2` adds `source_cache_metadata` for conditional source refreshes. The cached body lives under `source_cache\` beside the active config location; the config stores only metadata and a SHA-256 hash.
+
+Per-source metadata shape:
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `cache_key` | string | SHA-256 of the normalized source URL |
+| `content_sha256` | string | SHA-256 of the cached raw response body |
+| `bytes` | integer | Cached raw body size, clamped to the download cap |
+| `etag` | string | Optional HTTP `ETag` |
+| `last_modified` | string | Optional HTTP `Last-Modified` |
+| `content_encoding` | string | Optional HTTP content encoding used for decode |
+| `fetched_at` | string | ISO timestamp of the last network body fetch |
+| `validated_at` | string | ISO timestamp of the last network validation, including `304 Not Modified` |
 
 ## Compatibility Rules
 

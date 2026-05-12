@@ -17,6 +17,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F006 complete. Next roadmap item: F007 source health checker.
 - Completed F007: added the non-admin `--source-health` CLI, bounded source sampling, JSON report generation, mocked regression tests, `docs/source-health.md`, and `.github/workflows/source-health.yml`.
 - Updated `ROADMAP.md` to mark F007 complete. Next roadmap item: F008 ETag/Last-Modified cache.
+- Completed F008: bumped config schema to 2, added `source_cache_metadata`, conditional ETag/Last-Modified request headers, verified cached source bodies, GUI import reuse, CLI `--update` reuse, and regression tests for 304/offline fallback.
+- Updated `ROADMAP.md` to mark F008 complete. Next roadmap item: F009 source trust badges.
 
 ## Scope
 

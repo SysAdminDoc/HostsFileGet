@@ -26,6 +26,7 @@ from hosts_editor import (
     append_provenance_event,
     build_pinned_export_payload,
     build_source_health_report,
+    build_source_request_headers,
     categorize_entries_by_domain_hint,
     check_source_health_record,
     check_source_health_records,
@@ -52,10 +53,12 @@ from hosts_editor import (
     parse_pihole_ftl_blocked_domains,
     summarize_source_contributions,
     export_lines_as_format,
+    fetch_source_with_cache,
     find_keyword_match_line_indices,
     find_sources_containing_domain,
     format_relative_time,
     build_schtasks_create_command,
+    get_source_cache_body_path,
     looks_like_domain,
     looks_like_html_document,
     load_blocklist_sources_manifest,
@@ -71,6 +74,7 @@ from hosts_editor import (
     rewrite_block_sink_ip,
     sanitize_config_snapshot,
     sanitize_custom_sources,
+    sanitize_source_cache_metadata,
     sanitize_source_manifest,
     sanitize_pinned_domains,
     scan_suspicious_redirects,
@@ -489,6 +493,205 @@ class HostsEditorLogicTests(unittest.TestCase):
         self.assertEqual(report["summary"], {"total": 1, "healthy": 1, "warning": 0, "failed": 0})
         self.assertEqual(report["sources"][0]["category"], "Ads")
 
+    def test_source_cache_metadata_sanitizes_headers_and_hashes(self):
+        good_hash = "a" * 64
+        sanitized = sanitize_source_cache_metadata(
+            {
+                "https://example.com/hosts.txt": {
+                    "content_sha256": good_hash.upper(),
+                    "bytes": "12",
+                    "etag": '"abc123"',
+                    "last_modified": "Wed, 21 Oct 2015 07:28:00 GMT",
+                    "content_encoding": "gzip",
+                    "fetched_at": "2026-05-12T12:00:00",
+                    "validated_at": "2026-05-12T12:05:00",
+                },
+                "not-a-url": {"content_sha256": good_hash},
+                "https://bad.example/hosts.txt": {"content_sha256": "bad"},
+            }
+        )
+
+        self.assertEqual(list(sanitized), ["https://example.com/hosts.txt"])
+        entry = sanitized["https://example.com/hosts.txt"]
+        self.assertEqual(entry["content_sha256"], good_hash)
+        self.assertEqual(entry["bytes"], 12)
+        self.assertEqual(entry["etag"], '"abc123"')
+        self.assertEqual(entry["content_encoding"], "gzip")
+
+    def test_build_source_request_headers_adds_conditional_headers(self):
+        headers = build_source_request_headers(
+            {
+                "etag": '"abc123"',
+                "last_modified": "Wed, 21 Oct 2015 07:28:00 GMT",
+            }
+        )
+
+        self.assertIn("User-Agent", headers)
+        self.assertEqual(headers["If-None-Match"], '"abc123"')
+        self.assertEqual(headers["If-Modified-Since"], "Wed, 21 Oct 2015 07:28:00 GMT")
+
+    def test_fetch_source_with_cache_reuses_body_on_304(self):
+        import tempfile
+
+        class FakeResponse:
+            headers = {
+                "ETag": '"v1"',
+                "Last-Modified": "Wed, 21 Oct 2015 07:28:00 GMT",
+                "Content-Encoding": "",
+            }
+            fp = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def getcode(self):
+                return 200
+
+            def info(self):
+                return self.headers
+
+            def read(self, size):
+                return b"0.0.0.0 cached.example\n"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            metadata_store = {}
+            lines, metadata, status = fetch_source_with_cache(
+                "https://example.com/hosts.txt",
+                metadata_store,
+                cache_dir=tmpdir,
+                opener=lambda request, timeout=None: FakeResponse(),
+            )
+            self.assertEqual(status, "network")
+            self.assertEqual(lines, ["0.0.0.0 cached.example"])
+            metadata_store["https://example.com/hosts.txt"] = metadata
+
+            def opener_304(request, timeout=None):
+                self.assertIn('"v1"', set(request.headers.values()))
+                raise hosts_editor.urllib.error.HTTPError(
+                    request.full_url,
+                    304,
+                    "Not Modified",
+                    {},
+                    None,
+                )
+
+            lines, refreshed_metadata, status = fetch_source_with_cache(
+                "https://example.com/hosts.txt",
+                metadata_store,
+                cache_dir=tmpdir,
+                opener=opener_304,
+            )
+
+            self.assertEqual(status, "not_modified")
+            self.assertEqual(lines, ["0.0.0.0 cached.example"])
+            self.assertEqual(refreshed_metadata["etag"], '"v1"')
+
+    def test_fetch_source_with_cache_uses_cache_on_network_error(self):
+        import tempfile
+
+        class FakeResponse:
+            headers = {"ETag": '"v1"', "Last-Modified": "", "Content-Encoding": ""}
+            fp = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def getcode(self):
+                return 200
+
+            def info(self):
+                return self.headers
+
+            def read(self, size):
+                return b"0.0.0.0 fallback.example\n"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _lines, metadata, _status = fetch_source_with_cache(
+                "https://example.com/hosts.txt",
+                {},
+                cache_dir=tmpdir,
+                opener=lambda request, timeout=None: FakeResponse(),
+            )
+            lines, _metadata, status = fetch_source_with_cache(
+                "https://example.com/hosts.txt",
+                {"https://example.com/hosts.txt": metadata},
+                cache_dir=tmpdir,
+                opener=lambda request, timeout=None: (_ for _ in ()).throw(
+                    hosts_editor.urllib.error.URLError("offline")
+                ),
+            )
+
+            self.assertEqual(status, "cache_fallback")
+            self.assertEqual(lines, ["0.0.0.0 fallback.example"])
+
+    def test_fetch_source_with_cache_does_not_replace_cache_until_decode_succeeds(self):
+        import tempfile
+
+        class FakeResponse:
+            headers = {"ETag": '"v1"', "Last-Modified": "", "Content-Encoding": ""}
+            fp = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def getcode(self):
+                return 200
+
+            def info(self):
+                return self.headers
+
+            def read(self, size):
+                return b"0.0.0.0 preserved.example\n"
+
+        class BadResponse(FakeResponse):
+            headers = {"ETag": '"v2"', "Last-Modified": "", "Content-Encoding": ""}
+
+            def read(self, size):
+                return b"bad-payload"
+
+        url = "https://example.com/hosts.txt"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with mock.patch(
+                "hosts_editor.decode_downloaded_lines",
+                side_effect=[
+                    ["0.0.0.0 preserved.example"],
+                    ValueError("bad payload"),
+                    ["0.0.0.0 preserved.example"],
+                ],
+            ):
+                _lines, metadata, _status = fetch_source_with_cache(
+                    url,
+                    {},
+                    cache_dir=tmpdir,
+                    opener=lambda request, timeout=None: FakeResponse(),
+                )
+                cache_path = get_source_cache_body_path(url, tmpdir)
+                with open(cache_path, "rb") as f:
+                    cached_before = f.read()
+
+                lines, refreshed_metadata, status = fetch_source_with_cache(
+                    url,
+                    {url: metadata},
+                    cache_dir=tmpdir,
+                    opener=lambda request, timeout=None: BadResponse(),
+                )
+
+            with open(cache_path, "rb") as f:
+                cached_after = f.read()
+            self.assertEqual(status, "cache_fallback")
+            self.assertEqual(lines, ["0.0.0.0 preserved.example"])
+            self.assertEqual(refreshed_metadata["etag"], '"v1"')
+            self.assertEqual(cached_after, cached_before)
+
     def test_find_sources_containing_domain_accepts_structured_cache_entries(self):
         source_cache = {
             "https://one.example/list.txt": {
@@ -862,8 +1065,13 @@ class HostsEditorLogicTests(unittest.TestCase):
     def test_import_worker_reports_failure_for_oversize_response(self):
         class FakeEditor:
             def __init__(self):
+                import tempfile
+
                 self.import_queue = queue.Queue()
                 self.stop_import_flag = threading.Event()
+                self.source_cache_metadata = {}
+                self._source_cache_tmpdir = tempfile.TemporaryDirectory()
+                self.source_cache_dir = self._source_cache_tmpdir.name
 
             def _apply_import_mode_filter(self, source_name, lines, mode):
                 return lines
@@ -899,6 +1107,7 @@ class HostsEditorLogicTests(unittest.TestCase):
                 [("Big Source", "https://example.com/huge.txt")],
                 "Raw",
             )
+        editor._source_cache_tmpdir.cleanup()
 
         messages = []
         while not editor.import_queue.empty():
@@ -917,8 +1126,13 @@ class HostsEditorLogicTests(unittest.TestCase):
     def test_import_worker_cancels_if_stop_requested_during_final_download(self):
         class FakeEditor:
             def __init__(self):
+                import tempfile
+
                 self.import_queue = queue.Queue()
                 self.stop_import_flag = threading.Event()
+                self.source_cache_metadata = {}
+                self._source_cache_tmpdir = tempfile.TemporaryDirectory()
+                self.source_cache_dir = self._source_cache_tmpdir.name
 
             def _apply_import_mode_filter(self, source_name, lines, mode):
                 return lines
@@ -951,6 +1165,7 @@ class HostsEditorLogicTests(unittest.TestCase):
                 [("Only Source", "https://example.com/list.txt")],
                 "Raw",
             )
+        editor._source_cache_tmpdir.cleanup()
 
         messages = []
         while not editor.import_queue.empty():
@@ -1339,6 +1554,29 @@ class HostsEditorLogicTests(unittest.TestCase):
             {"https://example.com/hosts.txt": "2026-04-17T12:00:00"},
         )
         self.assertEqual(sanitized["preferred_block_sink"], "127.0.0.1")
+
+    def test_sanitize_config_snapshot_keeps_valid_source_cache_metadata(self):
+        config = {
+            "source_cache_metadata": {
+                "https://example.com/hosts.txt": {
+                    "content_sha256": "b" * 64,
+                    "bytes": 42,
+                    "etag": '"v1"',
+                    "last_modified": "Wed, 21 Oct 2015 07:28:00 GMT",
+                    "content_encoding": "",
+                    "fetched_at": "2026-05-12T12:00:00",
+                    "validated_at": "2026-05-12T12:00:00",
+                }
+            }
+        }
+
+        sanitized = sanitize_config_snapshot(config, os.path.expanduser("~"))
+
+        self.assertIn("https://example.com/hosts.txt", sanitized["source_cache_metadata"])
+        self.assertEqual(
+            sanitized["source_cache_metadata"]["https://example.com/hosts.txt"]["content_sha256"],
+            "b" * 64,
+        )
 
     def test_sanitize_config_snapshot_rejects_unknown_block_sink(self):
         sanitized = sanitize_config_snapshot(

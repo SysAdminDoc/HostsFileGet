@@ -87,6 +87,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Download guards: `read_http_body_limited`, `decode_downloaded_lines`, `looks_like_html_document`.
 - Config sanitation: `sanitize_custom_sources`, `sanitize_config_snapshot`, `resolve_saved_state_hashes`.
 - Source catalog loading: `sanitize_source_manifest`, `load_blocklist_sources_manifest`.
+- Source response caching: `fetch_source_with_cache`, `sanitize_source_cache_metadata`, `build_source_request_headers`.
 - Source health reporting: `check_source_health_record`, `build_source_health_report`, `summarize_source_health_results`.
 - Cleanup/export/search helpers: `remove_lines_by_indices`, `rewrite_block_sink_ip`, `scan_suspicious_redirects`, `export_lines_as_format`, `strip_lines_by_category`.
 - Source analytics: `find_sources_containing_domain`, `summarize_source_contributions`, `categorize_entries_by_domain_hint`, `classify_source_freshness`.
@@ -146,6 +147,7 @@ Admin-required CLI actions must fail clearly when not elevated. Source health ch
 | Primary config | `%LOCALAPPDATA%\HostsFileGet\hosts_editor_config.json` | Default per-user config; schema documented in `docs/config-schema.md` |
 | Portable config | `hosts_editor_config.json` next to script/exe | Used when present; same schema as primary config |
 | Curated source manifest | `data/blocklist_sources.json` beside script, exe bundle, or launcher cache | Versioned schema documented in `docs/source-manifest.md` |
+| Source response cache | `source_cache\*.bin` beside the active config location | Raw source bodies keyed by normalized URL hash, verified by `source_cache_metadata` |
 | Provenance log | Config directory JSONL sidecar | Records pin, unpin, and whitelist events |
 | CLI log | `%LOCALAPPDATA%\HostsFileGet\cli.log` | Used by `--silent` |
 | Hosts backups | Sibling of system hosts file | Rolling `.bak` plus timestamped snapshots |
@@ -159,7 +161,7 @@ Current import flow:
 
 1. User selects curated/custom/manual/log source.
 2. Curated source metadata comes from the validated bundled source manifest.
-3. Download or file parse happens with size limits and encoding guards.
+3. Download or file parse happens with size limits and encoding guards; web sources use ETag/Last-Modified conditional requests when cached metadata exists.
 4. Source content is decoded and obvious HTML/error pages are rejected.
 5. Import mode determines whether entries are appended raw or normalized.
 6. Generated import sections are marked with sanitized source names.
