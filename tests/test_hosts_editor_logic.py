@@ -44,6 +44,7 @@ from hosts_editor import (
     build_source_health_report,
     build_source_manifest_index,
     build_source_overlap_report,
+    build_source_metrics_report,
     build_source_request_headers,
     build_source_trust_badges,
     build_watch_expression_report,
@@ -84,6 +85,7 @@ from hosts_editor import (
     parse_nextdns_log_csv,
     parse_gas_mask_archive_path,
     record_filter_query_history,
+    record_source_metrics_snapshot,
     sanitize_filter_query_history,
     parse_hostsfileeditor_archive_path,
     parse_declarative_config_text,
@@ -159,6 +161,7 @@ from hosts_editor import (
     format_source_bundle_catalog,
     format_source_bundle_report,
     format_source_overlap_report,
+    format_source_metrics_report,
     format_dns_bypass_diagnostics,
     format_threat_feed_pack_catalog,
     format_threat_feed_pack_plan,
@@ -211,6 +214,7 @@ from hosts_editor import (
     sanitize_source_cache_metadata,
     sanitize_source_bundle_catalog,
     sanitize_source_manifest,
+    sanitize_source_metrics_history,
     sanitize_watch_expressions,
     sanitize_pinned_domains,
     scan_suspicious_redirects,
@@ -3962,6 +3966,109 @@ profile:
         self.assertIn("Top overlapping pairs", formatted)
         self.assertIn("One", formatted)
         self.assertIn("Two", formatted)
+
+    def test_sanitize_source_metrics_history_clamps_and_sorts_points(self):
+        history = {
+            "https://example.com/hosts.txt": [
+                {"ts": "not a date", "domain_count": 999},
+                {"ts": "2026-04-18T10:00:00", "name": "Example\nHosts", "domain_count": "5", "line_count": "7"},
+                {"ts": "2026-04-19T10:00:00", "name": "Example Hosts", "domain_count": 8, "bytes": -10},
+                {"ts": "2026-04-20T10:00:00", "name": "Example Hosts", "domain_count": 13, "bytes": 123},
+            ],
+            "not a url": [{"ts": "2026-04-20T10:00:00", "domain_count": 1}],
+        }
+
+        sanitized = sanitize_source_metrics_history(history, max_points=2)
+
+        self.assertEqual(list(sanitized), ["https://example.com/hosts.txt"])
+        points = sanitized["https://example.com/hosts.txt"]
+        self.assertEqual([point["domain_count"] for point in points], [8, 13])
+        self.assertEqual(points[-1]["bytes"], 123)
+
+    def test_record_source_metrics_snapshot_counts_domains_and_caps_history(self):
+        history = {}
+        for idx in range(35):
+            history = record_source_metrics_snapshot(
+                history,
+                "Example Hosts",
+                "https://example.com/hosts.txt",
+                [
+                    "0.0.0.0 ads.example",
+                    f"0.0.0.0 tracker{idx}.example",
+                    "192.168.1.10 printer.example",
+                ],
+                cache_status="fetched",
+                fetched_at=f"2026-04-{(idx % 28) + 1:02d}T10:00:00",
+            )
+
+        points = history["https://example.com/hosts.txt"]
+        self.assertEqual(len(points), 30)
+        self.assertEqual(points[-1]["domain_count"], 2)
+        self.assertEqual(points[-1]["line_count"], 3)
+        self.assertEqual(points[-1]["cache_status"], "fetched")
+
+    def test_build_and_format_source_metrics_report_shows_growth(self):
+        history = {}
+        history = record_source_metrics_snapshot(
+            history,
+            "Example Hosts",
+            "https://example.com/hosts.txt",
+            ["0.0.0.0 ads.example"],
+            cache_status="fetched",
+            fetched_at="2026-04-20T09:00:00",
+        )
+        history = record_source_metrics_snapshot(
+            history,
+            "Example Hosts",
+            "https://example.com/hosts.txt",
+            ["0.0.0.0 ads.example", "0.0.0.0 tracker.example"],
+            cache_status="not_modified",
+            fetched_at="2026-04-20T10:00:00",
+        )
+        now = datetime.datetime.fromisoformat("2026-04-20T11:00:00").timestamp()
+
+        report = build_source_metrics_report(
+            {"https://example.com/hosts.txt": "2026-04-20T10:00:00"},
+            {},
+            history,
+            {},
+            {},
+            now=now,
+        )
+        self.assertEqual(report["source_count"], 1)
+        self.assertEqual(report["freshness_counts"]["fresh"], 1)
+        row = report["rows"][0]
+        self.assertEqual(row["latest_domain_count"], 2)
+        self.assertEqual(row["delta_previous"], 1)
+        self.assertEqual(row["delta_first"], 1)
+        formatted = format_source_metrics_report(report)
+        self.assertIn("Source Freshness & Growth", formatted)
+        self.assertIn("Example Hosts", formatted)
+        self.assertIn("Boundary: local metrics only", formatted)
+
+    def test_sanitize_config_snapshot_persists_source_metrics_history(self):
+        snapshot = sanitize_config_snapshot(
+            {
+                "source_metrics_history": {
+                    "https://example.com/hosts.txt": [
+                        {
+                            "ts": "2026-04-20T10:00:00",
+                            "name": "Example Hosts",
+                            "domain_count": 2,
+                            "line_count": 3,
+                            "bytes": 42,
+                            "cache_status": "fetched",
+                        }
+                    ]
+                }
+            },
+            os.path.expanduser("~"),
+        )
+
+        self.assertEqual(
+            snapshot["source_metrics_history"]["https://example.com/hosts.txt"][0]["domain_count"],
+            2,
+        )
 
     # ---- sanitize_config_snapshot: backup_retention + first_run ----
     def test_sanitize_config_snapshot_clamps_backup_retention(self):

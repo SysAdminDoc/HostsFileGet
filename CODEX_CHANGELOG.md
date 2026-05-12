@@ -91,6 +91,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F047 complete. Next roadmap item: F048 watch expressions.
 - Completed F048: added persistent watch expressions that save local Filter Builder queries, rerun them against editor/source-index state, expose a **Tools > Watch Expressions...** manager, document config behavior, and add regression tests.
 - Updated `ROADMAP.md` to mark F048 complete. Next roadmap item: F049 source freshness and growth charts.
+- Completed F049: added compact per-source metrics history, GUI/CLI fetch recording, a local **Source Freshness & Growth...** report with freshness buckets and ASCII growth charts, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F049 complete. Next roadmap item: F050 virtualized large-list views.
 
 ## Scope
 

@@ -192,6 +192,10 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added **Tools > Watch Expressions...** to save and rerun local Filter Builder queries against the current editor and fetched-source index.
 - Added persisted `watch_expressions` app config state with sanitation, dedupe, enable/disable state, docs, and regression tests.
 
+**Source freshness and growth**
+- Added compact `source_metrics_history` snapshots after successful GUI imports and CLI `--update` fetches.
+- Added **Source Freshness & Growth...** for freshness buckets, retained domain-count deltas, and ASCII growth charts.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**
