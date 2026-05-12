@@ -55,6 +55,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F026 complete. Next roadmap item: F027 CLI profile apply/export/import.
 - Completed F027: added explicit `--profile-list`, `--profile-import`, `--profile-apply`, and `--profile-export` commands, docs, and regression tests.
 - Updated `ROADMAP.md` to mark F027 complete. Next roadmap item: F028 scheduler hardening and activity report.
+- Completed F028: hardened scheduled update command construction, made registered tasks use `--update --silent`, added bounded structured silent-run activity JSONL, `--activity-report`, scheduler activity docs, and regression tests.
+- Updated `ROADMAP.md` to mark F028 complete. Next roadmap item: F029 managed portable bundle config.
 
 ## Scope
 

@@ -67,6 +67,12 @@ GIT_HISTORY_HOSTS_FILENAME = "hosts"
 GIT_HISTORY_METADATA_FILENAME = "hostsfileget-history.json"
 GIT_HISTORY_DEFAULT_LIMIT = 25
 GIT_HISTORY_REF_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/\-]{0,127}$")
+SCHEDULED_TASK_NAME = "HostsFileGet Auto-Update"
+CLI_LOG_FILENAME = "cli.log"
+CLI_ACTIVITY_FILENAME = "cli-activity.jsonl"
+CLI_ACTIVITY_SCHEMA_VERSION = 1
+CLI_ACTIVITY_MAX_EVENTS = 200
+CLI_ACTIVITY_LOG_TAIL_LINES = 25
 
 DEFAULT_I18N_MESSAGES = {
     "app.name": APP_NAME,
@@ -4107,8 +4113,12 @@ def build_schtasks_create_command(
 
     if not task_name:
         raise ValueError("Task name is required.")
+    if _contains_control_chars(task_name):
+        raise ValueError("Task name cannot contain control characters.")
     if not task_command:
         raise ValueError("Task command is required.")
+    if _contains_control_chars(task_command):
+        raise ValueError("Task command cannot contain control characters.")
     if frequency not in {"DAILY", "WEEKLY", "ONLOGON"}:
         raise ValueError("Unsupported schedule frequency.")
 
@@ -4131,6 +4141,300 @@ def build_schtasks_create_command(
         return args, f"Runs every {SCHEDULE_WEEKDAY_LABELS[normalized_weekday]} at {normalized_time}."
 
     return args, f"Runs daily at {normalized_time}."
+
+
+def build_scheduler_update_command(
+    interpreter: str,
+    script: str,
+    *,
+    frozen: bool = False,
+) -> str:
+    interpreter = (interpreter or "").strip()
+    script = (script or "").strip()
+    if not script:
+        raise ValueError("Updater script path is required.")
+    if _contains_control_chars(script) or _contains_control_chars(interpreter):
+        raise ValueError("Updater command paths cannot contain control characters.")
+
+    if frozen:
+        parts = [script, "--update", "--silent"]
+    else:
+        if not interpreter:
+            raise ValueError("Python interpreter path is required.")
+        parts = [interpreter, script, "--update", "--silent"]
+    return subprocess.list2cmdline(parts)
+
+
+def get_cli_log_path(config_dir: str | None = None) -> str:
+    base_dir = config_dir or get_app_config_dir()
+    return os.path.join(base_dir, CLI_LOG_FILENAME)
+
+
+def get_cli_activity_log_path(config_dir: str | None = None) -> str:
+    base_dir = config_dir or get_app_config_dir()
+    return os.path.join(base_dir, CLI_ACTIVITY_FILENAME)
+
+
+def _activity_text(value, max_length: int = 500) -> str:
+    text = str(value or "").replace("\r", " ").replace("\n", " ").replace("\t", " ").strip()
+    if len(text) > max_length:
+        return text[: max_length - 3].rstrip() + "..."
+    return text
+
+
+def sanitize_cli_activity_event(event: dict | None) -> dict:
+    event = event if isinstance(event, dict) else {}
+    try:
+        exit_code = int(event.get("exit_code", 0))
+    except (TypeError, ValueError):
+        exit_code = 0
+    try:
+        duration_seconds = round(float(event.get("duration_seconds") or 0), 3)
+    except (TypeError, ValueError):
+        duration_seconds = 0.0
+    details = event.get("details", {})
+    if not isinstance(details, dict):
+        details = {}
+    sanitized_details = {}
+    for key, value in details.items():
+        if not isinstance(key, str) or not key or len(key) > 80 or _contains_control_chars(key):
+            continue
+        if isinstance(value, bool):
+            sanitized_details[key] = value
+        elif isinstance(value, int):
+            sanitized_details[key] = value
+        elif isinstance(value, float):
+            sanitized_details[key] = round(value, 3)
+        elif value is None:
+            sanitized_details[key] = None
+        else:
+            sanitized_details[key] = _activity_text(value)
+
+    return {
+        "schema_version": CLI_ACTIVITY_SCHEMA_VERSION,
+        "action": _activity_text(event.get("action") or "unknown", 80) or "unknown",
+        "started_at": _activity_text(event.get("started_at"), 80),
+        "finished_at": _activity_text(event.get("finished_at"), 80),
+        "duration_seconds": duration_seconds,
+        "exit_code": exit_code,
+        "outcome": _activity_text(event.get("outcome") or ("success" if exit_code == 0 else "failed"), 40),
+        "summary": _activity_text(event.get("summary"), 500),
+        "details": sanitized_details,
+    }
+
+
+def append_cli_activity_event(
+    event: dict,
+    activity_path: str | None = None,
+    *,
+    max_events: int = CLI_ACTIVITY_MAX_EVENTS,
+) -> str:
+    path = activity_path or get_cli_activity_log_path()
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    sanitized = sanitize_cli_activity_event(event)
+    line = json.dumps(sanitized, sort_keys=True) + "\n"
+    keep_count = max(1, int(max_events or CLI_ACTIVITY_MAX_EVENTS))
+    existing: list[str] = []
+    try:
+        if os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as fp:
+                existing = fp.readlines()[-(keep_count - 1):]
+    except OSError:
+        existing = []
+    write_text_file_atomic(path, "".join(existing + [line]))
+    return path
+
+
+def read_cli_activity_events(activity_path: str | None = None, *, limit: int = CLI_ACTIVITY_MAX_EVENTS) -> list[dict]:
+    path = activity_path or get_cli_activity_log_path()
+    try:
+        with open(path, "r", encoding="utf-8") as fp:
+            lines = fp.readlines()
+    except OSError:
+        return []
+    events = []
+    for line in lines[-max(1, limit):]:
+        try:
+            payload = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(payload, dict):
+            events.append(sanitize_cli_activity_event(payload))
+    return events
+
+
+def read_cli_log_tail(log_path: str | None = None, *, lines: int = CLI_ACTIVITY_LOG_TAIL_LINES) -> list[str]:
+    path = log_path or get_cli_log_path()
+    try:
+        with open(path, "r", encoding="utf-8") as fp:
+            raw_lines = fp.readlines()
+    except OSError:
+        return []
+    return [line.rstrip("\r\n") for line in raw_lines[-max(1, lines):]]
+
+
+def parse_schtasks_query_output(output: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for raw_line in str(output or "").splitlines():
+        if ":" not in raw_line:
+            continue
+        key, value = raw_line.split(":", 1)
+        normalized_key = re.sub(r"\s+", " ", key.strip()).lower()
+        if not normalized_key:
+            continue
+        fields[normalized_key] = value.strip()
+    return fields
+
+
+def query_scheduled_task_status(
+    task_name: str = SCHEDULED_TASK_NAME,
+    *,
+    runner=None,
+) -> dict:
+    task_name = (task_name or SCHEDULED_TASK_NAME).strip()
+    if not task_name or _contains_control_chars(task_name):
+        return {"available": False, "registered": False, "diagnostic": "Invalid scheduled task name."}
+    if runner is None and os.name != "nt":
+        return {
+            "available": False,
+            "registered": False,
+            "task_name": task_name,
+            "diagnostic": "Windows Task Scheduler is only available on Windows.",
+        }
+    runner = runner or subprocess.run
+    kwargs = {"capture_output": True, "text": True}
+    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    try:
+        proc = runner(["schtasks", "/Query", "/TN", task_name, "/FO", "LIST", "/V"], **kwargs)
+    except Exception as exc:
+        return {
+            "available": False,
+            "registered": False,
+            "task_name": task_name,
+            "diagnostic": f"Could not query scheduled task: {exc}",
+        }
+
+    combined = "\n".join(
+        part for part in (getattr(proc, "stdout", ""), getattr(proc, "stderr", "")) if part
+    ).strip()
+    if getattr(proc, "returncode", 1) != 0:
+        lowered = combined.lower()
+        if "cannot find" in lowered or "does not exist" in lowered:
+            return {
+                "available": True,
+                "registered": False,
+                "task_name": task_name,
+                "diagnostic": "No scheduled auto-update task is registered.",
+            }
+        return {
+            "available": False,
+            "registered": False,
+            "task_name": task_name,
+            "diagnostic": combined or f"schtasks exit {getattr(proc, 'returncode', '?')}",
+        }
+
+    fields = parse_schtasks_query_output(combined)
+    last_result = fields.get("last result", "")
+    result_normalized = str(last_result).strip().lower()
+    last_result_ok = result_normalized in {"0", "0x0", "the operation completed successfully. (0x0)"}
+    return {
+        "available": True,
+        "registered": True,
+        "task_name": task_name,
+        "status": fields.get("status", ""),
+        "schedule": fields.get("schedule type", "") or fields.get("schedule", ""),
+        "next_run_time": fields.get("next run time", ""),
+        "last_run_time": fields.get("last run time", ""),
+        "last_result": last_result,
+        "last_result_ok": last_result_ok,
+        "task_to_run": fields.get("task to run", ""),
+        "diagnostic": "registered",
+    }
+
+
+def build_scheduler_activity_report(
+    *,
+    activity_path: str | None = None,
+    log_path: str | None = None,
+    task_name: str = SCHEDULED_TASK_NAME,
+    task_query_runner=None,
+    limit: int = 25,
+) -> dict:
+    events = read_cli_activity_events(activity_path, limit=limit)
+    success_count = sum(1 for event in events if int(event.get("exit_code", 1)) == 0)
+    failed_count = sum(1 for event in events if int(event.get("exit_code", 0)) != 0)
+    task_status = query_scheduled_task_status(task_name, runner=task_query_runner)
+    return {
+        "schema_version": CLI_ACTIVITY_SCHEMA_VERSION,
+        "generated_at": _utc_timestamp(),
+        "task": task_status,
+        "activity_path": activity_path or get_cli_activity_log_path(),
+        "log_path": log_path or get_cli_log_path(),
+        "summary": {
+            "events": len(events),
+            "success": success_count,
+            "failed": failed_count,
+            "last_outcome": events[-1].get("outcome") if events else "",
+            "last_finished_at": events[-1].get("finished_at") if events else "",
+        },
+        "events": events,
+        "log_tail": read_cli_log_tail(log_path, lines=CLI_ACTIVITY_LOG_TAIL_LINES),
+    }
+
+
+def format_scheduler_activity_report(report: dict) -> str:
+    task = report.get("task", {}) if isinstance(report, dict) else {}
+    summary = report.get("summary", {}) if isinstance(report, dict) else {}
+    lines = [
+        "Scheduler Activity",
+        f"Task: {task.get('task_name') or SCHEDULED_TASK_NAME}",
+    ]
+    if task.get("registered"):
+        lines.append(
+            "Task status: registered"
+            f" ({task.get('status') or 'unknown'})"
+            f"; schedule={task.get('schedule') or '-'}"
+        )
+        lines.append(
+            f"Last run: {task.get('last_run_time') or '-'}"
+            f"; last result: {task.get('last_result') or '-'}"
+            f"; next run: {task.get('next_run_time') or '-'}"
+        )
+    else:
+        availability = "available" if task.get("available") else "unavailable"
+        lines.append(f"Task status: not registered ({availability}: {task.get('diagnostic') or '-'})")
+
+    lines.extend([
+        "",
+        f"Activity log: {report.get('activity_path') or '-'}",
+        f"CLI log: {report.get('log_path') or '-'}",
+        (
+            f"Events: {summary.get('events', 0)} total, "
+            f"{summary.get('success', 0)} success, {summary.get('failed', 0)} failed"
+        ),
+    ])
+
+    events = report.get("events") or []
+    if events:
+        lines.append("")
+        lines.append("Recent events:")
+        for event in events[-10:]:
+            lines.append(
+                f"  {event.get('finished_at') or event.get('started_at') or '-'}  "
+                f"{event.get('action')}  {event.get('outcome')}  "
+                f"exit={event.get('exit_code')}  {event.get('summary') or ''}"
+            )
+    else:
+        lines.append("Recent events: none")
+
+    log_tail = report.get("log_tail") or []
+    if log_tail:
+        lines.append("")
+        lines.append("CLI log tail:")
+        for line in log_tail[-CLI_ACTIVITY_LOG_TAIL_LINES:]:
+            lines.append(f"  {line}")
+    return "\n".join(lines)
 
 
 TEXT_EXPORT_FORMATS = {
@@ -8818,7 +9122,7 @@ class HostsFileEditor:
             "Schedule Auto-Update",
             (
                 "Register a Windows Scheduled Task that runs "
-                f"`{APP_SLUG} --update` at the interval you choose. "
+                f"`{APP_SLUG} --update --silent` at the interval you choose. "
                 "The task runs with the highest privilege level so unattended updates can still write the hosts file."
             ),
             accent=PALETTE["blue"],
@@ -8910,7 +9214,7 @@ class HostsFileEditor:
             try:
                 _, summary = build_schtasks_create_command(
                     "Preview",
-                    "python.exe hosts_editor.py --update",
+                    build_scheduler_update_command("python.exe", "hosts_editor.py"),
                     freq,
                     start_time=time_var.get(),
                     weekday=weekday_var.get(),
@@ -8925,10 +9229,19 @@ class HostsFileEditor:
         refresh_schedule_controls()
 
         def do_register():
-            task_name = "HostsFileGet Auto-Update"
+            task_name = SCHEDULED_TASK_NAME
             interpreter = sys.executable
             script = os.path.abspath(sys.argv[0] if not getattr(sys, 'frozen', False) else sys.executable)
-            command = f'"{interpreter}" "{script}" --update' if not getattr(sys, 'frozen', False) else f'"{script}" --update'
+            try:
+                command = build_scheduler_update_command(
+                    interpreter,
+                    script,
+                    frozen=bool(getattr(sys, 'frozen', False)),
+                )
+            except ValueError as exc:
+                set_status_message(str(exc), tone="error")
+                self.update_status(f"Scheduled auto-update not registered: {exc}", is_error=True)
+                return
             freq = freq_var.get()
             try:
                 args, cadence_summary = build_schtasks_create_command(
@@ -8961,7 +9274,7 @@ class HostsFileEditor:
                 self.update_status(f"Scheduled auto-update failed: {e}", is_error=True)
 
         def do_unregister():
-            task_name = "HostsFileGet Auto-Update"
+            task_name = SCHEDULED_TASK_NAME
             try:
                 proc = subprocess.run(
                     ['schtasks', '/Delete', '/TN', task_name, '/F'],
@@ -8983,9 +9296,22 @@ class HostsFileEditor:
                 set_status_message(f"Failed to remove task: {e}", tone="error")
                 self.update_status(f"Scheduled auto-update removal failed: {e}", is_error=True)
 
+        def do_show_activity_report():
+            report = build_scheduler_activity_report()
+            tone = "warning" if report.get("summary", {}).get("failed") else "info"
+            self._show_text_report_dialog(
+                "Scheduler activity",
+                "Task Scheduler status and recent silent update activity from the local app data folder.",
+                format_scheduler_activity_report(report),
+                tone=tone,
+                width=860,
+                height=620,
+            )
+
         btn_row = ttk.Frame(dialog)
         btn_row.pack(fill='x', padx=20, pady=(6, 20))
         ttk.Button(btn_row, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
+        ttk.Button(btn_row, text="Activity Report", command=do_show_activity_report, style="Secondary.TButton").pack(side="right", padx=(0, 8))
         ttk.Button(btn_row, text="Remove Schedule", command=do_unregister, style="Danger.TButton").pack(side="right", padx=(0, 8))
         ttk.Button(btn_row, text="Register / Replace", command=do_register, style="Action.TButton").pack(side="right", padx=(0, 8))
         dialog.grab_set()
@@ -12001,6 +12327,7 @@ def _cli_hosts_path() -> str:
 
 
 _CLI_LOG_PATH: str | None = None
+_CLI_ACTIVITY_PATH: str | None = None
 
 
 def _cli_enable_silent_logging() -> str | None:
@@ -12010,14 +12337,16 @@ def _cli_enable_silent_logging() -> str | None:
     unwanted Task Scheduler alerts. Returns the log path (or None if the
     directory could not be prepared).
     """
-    global _CLI_LOG_PATH
+    global _CLI_LOG_PATH, _CLI_ACTIVITY_PATH
     try:
         log_dir = get_app_config_dir()
         os.makedirs(log_dir, exist_ok=True)
-        _CLI_LOG_PATH = os.path.join(log_dir, "cli.log")
+        _CLI_LOG_PATH = get_cli_log_path(log_dir)
+        _CLI_ACTIVITY_PATH = get_cli_activity_log_path(log_dir)
         return _CLI_LOG_PATH
     except OSError:
         _CLI_LOG_PATH = None
+        _CLI_ACTIVITY_PATH = None
         return None
 
 
@@ -12152,29 +12481,52 @@ def _cli_update(hosts_path: str) -> int:
     sources this install has used. Skips if the user has never imported
     anything (nothing to update).
     """
+    started_at = _utc_timestamp()
+    started_monotonic = time.monotonic()
+
+    def finish(exit_code: int, summary: str, **details) -> int:
+        if _CLI_ACTIVITY_PATH:
+            try:
+                append_cli_activity_event(
+                    {
+                        "action": "update",
+                        "started_at": started_at,
+                        "finished_at": _utc_timestamp(),
+                        "duration_seconds": time.monotonic() - started_monotonic,
+                        "exit_code": exit_code,
+                        "outcome": "success" if exit_code == 0 else "failed",
+                        "summary": summary,
+                        "details": {"hosts_path": hosts_path, **details},
+                    },
+                    _CLI_ACTIVITY_PATH,
+                )
+            except OSError:
+                pass
+        return exit_code
+
     if not _cli_is_admin():
         _cli_print("Administrator privileges required.")
-        return 1
+        return finish(1, "Administrator privileges required.")
     if os.path.exists(hosts_path + ".disabled"):
         _cli_print(
             "hosts file is currently disabled; re-enable it before running --update so refreshed sources are not written into the temporary minimal file."
         )
-        return 1
+        return finish(1, "hosts file is currently disabled.")
 
     config_path = get_primary_config_path("hosts_editor_config.json")
     if not os.path.isfile(config_path):
         _cli_print("No config found; nothing to update.")
-        return 2
+        return finish(2, "No config found; nothing to update.")
     try:
         config = json.loads(read_text_file_content(config_path))
     except (OSError, ValueError) as e:
         _cli_print(f"Config read failed: {e}")
-        return 2
+        return finish(2, f"Config read failed: {e}")
     sanitized = sanitize_config_snapshot(config, os.path.expanduser("~"))
     last_fetched = sanitized.get("source_last_fetched", {})
     if not last_fetched:
         _cli_print("No previously-imported sources recorded; nothing to update.")
-        return 0
+        return finish(0, "No previously-imported sources recorded; nothing to update.", source_count=0)
 
     # Reverse-map URL -> display name from the bundled catalog so the output
     # comments look like a GUI batch import.
@@ -12187,7 +12539,7 @@ def _cli_update(hosts_path: str) -> int:
 
     backup_result = _cli_backup(hosts_path)
     if backup_result not in (0, 2):
-        return backup_result
+        return finish(backup_result, "Backup failed before scheduled update.")
     collected: list[str] = []
     updated_stamps: dict[str, str] = dict(last_fetched)
     updated_cache_metadata: dict[str, dict] = dict(sanitized.get("source_cache_metadata", {}))
@@ -12231,7 +12583,13 @@ def _cli_update(hosts_path: str) -> int:
 
     if not collected:
         _cli_print("No content successfully fetched; hosts file left unchanged.")
-        return 1
+        return finish(
+            1,
+            "No content successfully fetched; hosts file left unchanged.",
+            attempted_sources=len(last_fetched),
+            successful_sources=successes,
+            failed_sources=len(failures),
+        )
 
     existing_lines: list[str] = []
     if os.path.exists(hosts_path):
@@ -12239,7 +12597,7 @@ def _cli_update(hosts_path: str) -> int:
             existing_lines = read_text_file_lines(hosts_path)
         except OSError as e:
             _cli_print(f"Could not read current hosts file: {e}")
-            return 1
+            return finish(1, f"Could not read current hosts file: {e}")
     whitelist_text = sanitized.get("whitelist", "")
     whitelist_set: set[str] = set()
     for wline in whitelist_text.splitlines():
@@ -12259,7 +12617,7 @@ def _cli_update(hosts_path: str) -> int:
         write_text_file_atomic(hosts_path, '\n'.join(cleaned))
     except OSError as e:
         _cli_print(f"Could not write updated hosts file: {e}")
-        return 1
+        return finish(1, f"Could not write updated hosts file: {e}")
 
     # Persist new timestamps.
     try:
@@ -12272,7 +12630,15 @@ def _cli_update(hosts_path: str) -> int:
         pass
 
     _cli_print(f"Applied {stats['final_active']:,} active entries from {successes} source(s); {len(failures)} failed.")
-    return 0 if successes and not failures else (0 if successes else 1)
+    exit_code = 0 if successes and not failures else (0 if successes else 1)
+    return finish(
+        exit_code,
+        f"Applied {stats['final_active']:,} active entries from {successes} source(s); {len(failures)} failed.",
+        attempted_sources=len(last_fetched),
+        successful_sources=successes,
+        failed_sources=len(failures),
+        final_active=stats["final_active"],
+    )
 
 
 def _cli_source_health(output_path: str | None, timeout: float, workers: int, fail_on_unhealthy: bool) -> int:
@@ -12313,6 +12679,22 @@ def _cli_source_health(output_path: str | None, timeout: float, workers: int, fa
 
     if fail_on_unhealthy and summary["failed"]:
         return 1
+    return 0
+
+
+def _cli_activity_report(output_path: str | None) -> int:
+    report = build_scheduler_activity_report()
+    _cli_print(format_scheduler_activity_report(report))
+    if output_path:
+        try:
+            output_dir = os.path.dirname(os.path.abspath(output_path))
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+            write_text_file_atomic(output_path, json.dumps(report, indent=2))
+            _cli_print(f"Wrote scheduler activity report to {output_path}")
+        except OSError as e:
+            _cli_print(f"Could not write scheduler activity report: {e}")
+            return 2
     return 0
 
 
@@ -12527,6 +12909,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--history-status",
         "--history-snapshot",
         "--history-restore",
+        "--activity-report",
+        "--activity-report-output",
         "--source-health",
         "--source-health-output",
         "--source-health-timeout",
@@ -12545,6 +12929,7 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--profile-import=",
         "--profile-export=",
         "--history-restore=",
+        "--activity-report-output=",
         "--source-health-output=",
         "--source-health-timeout=",
         "--source-health-workers=",
@@ -12572,6 +12957,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--history-status", action="store_true", help="Show optional local Git history status and recent snapshots.")
     parser.add_argument("--history-snapshot", action="store_true", help="Commit the current hosts file into the optional local Git history repository.")
     parser.add_argument("--history-restore", metavar="REF", help="Restore the hosts file from an optional local Git history commit ref after creating a normal backup.")
+    parser.add_argument("--activity-report", action="store_true", help="Show scheduled-update task status plus recent silent CLI activity.")
+    parser.add_argument("--activity-report-output", metavar="PATH", help="Write detailed scheduled-update activity JSON to PATH.")
     parser.add_argument("--source-health", action="store_true", help="Check curated source reachability and print a summary without launching the GUI.")
     parser.add_argument("--source-health-output", metavar="PATH", help="Write detailed source-health JSON to PATH.")
     parser.add_argument("--source-health-timeout", type=float, default=SOURCE_HEALTH_TIMEOUT_SECONDS, help="Per-source network timeout in seconds.")
@@ -12622,6 +13009,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         return _cli_history_snapshot(hosts_path)
     if args.history_restore:
         return _cli_history_restore(hosts_path, args.history_restore)
+    if args.activity_report or args.activity_report_output:
+        return _cli_activity_report(args.activity_report_output)
     if args.source_health:
         return _cli_source_health(
             args.source_health_output,

@@ -93,6 +93,11 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added `--profile-list`, `--profile-import`, `--profile-apply`, and `--profile-export` for explicit saved-profile automation.
 - Profile import now stages a declarative profile without activating it; profile apply switches the active runtime config without writing the system hosts file.
 - Profile export can write any saved profile as declarative YAML/TOML/JSON.
+
+**Scheduler activity**
+- Scheduled auto-update registration now uses the hardened `--update --silent` command builder for script and frozen executable launches.
+- Silent scheduled updates write bounded structured activity records to `%LOCALAPPDATA%\HostsFileGet\cli-activity.jsonl` alongside the human-readable CLI log.
+- Added `--activity-report` and `--activity-report-output` to inspect Task Scheduler status, recent update outcomes, and the CLI log tail without elevation.
 - Documented format semantics and source references in `docs/export-formats.md`.
 
 ## [v2.17.0] - 2026-04-18

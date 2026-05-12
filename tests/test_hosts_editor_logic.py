@@ -27,6 +27,7 @@ from hosts_editor import (
     STALE_FRESH_HOURS,
     STALE_WARN_HOURS,
     append_provenance_event,
+    append_cli_activity_event,
     add_domain_to_whitelist_text,
     build_accessibility_audit_report,
     build_false_positive_triage_report,
@@ -69,6 +70,7 @@ from hosts_editor import (
     parse_gas_mask_archive_path,
     parse_hostsfileeditor_archive_path,
     parse_declarative_config_text,
+    parse_schtasks_query_output,
     load_declarative_config_text,
     apply_declarative_profile_to_config,
     upsert_profile_in_config,
@@ -80,6 +82,8 @@ from hosts_editor import (
     build_export_domain_records,
     build_git_history_metadata,
     build_git_history_status_report,
+    build_scheduler_activity_report,
+    build_scheduler_update_command,
     export_lines_as_format,
     export_lines_as_bytes,
     extract_blocking_domains_from_lines,
@@ -96,6 +100,7 @@ from hosts_editor import (
     format_declarative_profile_summary,
     format_profile_list_summary,
     format_git_history_status_report,
+    format_scheduler_activity_report,
     format_source_trust_badges,
     format_source_overlap_report,
     format_dns_bypass_diagnostics,
@@ -113,6 +118,7 @@ from hosts_editor import (
     normalize_custom_source_url,
     normalize_false_positive_domain,
     read_http_body_limited,
+    read_cli_activity_events,
     read_git_history_snapshot,
     read_text_file_lines,
     remove_import_section,
@@ -121,6 +127,7 @@ from hosts_editor import (
     resolve_saved_state_hashes,
     rewrite_block_sink_ip,
     sanitize_config_snapshot,
+    sanitize_cli_activity_event,
     sanitize_custom_sources,
     sanitize_i18n_catalog,
     sanitize_profile_id,
@@ -2326,6 +2333,92 @@ profile:
         self.assertNotIn("/ST", onlogon_args)
         self.assertNotIn("/D", onlogon_args)
         self.assertIn("sign-in", onlogon_summary.lower())
+
+    def test_build_scheduler_update_command_forces_silent_logging(self):
+        command = build_scheduler_update_command(
+            r"C:\Python312\python.exe",
+            r"C:\Apps\Hosts File Get\hosts_editor.py",
+        )
+
+        self.assertIn("--update", command)
+        self.assertIn("--silent", command)
+        self.assertIn('"C:\\Apps\\Hosts File Get\\hosts_editor.py"', command)
+
+        frozen_command = build_scheduler_update_command(
+            "",
+            r"C:\Apps\HostsFileGet.exe",
+            frozen=True,
+        )
+        self.assertEqual(frozen_command, r"C:\Apps\HostsFileGet.exe --update --silent")
+
+    def test_scheduler_activity_event_roundtrips_and_formats_report(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            activity_path = os.path.join(tmp, "activity.jsonl")
+            log_path = os.path.join(tmp, "cli.log")
+            write_text_file_atomic(log_path, "2026-05-12T12:00:00  OK Example\n")
+            append_cli_activity_event(
+                {
+                    "action": "update",
+                    "started_at": "2026-05-12T12:00:00Z",
+                    "finished_at": "2026-05-12T12:00:03Z",
+                    "duration_seconds": 3.2,
+                    "exit_code": 0,
+                    "summary": "Applied 10 active entries from 1 source(s); 0 failed.",
+                    "details": {"successful_sources": 1, "failed_sources": 0},
+                },
+                activity_path,
+            )
+
+            events = read_cli_activity_events(activity_path)
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["action"], "update")
+            self.assertEqual(events[0]["details"]["successful_sources"], 1)
+
+            class Completed:
+                returncode = 0
+                stdout = (
+                    "TaskName: \\HostsFileGet Auto-Update\n"
+                    "Status: Ready\n"
+                    "Schedule Type: Daily\n"
+                    "Next Run Time: 5/13/2026 3:30:00 AM\n"
+                    "Last Run Time: 5/12/2026 3:30:00 AM\n"
+                    "Last Result: 0\n"
+                    "Task To Run: C:\\Apps\\HostsFileGet.exe --update --silent\n"
+                )
+                stderr = ""
+
+            report = build_scheduler_activity_report(
+                activity_path=activity_path,
+                log_path=log_path,
+                task_query_runner=lambda *_args, **_kwargs: Completed(),
+            )
+            formatted = format_scheduler_activity_report(report)
+
+            self.assertTrue(report["task"]["registered"])
+            self.assertEqual(report["summary"]["success"], 1)
+            self.assertIn("Scheduler Activity", formatted)
+            self.assertIn("--silent", report["task"]["task_to_run"])
+            self.assertIn("OK Example", formatted)
+
+    def test_parse_schtasks_query_output_and_activity_sanitizer_are_bounded(self):
+        fields = parse_schtasks_query_output("Status: Ready\nLast Result: 0x0\nIgnored\n")
+        self.assertEqual(fields["status"], "Ready")
+        self.assertEqual(fields["last result"], "0x0")
+
+        sanitized = sanitize_cli_activity_event({
+            "action": "update\nbad",
+            "duration_seconds": "bad",
+            "exit_code": "not-int",
+            "details": {"ok": True, "bad\nkey": "drop", "note": "x" * 700},
+        })
+
+        self.assertEqual(sanitized["duration_seconds"], 0.0)
+        self.assertEqual(sanitized["exit_code"], 0)
+        self.assertIn("ok", sanitized["details"])
+        self.assertNotIn("bad\nkey", sanitized["details"])
+        self.assertLessEqual(len(sanitized["details"]["note"]), 500)
 
     # ---- sanitize_config_snapshot: new v2.12 fields ----
     def test_sanitize_config_snapshot_keeps_valid_source_last_fetched(self):

@@ -66,6 +66,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - profile-ready schema mirror for future named whitelist/source/pin sets
   - declarative YAML/TOML/JSON profile plan, apply, and export commands
   - CLI profile list/import/apply/export commands that never write the hosts file
+  - scheduled-update activity reports backed by bounded silent-run logs
   - versioned English string catalog foundation for future localization
 
 ## Supported Input Shapes
@@ -188,6 +189,13 @@ python hosts_editor.py --profile-apply work
 python hosts_editor.py --profile-export work .\work-profile.toml
 ```
 
+Inspect scheduled-update status and recent silent-run activity with:
+
+```powershell
+python hosts_editor.py --activity-report
+python hosts_editor.py --activity-report --activity-report-output scheduler-activity.json
+```
+
 Run the deterministic large-file benchmark with:
 
 ```powershell
@@ -209,6 +217,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Declarative profile files: `docs/declarative-config.md`
 - CLI profile management: `docs/cli-profiles.md`
 - Optional Git history: `docs/git-history.md`
+- Scheduler activity report: `docs/scheduler-activity.md`
 - Troubleshooting and hosts-file limits: `TROUBLESHOOTING.md`
 - Config schema: `docs/config-schema.md`
 - Curated source manifest: `docs/source-manifest.md`
