@@ -28,6 +28,10 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added a normalized fetched-source domain index and pairwise overlap matrix to **Sources Report**.
 - The report now shows per-source unique/overlap counts plus top overlapping source pairs with sample shared domains.
 
+**Entry provenance**
+- Added **Entry Provenance...** from the Tools menu and editor context menu.
+- The line-level report shows import-section ownership, parsed domains, fetched-source matches, and matching local provenance JSONL events.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

@@ -42,6 +42,7 @@ It is not a DNS server, browser ad blocker, cloud filtering service, or endpoint
 | `docs/source-health.md` | Source reachability checker and report format |
 | `docs/source-overlap.md` | Source overlap matrix behavior and limits |
 | `docs/false-positive-triage.md` | Check Domain triage behavior, actions, and limits |
+| `docs/entry-provenance.md` | Line-level provenance/blame report behavior and limits |
 | `CLAUDE.md` | Compact architecture and gotchas snapshot for agents |
 | `default.txt` | Sample/default hosts content |
 | `icon.png` | App branding asset |
@@ -95,7 +96,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - False-positive triage: `build_false_positive_triage_report`, `format_false_positive_triage_report`, `add_domain_to_whitelist_text`, `remove_false_positive_matches_from_lines`.
 - Cleanup/export/search helpers: `remove_lines_by_indices`, `rewrite_block_sink_ip`, `scan_suspicious_redirects`, `export_lines_as_format`, `strip_lines_by_category`.
 - Source analytics: `find_sources_containing_domain`, `summarize_source_contributions`, `build_source_domain_index`, `build_source_overlap_report`, `categorize_entries_by_domain_hint`, `classify_source_freshness`.
-- Provenance and pinned-domain helpers: `append_provenance_event`, `read_provenance_events`, `build_pinned_export_payload`, `parse_pinned_import_payload`, `sanitize_pinned_domains`.
+- Provenance and pinned-domain helpers: `append_provenance_event`, `read_provenance_events`, `build_entry_provenance_report`, `format_entry_provenance_report`, `build_pinned_export_payload`, `parse_pinned_import_payload`, `sanitize_pinned_domains`.
 - Log importers: `parse_pihole_ftl_blocked_domains`, `parse_adguard_home_querylog`.
 - Bulk text transformations: `apply_find_replace`, `discover_import_sections`, `remove_import_section`.
 
@@ -114,7 +115,7 @@ Primary responsibilities:
 - Backups, restore, compare, panic restore, hosts disable/enable.
 - Import UI, source catalog, custom sources, manual imports, whitelist import.
 - Search, removal, find/replace, context menu commands.
-- Source reports, provenance log view, health scan, false-positive triage, preferences, scheduler wizard.
+- Source reports, provenance log view, entry provenance, health scan, false-positive triage, preferences, scheduler wizard.
 - Worker thread queue handling and safe Tk callback scheduling with `_safe_after`.
 
 `HostsFileEditor` is large enough that future refactors should split by behavior after tests are in place:
