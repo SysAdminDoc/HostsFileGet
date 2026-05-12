@@ -39,6 +39,7 @@ from hosts_editor import (
     build_rule_tier_report,
     build_source_domain_index,
     build_source_health_report,
+    build_source_manifest_index,
     build_source_overlap_report,
     build_source_request_headers,
     build_source_trust_badges,
@@ -144,6 +145,8 @@ from hosts_editor import (
     format_portable_bundle_export_summary,
     format_scheduler_activity_report,
     format_source_trust_badges,
+    format_source_bundle_catalog,
+    format_source_bundle_report,
     format_source_overlap_report,
     format_dns_bypass_diagnostics,
     format_threat_feed_pack_catalog,
@@ -165,6 +168,7 @@ from hosts_editor import (
     looks_like_domain,
     looks_like_html_document,
     load_blocklist_sources_manifest,
+    load_source_bundle_catalog,
     load_i18n_catalog,
     list_git_history_snapshots,
     migrate_config_snapshot,
@@ -193,10 +197,12 @@ from hosts_editor import (
     sanitize_profile_snapshot,
     sanitize_profiles_snapshot,
     sanitize_source_cache_metadata,
+    sanitize_source_bundle_catalog,
     sanitize_source_manifest,
     sanitize_pinned_domains,
     scan_suspicious_redirects,
     source_trust_report_url,
+    source_bundle_to_import_sources,
     strip_lines_by_category,
     summarize_clean_changes,
     summarize_source_health_results,
@@ -699,6 +705,124 @@ class HostsEditorLogicTests(unittest.TestCase):
                 load_blocklist_sources_manifest(str(path)),
                 {"Security": [("Threat Feed", "https://threats.example/hosts.txt", "Threat domains.")]},
             )
+
+    def test_source_bundle_catalog_sanitizes_manifest_references(self):
+        manifest = {
+            "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+            "categories": [
+                {
+                    "name": "Ads",
+                    "sources": [
+                        {
+                            "name": "Example Hosts",
+                            "url": "https://example.com/hosts.txt",
+                            "description": "Small test source.",
+                        },
+                        {
+                            "name": "Privacy Hosts",
+                            "url": "https://privacy.example/hosts.txt",
+                            "description": "Privacy test source.",
+                        },
+                    ],
+                }
+            ],
+            "bundles": [
+                {
+                    "id": "starter",
+                    "name": "Starter",
+                    "description": "Small starter bundle.",
+                    "risk": "low",
+                    "source_names": ["Example Hosts", "Privacy Hosts"],
+                }
+            ],
+        }
+
+        blocklist_sources = sanitize_source_manifest(manifest)
+        catalog = sanitize_source_bundle_catalog(manifest, blocklist_sources)
+
+        self.assertEqual(len(catalog), 1)
+        self.assertEqual(catalog[0]["id"], "starter")
+        self.assertEqual(catalog[0]["source_count"], 2)
+        self.assertEqual(catalog[0]["sources"][0]["category"], "Ads")
+        self.assertEqual(
+            source_bundle_to_import_sources(catalog[0]),
+            [
+                ("Example Hosts", "https://example.com/hosts.txt"),
+                ("Privacy Hosts", "https://privacy.example/hosts.txt"),
+            ],
+        )
+
+    def test_source_bundle_catalog_rejects_missing_or_duplicate_sources(self):
+        manifest = {
+            "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+            "categories": [
+                {
+                    "name": "Ads",
+                    "sources": [
+                        {
+                            "name": "Example Hosts",
+                            "url": "https://example.com/hosts.txt",
+                            "description": "Small test source.",
+                        }
+                    ],
+                }
+            ],
+            "bundles": [
+                {
+                    "id": "starter",
+                    "name": "Starter",
+                    "risk": "low",
+                    "source_names": ["Example Hosts", "Missing Hosts"],
+                }
+            ],
+        }
+
+        with self.assertRaises(ValueError):
+            sanitize_source_bundle_catalog(manifest)
+
+        duplicate_manifest = json.loads(json.dumps(manifest))
+        duplicate_manifest["bundles"][0]["source_names"] = ["Example Hosts", "example hosts"]
+        with self.assertRaises(ValueError):
+            sanitize_source_bundle_catalog(duplicate_manifest)
+
+    def test_source_bundle_formatters_show_catalog_and_detail(self):
+        catalog = [
+            {
+                "id": "starter",
+                "name": "Starter",
+                "description": "Small starter bundle.",
+                "risk": "low",
+                "source_count": 1,
+                "sources": [
+                    {
+                        "name": "Example Hosts",
+                        "url": "https://example.com/hosts.txt",
+                        "description": "Small test source.",
+                        "category": "Ads",
+                    }
+                ],
+            }
+        ]
+
+        self.assertIn("Starter", format_source_bundle_catalog(catalog))
+        self.assertIn("risk: low", format_source_bundle_catalog(catalog))
+        detail = format_source_bundle_report(catalog[0])
+        self.assertIn("Source Bundle: Starter", detail)
+        self.assertIn("Example Hosts [Ads]", detail)
+
+    def test_project_source_bundle_manifest_loads_and_indexes_sources(self):
+        bundles = load_source_bundle_catalog(blocklist_sources=HostsFileEditor.BLOCKLIST_SOURCES)
+        index = build_source_manifest_index(HostsFileEditor.BLOCKLIST_SOURCES)
+
+        self.assertEqual(bundles, HostsFileEditor.SOURCE_BUNDLES)
+        self.assertGreaterEqual(len(bundles), 5)
+        self.assertIn("HaGezi Light", index)
+        starter = hosts_editor.find_source_bundle(bundles, "starter-low-breakage")
+        self.assertIsNotNone(starter)
+        self.assertGreaterEqual(starter["source_count"], 3)
+        self.assertTrue(
+            all(source["name"] in index for source in starter["sources"])
+        )
 
     def test_sanitize_i18n_catalog_accepts_versioned_messages(self):
         catalog = {

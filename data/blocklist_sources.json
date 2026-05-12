@@ -1,5 +1,80 @@
 {
   "schema_version": 1,
+  "bundles": [
+    {
+      "id": "starter-low-breakage",
+      "name": "Starter Low-Breakage",
+      "description": "Conservative starter bundle for users who want mainstream ad, tracker, and malware coverage with lower breakage risk.",
+      "risk": "low",
+      "source_names": [
+        "HaGezi Light",
+        "StevenBlack Unified",
+        "OISD Full"
+      ]
+    },
+    {
+      "id": "balanced-desktop",
+      "name": "Balanced Desktop",
+      "description": "General desktop bundle combining a balanced aggregate with mainstream ad and privacy filters.",
+      "risk": "medium",
+      "source_names": [
+        "HaGezi Pro",
+        "EasyList Hosts",
+        "EasyPrivacy Hosts",
+        "AdGuard DNS"
+      ]
+    },
+    {
+      "id": "aggressive-privacy",
+      "name": "Aggressive Privacy",
+      "description": "High-coverage privacy bundle for users willing to triage false positives before saving or scheduling.",
+      "risk": "high",
+      "source_names": [
+        "HaGeZi Pro Plus",
+        "1Hosts Pro",
+        "Frogeye Multi Party",
+        "NoTrack Tracking"
+      ]
+    },
+    {
+      "id": "threat-intel",
+      "name": "Threat Intel",
+      "description": "Malware, phishing, and threat-intelligence feeds that should be reviewed for freshness and source health before unattended use.",
+      "risk": "guarded",
+      "source_names": [
+        "HaGezi TIF",
+        "HaGeZi TIF Mini",
+        "URLHaus Malware",
+        "Phishing Army",
+        "Malware Filter Phishing"
+      ]
+    },
+    {
+      "id": "family-category",
+      "name": "Family Category Filters",
+      "description": "Opt-in category filters for adult, gambling, and social/distraction blocking scenarios.",
+      "risk": "guarded",
+      "source_names": [
+        "BlocklistProject Porn",
+        "BlocklistProject Gambling",
+        "Sinfonietta Social",
+        "RPiList Gambling"
+      ]
+    },
+    {
+      "id": "native-platform-telemetry",
+      "name": "Native Platform Telemetry",
+      "description": "Device and vendor telemetry lists for targeted review on fleets that match those platforms.",
+      "risk": "high",
+      "source_names": [
+        "Apple Native",
+        "Windows Office Native",
+        "Samsung Native",
+        "Roku Native",
+        "Xiaomi Native"
+      ]
+    }
+  ],
   "categories": [
     {
       "name": "Major / Unified / Aggregated",

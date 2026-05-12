@@ -174,6 +174,11 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added quick-switch report/apply helpers, optional tray dependency diagnostics, and regression tests.
 - Documented tray dependency, unsaved-change blocking, and config-only boundaries in `docs/profile-quick-switch.md`.
 
+**Source bundles**
+- Added top-level `bundles` support to `data/blocklist_sources.json` for starter, balanced, aggressive privacy, threat-intel, family/category, and platform telemetry import presets.
+- Added **Tools > Source Bundle Selector...** so bundle imports reuse the existing batch import worker, cache fallback, cancellation, and Raw/Normalized import mode.
+- Added bundle catalog validation, source-name indexing, report formatting helpers, docs, and regression tests.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

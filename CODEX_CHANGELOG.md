@@ -83,6 +83,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F040 complete. Next roadmap item: F041 tray quick switch.
 - Completed F041: added GUI profile quick switching, optional dynamically loaded tray quick switching with `pystray`/Pillow dependency diagnostics, opt-in PyInstaller tray-module bundling, config-only switch helpers, docs, and regression tests.
 - Updated `ROADMAP.md` to mark F041 complete. Next roadmap item: F042 variant/bundle selector.
+- Completed F042: added manifest-defined source bundle presets, bundle catalog validation/indexing/formatting helpers, **Tools > Source Bundle Selector...**, `docs/source-bundles.md`, roadmap/docs updates, and regression tests.
+- Updated `ROADMAP.md` to mark F042 complete. Next roadmap item: F043 filter builder and query history.
 
 ## Scope
 
