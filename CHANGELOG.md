@@ -139,6 +139,12 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added a curated **Threat Intelligence / NRD / DGA** source-manifest category so feed imports stay source-isolated and removable.
 - Documented the pack workflow, risk boundaries, and source basis in `docs/threat-feed-packs.md`.
 
+**CNAME cloaking workflow**
+- Added guarded CNAME cloaking workflow plans that separate hosts-reviewable disguised-domain feeds from original tracker-target lists requiring CNAME-aware DNS.
+- Added **Tools > CNAME Cloaking Workflow...**, `--cname-cloaking-list`, and `--cname-cloaking-plan PACK OUTPUT` for local review JSON without DNS lookups or remote writes.
+- Added an AdGuard CNAME disguised-domain source-manifest category and clarified that the existing NextDNS CNAME target feed is DNS-handoff-only.
+- Documented hosts-file limits, RPZ/DNS handoff guidance, and source basis in `docs/cname-cloaking.md`.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**
