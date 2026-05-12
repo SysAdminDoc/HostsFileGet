@@ -1,7 +1,7 @@
 # HostsFileGet Roadmap
 
 Version: 2026-05-12 roadmap execution update
-Repo state basis: `main` through F050 implementation plus external research current to 2026-05-12
+Repo state basis: `main` through F051 implementation plus external research current to 2026-05-12
 Scope: Windows-first desktop hosts-file editor, importer, cleaner, diagnostics, and safe writer
 
 This document supersedes the earlier broad idea dump. Useful shipped history has been preserved as baseline context, but the forward roadmap is now source-backed and tiered. Every active candidate cites at least one source ID from the appendix.
@@ -67,6 +67,7 @@ Non-negotiables:
 - [x] F048 - Watch expressions (`docs/watch-expressions.md`, saved local Filter Builder queries, editor/source-index report)
 - [x] F049 - Source freshness and growth charts (`docs/source-metrics.md`, compact local source metrics history, GUI report)
 - [x] F050 - Virtualized large-list views (`docs/virtualized-lists.md`, paged match-removal review)
+- [x] F051 - Parallel source fetcher with bounded retries (`docs/parallel-imports.md`, concurrent source fetches, source-order-preserving output)
 
 ## State Of The Repo
 
@@ -75,8 +76,8 @@ Non-negotiables:
 - Language and runtime: Python 3.x, Tkinter desktop UI, Windows-first assumptions, PowerShell launcher.
 - Entry points: `hosts_editor.py` for GUI and CLI, `PythonLauncher.ps1` for elevated launch/bootstrap, `HostsFileGet.spec` for PyInstaller.
 - Packaging: PyInstaller one-file Windows EXE with `uac_admin=True`; build artifacts exist locally under `build/` and `dist/` but are not tracked.
-- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 271 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation, migration importer fixtures, export-format fixtures, DNS integration fixtures, cloud DNS adapter fixtures, adblock syntax lint/quarantine fixtures, rule tier fixtures, IDN/homograph fixtures, threat-feed pack fixtures, CNAME cloaking workflow fixtures, encrypted-DNS bypass pack fixtures, DNS rebinding report fixtures, SafeSearch/restricted-mode template fixtures, profile activation schedule fixtures, profile quick-switch/tray dependency fixtures, source-bundle manifest fixtures, filter-builder query-history fixtures, watch-expression fixtures, source metrics fixtures, virtual-list fixtures, provenance filter/export fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, NextDNS/Control D CSV logs, and find/replace.
-- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/cloud-dns-adapters.md`, `docs/adblock-lint.md`, `docs/rule-tiers.md`, `docs/idn-homograph.md`, `docs/threat-feed-packs.md`, `docs/cname-cloaking.md`, `docs/encrypted-dns-bypass.md`, `docs/dns-rebinding.md`, `docs/safesearch-restricted-mode.md`, `docs/profile-activation-schedule.md`, `docs/profile-quick-switch.md`, `docs/source-bundles.md`, `docs/filter-builder.md`, `docs/watch-expressions.md`, `docs/source-metrics.md`, `docs/virtualized-lists.md`, `docs/provenance-log.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `LICENSE`, and this roadmap.
+- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 274 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation, migration importer fixtures, export-format fixtures, DNS integration fixtures, cloud DNS adapter fixtures, adblock syntax lint/quarantine fixtures, rule tier fixtures, IDN/homograph fixtures, threat-feed pack fixtures, CNAME cloaking workflow fixtures, encrypted-DNS bypass pack fixtures, DNS rebinding report fixtures, SafeSearch/restricted-mode template fixtures, profile activation schedule fixtures, profile quick-switch/tray dependency fixtures, source-bundle manifest fixtures, filter-builder query-history fixtures, watch-expression fixtures, source metrics fixtures, virtual-list fixtures, parallel import retry/order fixtures, provenance filter/export fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, NextDNS/Control D CSV logs, and find/replace.
+- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/cloud-dns-adapters.md`, `docs/adblock-lint.md`, `docs/rule-tiers.md`, `docs/idn-homograph.md`, `docs/threat-feed-packs.md`, `docs/cname-cloaking.md`, `docs/encrypted-dns-bypass.md`, `docs/dns-rebinding.md`, `docs/safesearch-restricted-mode.md`, `docs/profile-activation-schedule.md`, `docs/profile-quick-switch.md`, `docs/source-bundles.md`, `docs/filter-builder.md`, `docs/watch-expressions.md`, `docs/source-metrics.md`, `docs/parallel-imports.md`, `docs/virtualized-lists.md`, `docs/provenance-log.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `LICENSE`, and this roadmap.
 - License: MIT.
 
 ### Product Reality
@@ -89,6 +90,7 @@ HostsFileGet already provides:
 - Filter Builder runs local fielded queries across editor lines, fetched-source domains, curated source metadata, and recent query history without network calls or hosts-file writes.
 - Watch Expressions save local Filter Builder queries in app config and rerun them against current editor/source-index state without network calls or hosts-file writes.
 - Source Freshness & Growth records compact local metrics for successful imports/updates and renders freshness buckets plus domain-count growth charts without telemetry.
+- Batch imports fetch up to 4 sources concurrently with bounded retry attempts while preserving source-order output and cache fallback behavior.
 - Remove Matches uses a paged large-list review dialog so high-cardinality searches can still be reviewed before preview/apply.
 - Source freshness dots, update-on-launch, scheduled update, `--update`, `--apply`, `--backup`, `--disable`, `--enable`, `--silent`, provenance JSONL logging, and local provenance log filter/export.
 - Declarative profile plan/apply/export commands for YAML, TOML, and JSON source-of-truth files that update app config without writing the system hosts file.
@@ -335,14 +337,14 @@ Legend:
 24. Completed - Watch expressions: F048.
 25. Completed - Source freshness and growth charts: F049.
 26. Completed - Virtualized large-list views: F050.
+27. Completed - Parallel source fetcher with bounded retries: F051.
 
 Rationale: these items reduce maintenance risk, make the current product more trustworthy, and create the internal contracts needed for the larger profile/integration work.
 
 ### Next
 
-1. Profile UX and faster large-scale operations: F051.
-2. Packaging, plugin, collaboration growth: F045, F046, F052, F053, F054, F055.
-3. Recovery spike: F044.
+1. Packaging, plugin, collaboration growth: F045, F046, F052, F053, F054, F055.
+2. Recovery spike: F044.
 
 Rationale: these are valuable and well-supported by the market, but most require the Now-phase source manifest, profile model, and test/release foundations.
 
