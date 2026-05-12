@@ -12,6 +12,8 @@ CNAME cloaking is handled inside that boundary: HostsFileGet can catalog disguis
 
 Encrypted-DNS bypass blocking follows the same rule: HostsFileGet can plan hosts imports for resolver hostnames and explain router/firewall handoffs, but it does not install firewall rules, network routes, VPN controls, or endpoint enforcement.
 
+DNS rebinding protection is also advisory. HostsFileGet can report static hosts entries that map external-looking names to private, local, loopback, link-local, ULA, CGNAT, or special-use ranges, but live DNS rebinding enforcement belongs in the resolver, router, or managed endpoint policy.
+
 ## Runtime Targets
 
 - Primary OS: Windows.
@@ -68,6 +70,7 @@ Encrypted-DNS bypass blocking follows the same rule: HostsFileGet can plan hosts
 | `docs/threat-feed-packs.md` | NRD, DGA, and threat-intel feed pack planning with freshness and false-positive controls |
 | `docs/cname-cloaking.md` | CNAME cloaking source packs, hosts-file limits, and DNS handoff guidance |
 | `docs/encrypted-dns-bypass.md` | Encrypted-DNS bypass source packs and router/firewall handoff guidance |
+| `docs/dns-rebinding.md` | Static DNS rebinding-sensitive hosts mapping report behavior and limits |
 | `docs/accessibility.md` | Contrast audit, font assumptions, and manual Windows accessibility release checks |
 | `docs/i18n.md` | String catalog schema, fallback behavior, and localization guardrails |
 | `CLAUDE.md` | Compact architecture and gotchas snapshot for agents |
@@ -134,6 +137,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Threat feed pack planning: `list_threat_feed_packs`, `build_threat_feed_pack_plan`, `format_threat_feed_pack_catalog`, `format_threat_feed_pack_plan`.
 - CNAME cloaking workflow planning: `list_cname_cloaking_packs`, `build_cname_cloaking_plan`, `format_cname_cloaking_catalog`, `format_cname_cloaking_plan`.
 - Encrypted-DNS bypass pack planning: `list_encrypted_dns_bypass_packs`, `build_encrypted_dns_bypass_pack_plan`, `format_encrypted_dns_bypass_catalog`, `format_encrypted_dns_bypass_pack_plan`.
+- DNS rebinding checks: `classify_dns_rebinding_mapping`, `build_dns_rebinding_report`, `format_dns_rebinding_report`.
 - Cleanup/export/search helpers: `remove_lines_by_indices`, `rewrite_block_sink_ip`, `scan_suspicious_redirects`, `build_export_domain_records`, `build_dns_integration_export`, `build_cloud_dns_adapter_plan`, `format_dns_integration_pack_report`, `format_cloud_dns_adapter_catalog`, `export_lines_as_format`, `export_lines_as_bytes`, `strip_lines_by_category`.
 - Source analytics: `find_sources_containing_domain`, `summarize_source_contributions`, `build_source_domain_index`, `build_source_overlap_report`, `categorize_entries_by_domain_hint`, `classify_source_freshness`.
 - Provenance and pinned-domain helpers: `append_provenance_event`, `read_provenance_events`, `build_entry_provenance_report`, `format_entry_provenance_report`, `build_pinned_export_payload`, `parse_pinned_import_payload`, `sanitize_pinned_domains`.
@@ -156,7 +160,7 @@ Primary responsibilities:
 - Backups, restore, compare, panic restore, hosts disable/enable.
 - Import UI, source catalog, custom sources, manual imports, DNS log imports, whitelist import.
 - Search, removal, find/replace, adblock quarantine, context menu commands.
-- Source reports, provenance log view, entry provenance, health scan, adblock syntax lint, rule tier report, IDN/homograph report, NRD/DGA threat feed packs, CNAME cloaking workflow, encrypted-DNS bypass packs, false-positive triage, preferences, scheduler wizard.
+- Source reports, provenance log view, entry provenance, health scan, adblock syntax lint, rule tier report, IDN/homograph report, NRD/DGA threat feed packs, CNAME cloaking workflow, encrypted-DNS bypass packs, DNS rebinding protection check, false-positive triage, preferences, scheduler wizard.
 - Worker thread queue handling and safe Tk callback scheduling with `_safe_after`.
 
 `HostsFileEditor` is large enough that future refactors should split by behavior after tests are in place:
@@ -209,6 +213,7 @@ The CLI functions live near the bottom of `hosts_editor.py` and intentionally sh
 - `_cli_cname_cloaking_plan`
 - `_cli_encrypted_dns_bypass_list`
 - `_cli_encrypted_dns_bypass_plan`
+- `_cli_dns_rebinding_report`
 - `_cli_source_health`
 - `_handle_cli_args`
 

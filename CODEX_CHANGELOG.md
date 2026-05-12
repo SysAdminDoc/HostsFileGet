@@ -75,6 +75,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F036 complete. Next roadmap item: F037 encrypted DNS resolver bypass pack.
 - Completed F037: added guarded encrypted-DNS bypass pack planning, HaGeZi bypass source entries, router/firewall/IP handoff plans, GUI and CLI catalog/plan surfaces, JSON plan output, docs, and regression tests.
 - Updated `ROADMAP.md` to mark F037 complete. Next roadmap item: F038 DNS rebinding protection checks.
+- Completed F038: added static DNS rebinding-sensitive mapping checks for external-looking domains pointed at private/local/special-use ranges, trusted-suffix handling, GUI and CLI reports, JSON output, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F038 complete. Next roadmap item: F039 SafeSearch and restricted-mode templates.
 
 ## Scope
 
