@@ -63,6 +63,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - SafeSearch and restricted-mode template plans that separate hosts-reviewable search mappings from DNS CNAME handoffs
   - false-positive triage for whitelist, pin, source-match, and upstream report decisions
   - entry provenance view for import-section ownership, source matches, and local audit events
+  - provenance log filters and CSV/JSONL export for local audit review
 - Export adapters:
   - cleaned hosts, plain domains, Adblock, dnsmasq, and Pi-hole formats
   - Pi-hole, AdGuard Home/DNS, Technitium DNS Server, and blocky interoperability presets
@@ -346,6 +347,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Source overlap matrix: `docs/source-overlap.md`
 - False-positive triage: `docs/false-positive-triage.md`
 - Entry provenance: `docs/entry-provenance.md`
+- Provenance log filters/export: `docs/provenance-log.md`
 - Windows DNS Client snapshot: `docs/windows-dns-client.md`
 - DNS bypass diagnostics: `docs/dns-bypass-diagnostics.md`
 - Migration imports: `docs/migration-imports.md`
