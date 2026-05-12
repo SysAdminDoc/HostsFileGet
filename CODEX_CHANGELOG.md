@@ -87,6 +87,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F042 complete. Next roadmap item: F043 filter builder and query history.
 - Completed F043: added pure filter-builder query/history helpers, persisted `filter_query_history`, **Tools > Filter Builder...**, `docs/filter-builder.md`, config/docs updates, and regression tests.
 - Updated `ROADMAP.md` to mark F043 complete. Next roadmap item: F047 provenance log filters and export.
+- Completed F047: expanded the provenance log into a filtered local audit view with kind/domain/source/user/text/date filters, CSV/JSONL export, pure report/export helpers, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F047 complete. Next roadmap item: F048 local metrics dashboard.
 
 ## Scope
 

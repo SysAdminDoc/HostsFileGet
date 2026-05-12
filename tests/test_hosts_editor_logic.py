@@ -1,4 +1,5 @@
 import bz2
+import csv
 import gzip
 import io
 import json
@@ -37,6 +38,7 @@ from hosts_editor import (
     build_i18n_catalog_report,
     build_entry_provenance_report,
     build_pinned_export_payload,
+    build_provenance_log_report,
     build_rule_tier_report,
     build_source_domain_index,
     build_source_health_report,
@@ -114,13 +116,16 @@ from hosts_editor import (
     evaluate_profile_activation_schedule,
     export_lines_as_format,
     export_lines_as_bytes,
+    export_provenance_events,
     extract_blocking_domains_from_lines,
     fetch_source_with_cache,
+    filter_provenance_events,
     find_keyword_match_line_indices,
     find_profile_snapshot,
     find_sources_containing_domain,
     format_relative_time,
     format_entry_provenance_report,
+    format_provenance_log_report,
     format_false_positive_triage_report,
     format_accessibility_audit_report,
     format_adblock_syntax_report,
@@ -4530,6 +4535,96 @@ profile:
 
     def test_provenance_missing_file_returns_empty_list(self):
         self.assertEqual(read_provenance_events("Z:/definitely/not/here.jsonl"), [])
+
+    def test_filter_provenance_events_matches_kind_domain_source_and_date(self):
+        events = [
+            {
+                "ts": "2026-04-18T09:00:00",
+                "kind": "pin",
+                "domain": "ads.example",
+                "source": "context-menu",
+                "user": "alice",
+            },
+            {
+                "ts": "2026-04-19T10:15:00",
+                "kind": "whitelist_add",
+                "domains": ["tracker.example", "cdn.tracker.example"],
+                "source": "triage",
+                "user": "bob",
+                "note": "approved ticket 42",
+            },
+            {
+                "ts": "2026-04-20T08:00:00",
+                "kind": "whitelist_remove",
+                "domain": "tracker.example",
+                "source": "preferences",
+                "user": "bob",
+            },
+        ]
+
+        matched = filter_provenance_events(
+            events,
+            kind="whitelist_add",
+            domain="tracker.example",
+            source="triage",
+            since="2026-04-19",
+            until="2026-04-19",
+        )
+
+        self.assertEqual(len(matched), 1)
+        self.assertEqual(matched[0]["note"], "approved ticket 42")
+
+    def test_filter_provenance_events_handles_invalid_kind_text_and_limit(self):
+        events = [
+            {"ts": "2026-04-18T09:00:00", "kind": "pin", "domain": "one.example", "note": "alpha"},
+            {"ts": "2026-04-18T09:01:00", "kind": "unpin", "domain": "two.example", "note": "beta"},
+            {"ts": "2026-04-18T09:02:00", "kind": "pin", "domain": "three.example", "note": "alpha"},
+        ]
+
+        self.assertEqual(filter_provenance_events(events, kind="bogus"), [])
+        limited = filter_provenance_events(events, text="alpha", limit=1)
+        self.assertEqual([event["domain"] for event in limited], ["three.example"])
+
+    def test_build_and_format_provenance_log_report_summarizes_filtered_events(self):
+        events = [
+            {"ts": "2026-04-18T09:00:00", "kind": "pin", "domain": "one.example", "source": "context"},
+            {"ts": "2026-04-18T09:01:00", "kind": "pin", "domain": "two.example", "source": "context"},
+            {"ts": "2026-04-18T09:02:00", "kind": "unpin", "domain": "three.example", "source": "context"},
+        ]
+
+        report = build_provenance_log_report(events, {"kind": "pin"}, display_limit=1)
+        self.assertEqual(report["total_events"], 3)
+        self.assertEqual(report["matched_count"], 2)
+        self.assertEqual(report["displayed_count"], 1)
+        self.assertEqual(report["kind_counts"]["pin"], 2)
+        formatted = format_provenance_log_report(report)
+        self.assertIn("Matched events: 2", formatted)
+        self.assertIn("Export includes all matching events", formatted)
+        self.assertIn("two.example", formatted)
+        self.assertNotIn("one.example", formatted)
+
+    def test_export_provenance_events_supports_json_jsonl_and_csv(self):
+        events = [
+            {
+                "ts": "2026-04-18T09:00:00",
+                "kind": "pin",
+                "domain": "ads.example",
+                "domains": ["ads.example", "cdn.ads.example"],
+                "source": "context-menu",
+                "user": "alice",
+            }
+        ]
+
+        json_payload = json.loads(export_provenance_events(events, "json"))
+        self.assertEqual(json_payload["schema"], "hostsfileget.provenance-export.v1")
+        self.assertEqual(json_payload["event_count"], 1)
+        jsonl_payload = export_provenance_events(events, "jsonl")
+        self.assertEqual(json.loads(jsonl_payload)["domain"], "ads.example")
+        csv_rows = list(csv.DictReader(io.StringIO(export_provenance_events(events, "csv"))))
+        self.assertEqual(csv_rows[0]["domain"], "ads.example")
+        self.assertIn("cdn.ads.example", csv_rows[0]["domains"])
+        with self.assertRaises(ValueError):
+            export_provenance_events(events, "xlsx")
 
     # ---- v2.17: lock_after_save config ----
     def test_sanitize_config_snapshot_persists_lock_after_save(self):

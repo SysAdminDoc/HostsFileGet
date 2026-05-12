@@ -32,6 +32,10 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added **Entry Provenance...** from the Tools menu and editor context menu.
 - The line-level report shows import-section ownership, parsed domains, fetched-source matches, and matching local provenance JSONL events.
 
+**Provenance log filters and export**
+- Expanded **Provenance Log...** with kind, domain, source, user, text, and date-range filters.
+- Added local CSV and JSONL export for the filtered audit event set.
+
 **Windows DNS Client snapshot**
 - Added an opt-in Windows DNS Client Operational event snapshot importer backed by `wevtutil`.
 - Added local XML parsing for DNS query names, bounded event counts, and a second confirmation before appending observed queries as hosts entries.

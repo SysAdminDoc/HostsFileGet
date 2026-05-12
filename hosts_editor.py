@@ -9109,6 +9109,11 @@ def classify_source_freshness(iso_timestamp: str, now: float | None = None) -> s
 PROVENANCE_FILENAME = "hosts_editor_provenance.jsonl"
 PROVENANCE_MAX_BYTES = 2 * 1024 * 1024  # soft cap; rotates when exceeded
 PROVENANCE_EVENT_KINDS = frozenset({"pin", "unpin", "whitelist_add", "whitelist_remove"})
+PROVENANCE_LOG_READ_LIMIT = 5000
+PROVENANCE_LOG_DISPLAY_LIMIT = 200
+PROVENANCE_EXPORT_SCHEMA = "hostsfileget.provenance-export.v1"
+PROVENANCE_EXPORT_FORMATS = frozenset({"json", "jsonl", "csv"})
+PROVENANCE_EXPORT_FIELDS = ("ts", "kind", "user", "domain", "domains", "source", "note", "app_version")
 
 
 def append_provenance_event(path: str, event: dict) -> None:
@@ -9981,6 +9986,303 @@ def _provenance_event_matches_domain(event: dict, domain: str) -> bool:
         ):
             return True
     return False
+
+
+def _normalize_provenance_filter_text(value) -> str:
+    return " ".join(str(value or "").strip().split())
+
+
+def _split_provenance_filter_values(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw_values = re.split(r"[,;]", value)
+    elif isinstance(value, (list, tuple, set)):
+        raw_values = list(value)
+    else:
+        raw_values = [value]
+    return [
+        _normalize_provenance_filter_text(item).lower()
+        for item in raw_values
+        if _normalize_provenance_filter_text(item)
+    ]
+
+
+def _normalize_provenance_kind_filter(value) -> set[str]:
+    values = _split_provenance_filter_values(value)
+    if not values or any(item in {"all", "*"} for item in values):
+        return set()
+    valid = {item for item in values if item in PROVENANCE_EVENT_KINDS}
+    return valid or {"__invalid__"}
+
+
+def _parse_provenance_filter_timestamp(value, *, end_of_day: bool = False) -> float | None:
+    text = _normalize_provenance_filter_text(value)
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            parsed_date = datetime.date.fromisoformat(text)
+            parsed_time = datetime.time.max if end_of_day else datetime.time.min
+            parsed = datetime.datetime.combine(parsed_date, parsed_time)
+        else:
+            parsed = datetime.datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        return None
+    try:
+        return parsed.timestamp()
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def _provenance_event_timestamp_epoch(event: dict) -> float | None:
+    if not isinstance(event, dict):
+        return None
+    return _parse_provenance_filter_timestamp(event.get("ts"))
+
+
+def _provenance_event_text(event: dict) -> str:
+    if not isinstance(event, dict):
+        return ""
+    parts = [
+        event.get("ts", ""),
+        event.get("kind", ""),
+        event.get("user", ""),
+        event.get("domain", ""),
+        event.get("source", ""),
+        event.get("note", ""),
+        event.get("app_version", ""),
+    ]
+    domains = event.get("domains")
+    if isinstance(domains, (list, tuple, set)):
+        parts.extend(str(item) for item in domains)
+    elif domains:
+        parts.append(str(domains))
+    return " ".join(str(part) for part in parts if part).lower()
+
+
+def _serialize_provenance_event(event: dict) -> dict:
+    if not isinstance(event, dict):
+        return {}
+    out = {}
+    for key in PROVENANCE_EXPORT_FIELDS:
+        if key not in event:
+            continue
+        value = event.get(key)
+        if isinstance(value, (list, tuple, set)):
+            out[key] = [str(item) for item in value]
+        elif value is None:
+            out[key] = ""
+        else:
+            out[key] = str(value)
+    for key in sorted(event):
+        if key in out or key in PROVENANCE_EXPORT_FIELDS:
+            continue
+        value = event.get(key)
+        if isinstance(value, (list, tuple, set)):
+            out[key] = [str(item) for item in value]
+        elif isinstance(value, (str, int, float, bool)) or value is None:
+            out[key] = value
+        else:
+            out[key] = str(value)
+    return out
+
+
+def filter_provenance_events(
+    events: list[dict] | None,
+    *,
+    kind=None,
+    domain: str = "",
+    source: str = "",
+    user: str = "",
+    text: str = "",
+    since: str = "",
+    until: str = "",
+    limit: int = 0,
+) -> list[dict]:
+    """Filter local provenance events without mutating or reading the log."""
+    kind_filter = _normalize_provenance_kind_filter(kind)
+    domain_filter = _normalize_provenance_filter_text(domain).lower().lstrip(".")
+    source_filter = _normalize_provenance_filter_text(source).lower()
+    user_filter = _normalize_provenance_filter_text(user).lower()
+    text_filter = _normalize_provenance_filter_text(text).lower()
+    since_epoch = _parse_provenance_filter_timestamp(since)
+    until_epoch = _parse_provenance_filter_timestamp(until, end_of_day=True)
+
+    filtered: list[dict] = []
+    for event in events or []:
+        if not isinstance(event, dict):
+            continue
+        event_kind = str(event.get("kind", ""))
+        if event_kind not in PROVENANCE_EVENT_KINDS:
+            continue
+        if kind_filter and event_kind not in kind_filter:
+            continue
+        if domain_filter:
+            event_domains = " ".join(sorted(_provenance_event_domains(event))).lower()
+            if "." in domain_filter:
+                if not _provenance_event_matches_domain(event, domain_filter):
+                    continue
+            elif domain_filter not in event_domains:
+                continue
+        if source_filter and source_filter not in str(event.get("source", "")).lower():
+            continue
+        if user_filter and user_filter not in str(event.get("user", "")).lower():
+            continue
+        if text_filter and text_filter not in _provenance_event_text(event):
+            continue
+        if since_epoch is not None or until_epoch is not None:
+            event_epoch = _provenance_event_timestamp_epoch(event)
+            if event_epoch is None:
+                continue
+            if since_epoch is not None and event_epoch < since_epoch:
+                continue
+            if until_epoch is not None and event_epoch > until_epoch:
+                continue
+        filtered.append(event)
+
+    if limit and limit > 0 and len(filtered) > limit:
+        return filtered[-limit:]
+    return filtered
+
+
+def build_provenance_log_report(
+    events: list[dict] | None,
+    filters: dict | None = None,
+    *,
+    display_limit: int = PROVENANCE_LOG_DISPLAY_LIMIT,
+) -> dict:
+    """Build a filtered provenance-log report for the GUI and tests."""
+    filters = filters or {}
+    active_filters = {
+        "kind": _normalize_provenance_filter_text(filters.get("kind", "")) or "all",
+        "domain": _normalize_provenance_filter_text(filters.get("domain", "")),
+        "source": _normalize_provenance_filter_text(filters.get("source", "")),
+        "user": _normalize_provenance_filter_text(filters.get("user", "")),
+        "text": _normalize_provenance_filter_text(filters.get("text", "")),
+        "since": _normalize_provenance_filter_text(filters.get("since", "")),
+        "until": _normalize_provenance_filter_text(filters.get("until", "")),
+    }
+    source_events = [
+        event for event in (events or [])
+        if isinstance(event, dict) and event.get("kind") in PROVENANCE_EVENT_KINDS
+    ]
+    filtered_events = filter_provenance_events(
+        source_events,
+        kind=active_filters["kind"],
+        domain=active_filters["domain"],
+        source=active_filters["source"],
+        user=active_filters["user"],
+        text=active_filters["text"],
+        since=active_filters["since"],
+        until=active_filters["until"],
+    )
+    if display_limit and display_limit > 0:
+        display_events = filtered_events[-display_limit:]
+    else:
+        display_events = list(filtered_events)
+    kind_counts = {kind: 0 for kind in sorted(PROVENANCE_EVENT_KINDS)}
+    for event in filtered_events:
+        kind_counts[event.get("kind", "")] = kind_counts.get(event.get("kind", ""), 0) + 1
+    return {
+        "filters": active_filters,
+        "total_events": len(source_events),
+        "matched_count": len(filtered_events),
+        "displayed_count": len(display_events),
+        "events": display_events,
+        "filtered_events": filtered_events,
+        "kind_counts": kind_counts,
+        "display_limit": display_limit,
+    }
+
+
+def format_provenance_log_report(report: dict) -> str:
+    """Render a filtered provenance-log report as fixed-width text."""
+    if not report:
+        return "No provenance report available."
+    filters = report.get("filters") or {}
+    filter_parts = []
+    for key in ("kind", "domain", "source", "user", "text", "since", "until"):
+        value = filters.get(key, "")
+        if value and not (key == "kind" and value == "all"):
+            filter_parts.append(f"{key}={value}")
+    lines = [
+        f"Total events in current log: {report.get('total_events', 0):,}",
+        f"Matched events: {report.get('matched_count', 0):,}",
+        f"Displayed events: {report.get('displayed_count', 0):,}",
+        f"Filters: {', '.join(filter_parts) if filter_parts else '(none)'}",
+        "",
+    ]
+    kind_counts = report.get("kind_counts") or {}
+    if kind_counts:
+        count_text = ", ".join(
+            f"{kind}={count:,}" for kind, count in sorted(kind_counts.items()) if count
+        )
+        lines.append(f"Matched by kind: {count_text or '(none)'}")
+        lines.append("")
+    if report.get("matched_count", 0) > report.get("displayed_count", 0):
+        lines.append(
+            f"Showing the most recent {report.get('displayed_count', 0):,} matching events. "
+            "Export includes all matching events."
+        )
+        lines.append("")
+
+    events = report.get("events") or []
+    if not events:
+        lines.append("No provenance events match the current filters.")
+        return "\n".join(lines)
+
+    lines.append(f"{'When':<20}  {'Kind':<16}  {'User':<12}  {'Source':<16}  Domain / note")
+    lines.append("-" * 112)
+    for event in events:
+        ts = str(event.get("ts", ""))[:19]
+        kind = str(event.get("kind", ""))
+        user = (str(event.get("user", "")) or "-")[:12]
+        source = (str(event.get("source", "")) or "-")[:16]
+        domains = event.get("domains")
+        if isinstance(domains, (list, tuple)):
+            domain_note = ",".join(str(item) for item in domains)
+        else:
+            domain_note = str(domains or "")
+        note = str(event.get("domain") or event.get("note") or domain_note or "")
+        lines.append(f"{ts:<20}  {kind:<16}  {user:<12}  {source:<16}  {note[:80]}")
+    return "\n".join(lines)
+
+
+def export_provenance_events(events: list[dict] | None, export_format: str = "jsonl") -> str:
+    """Serialize provenance events for user-directed export."""
+    fmt = str(export_format or "jsonl").strip().lower()
+    if fmt not in PROVENANCE_EXPORT_FORMATS:
+        raise ValueError(f"Unsupported provenance export format: {export_format}")
+    rows = [_serialize_provenance_event(event) for event in (events or []) if isinstance(event, dict)]
+    if fmt == "json":
+        payload = {
+            "schema": PROVENANCE_EXPORT_SCHEMA,
+            "exported_at": datetime.datetime.now().isoformat(timespec="seconds"),
+            "event_count": len(rows),
+            "events": rows,
+        }
+        return json.dumps(payload, indent=2, ensure_ascii=False)
+    if fmt == "jsonl":
+        return "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + ("\n" if rows else "")
+
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=list(PROVENANCE_EXPORT_FIELDS), extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        csv_row = {}
+        for field in PROVENANCE_EXPORT_FIELDS:
+            value = row.get(field, "")
+            if isinstance(value, (list, tuple, set)):
+                csv_row[field] = json.dumps([str(item) for item in value], ensure_ascii=False)
+            elif value is None:
+                csv_row[field] = ""
+            else:
+                csv_row[field] = str(value)
+        writer.writerow(csv_row)
+    return output.getvalue()
 
 
 def build_entry_provenance_report(
@@ -15007,10 +15309,10 @@ class HostsFileEditor:
             pass
 
     def show_provenance_log(self):
-        """Show the recent provenance events in a read-only report."""
+        """Show and export filtered provenance events."""
         base_dir = os.path.dirname(self.config_path) or get_app_config_dir()
         path = os.path.join(base_dir, PROVENANCE_FILENAME)
-        events = read_provenance_events(path, limit=500)
+        events = read_provenance_events(path, limit=PROVENANCE_LOG_READ_LIMIT)
         if not events:
             self._show_notice_dialog(
                 "No provenance entries yet",
@@ -15018,20 +15320,173 @@ class HostsFileEditor:
                 tone="info",
             )
             return
-        lines = [f"{'When':<20}  {'Kind':<16}  User           Domain / note"]
-        lines.append("-" * 96)
-        for event in events[-200:]:
-            ts = event.get("ts", "")[:19]
-            kind = event.get("kind", "")
-            user = (event.get("user", "") or "-")[:12]
-            note = event.get("domain") or event.get("note") or ",".join(event.get("domains", []))[:60] or ""
-            lines.append(f"{ts:<20}  {kind:<16}  {user:<12}   {note}")
-        self._show_text_report_dialog(
-            "Provenance log",
-            f"Most recent {len(lines) - 2} audit events from {path}.",
-            "\n".join(lines),
-            tone="info",
+
+        dialog = tk.Toplevel(self.root)
+        self._configure_modal_window(
+            dialog,
+            title="Provenance Log",
+            size="920x700",
+            min_size=(760, 600),
         )
+        intro, _ = self._create_sidebar_card(
+            dialog,
+            "Provenance log",
+            "Filter local audit events and export the matching set for review. No data leaves this machine unless you save an export file.",
+            accent=PALETTE["blue"],
+        )
+        ttk.Label(
+            intro,
+            text=f"{len(events):,} readable event(s) from {path}",
+            style="SectionBody.TLabel",
+            wraplength=760,
+            justify="left",
+        ).pack(anchor="w")
+
+        filters = ttk.Frame(dialog, padding=(20, 0, 20, 10))
+        filters.pack(fill="x")
+        for column in range(6):
+            filters.grid_columnconfigure(column, weight=1 if column in {1, 3, 5} else 0)
+
+        kind_var = tk.StringVar(value="all")
+        domain_var = tk.StringVar()
+        source_var = tk.StringVar()
+        user_var = tk.StringVar()
+        text_var = tk.StringVar()
+        since_var = tk.StringVar()
+        until_var = tk.StringVar()
+
+        ttk.Label(filters, text="Kind", style="SectionBody.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 6), pady=(0, 6))
+        kind_box = ttk.Combobox(
+            filters,
+            textvariable=kind_var,
+            values=["all"] + sorted(PROVENANCE_EVENT_KINDS),
+            state="readonly",
+            width=18,
+        )
+        kind_box.grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=(0, 6))
+        ttk.Label(filters, text="Domain", style="SectionBody.TLabel").grid(row=0, column=2, sticky="w", padx=(0, 6), pady=(0, 6))
+        ttk.Entry(filters, textvariable=domain_var).grid(row=0, column=3, sticky="ew", padx=(0, 12), pady=(0, 6))
+        ttk.Label(filters, text="Source", style="SectionBody.TLabel").grid(row=0, column=4, sticky="w", padx=(0, 6), pady=(0, 6))
+        ttk.Entry(filters, textvariable=source_var).grid(row=0, column=5, sticky="ew", pady=(0, 6))
+
+        ttk.Label(filters, text="User", style="SectionBody.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 6))
+        ttk.Entry(filters, textvariable=user_var).grid(row=1, column=1, sticky="ew", padx=(0, 12))
+        ttk.Label(filters, text="Text", style="SectionBody.TLabel").grid(row=1, column=2, sticky="w", padx=(0, 6))
+        ttk.Entry(filters, textvariable=text_var).grid(row=1, column=3, sticky="ew", padx=(0, 12))
+        date_frame = ttk.Frame(filters)
+        date_frame.grid(row=1, column=4, columnspan=2, sticky="ew")
+        date_frame.grid_columnconfigure(1, weight=1)
+        date_frame.grid_columnconfigure(3, weight=1)
+        ttk.Label(date_frame, text="Since", style="SectionBody.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        ttk.Entry(date_frame, textvariable=since_var, width=16).grid(row=0, column=1, sticky="ew", padx=(0, 8))
+        ttk.Label(date_frame, text="Until", style="SectionBody.TLabel").grid(row=0, column=2, sticky="w", padx=(0, 6))
+        ttk.Entry(date_frame, textvariable=until_var, width=16).grid(row=0, column=3, sticky="ew")
+
+        output = scrolledtext.ScrolledText(dialog, wrap=tk.WORD)
+        self._style_code_surface(output, font_spec=self.mono_small_font)
+        output.pack(expand=True, fill="both", padx=20, pady=(0, 12))
+        output.configure(state="disabled")
+
+        state = {"report": None}
+
+        def current_filters():
+            return {
+                "kind": kind_var.get(),
+                "domain": domain_var.get(),
+                "source": source_var.get(),
+                "user": user_var.get(),
+                "text": text_var.get(),
+                "since": since_var.get(),
+                "until": until_var.get(),
+            }
+
+        def write_output(text):
+            output.configure(state="normal")
+            output.delete("1.0", tk.END)
+            output.insert(tk.END, text)
+            output.configure(state="disabled")
+
+        def refresh_report(_event=None):
+            report = build_provenance_log_report(events, current_filters())
+            state["report"] = report
+            write_output(format_provenance_log_report(report))
+            self.update_status(f"Provenance log matched {report.get('matched_count', 0):,} event(s).")
+            return "break"
+
+        def reset_filters():
+            kind_var.set("all")
+            domain_var.set("")
+            source_var.set("")
+            user_var.set("")
+            text_var.set("")
+            since_var.set("")
+            until_var.set("")
+            refresh_report()
+
+        def copy_report():
+            try:
+                text = output.get("1.0", tk.END).strip()
+                if not text:
+                    return
+                self.root.clipboard_clear()
+                self.root.clipboard_append(text)
+                self.update_status("Copied provenance log report.")
+            except tk.TclError as exc:
+                self.update_status(f"Could not copy provenance report: {exc}", is_error=True)
+
+        def export_report(export_format: str):
+            report = state.get("report") or build_provenance_log_report(events, current_filters())
+            export_events = report.get("filtered_events") or []
+            if not export_events:
+                self._show_notice_dialog(
+                    "No matching events to export",
+                    "Adjust the provenance filters before exporting.",
+                    tone="warning",
+                )
+                return
+            suffix = export_format.lower()
+            filetypes = {
+                "csv": [("CSV files", "*.csv"), ("All files", "*.*")],
+                "json": [("JSON files", "*.json"), ("All files", "*.*")],
+                "jsonl": [("JSON Lines files", "*.jsonl"), ("All files", "*.*")],
+            }[suffix]
+            default_name = f"hostsfileget-provenance-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.{suffix}"
+            selected = filedialog.asksaveasfilename(
+                parent=dialog,
+                title=f"Export provenance {suffix.upper()}",
+                defaultextension=f".{suffix}",
+                initialfile=default_name,
+                filetypes=filetypes,
+            )
+            if not selected:
+                return
+            try:
+                newline_arg = "" if suffix == "csv" else None
+                with open(selected, "w", encoding="utf-8", newline=newline_arg) as fp:
+                    fp.write(export_provenance_events(export_events, suffix))
+                self.update_status(f"Exported {len(export_events):,} provenance event(s) to {selected}.")
+            except (OSError, ValueError) as exc:
+                self._show_notice_dialog(
+                    "Provenance export failed",
+                    "The filtered provenance log could not be written.",
+                    tone="error",
+                    details=str(exc),
+                )
+                self.update_status(f"Provenance export failed: {exc}", is_error=True)
+
+        dialog.bind("<Return>", refresh_report)
+
+        footer = ttk.Frame(dialog)
+        footer.pack(fill="x", padx=20, pady=(0, 20))
+        ttk.Button(footer, text="Reset Filters", command=reset_filters, style="Secondary.TButton").pack(side="left")
+        ttk.Button(footer, text="Apply Filters", command=refresh_report, style="Action.TButton").pack(side="left", padx=(8, 0))
+        ttk.Button(footer, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
+        ttk.Button(footer, text="Export JSONL", command=lambda: export_report("jsonl"), style="Secondary.TButton").pack(side="right", padx=(0, 8))
+        ttk.Button(footer, text="Export CSV", command=lambda: export_report("csv"), style="Secondary.TButton").pack(side="right", padx=(0, 8))
+        ttk.Button(footer, text="Copy Report", command=copy_report, style="Secondary.TButton").pack(side="right", padx=(0, 8))
+
+        refresh_report()
+        dialog.grab_set()
 
     def show_entry_provenance_panel(self, line_no: int | None = None):
         """Show a line-level provenance/blame report for the editor."""
