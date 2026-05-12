@@ -39,7 +39,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback path
 
 APP_NAME = "Hosts File Get"
 APP_SLUG = "HostsFileGet"
-APP_VERSION = "2.19.0"
+APP_VERSION = "2.20.0"
 CONFIG_FILENAME = "hosts_editor_config.json"
 CONFIG_SCHEMA_VERSION = 4
 PROFILE_SCHEMA_VERSION = 1
@@ -98,6 +98,8 @@ DECLARATIVE_CONFIG_EXTENSION_FORMATS = {
 }
 SOURCE_MANIFEST_SCHEMA_VERSION = 1
 SOURCE_MANIFEST_RELATIVE_PATH = os.path.join("data", "blocklist_sources.json")
+SOURCE_BUNDLE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+SOURCE_BUNDLE_RISK_LEVELS = ("low", "medium", "high", "guarded")
 I18N_CATALOG_SCHEMA_VERSION = 1
 DEFAULT_LOCALE = "en-US"
 I18N_CATALOG_RELATIVE_PATH = os.path.join("data", "i18n", f"{DEFAULT_LOCALE}.json")
@@ -3701,6 +3703,227 @@ def load_blocklist_sources_manifest(path: str | None = None) -> dict[str, list[t
         raise ValueError(f"Source manifest could not be read from {manifest_path!r}: {e}") from e
 
     return sanitize_source_manifest(payload)
+
+
+def build_source_manifest_index(blocklist_sources) -> dict[str, dict]:
+    """Index sanitized curated source tuples by their display name."""
+    index: dict[str, dict] = {}
+    if not isinstance(blocklist_sources, dict):
+        return index
+    for category, sources in blocklist_sources.items():
+        if not isinstance(sources, (list, tuple)):
+            continue
+        for source in sources:
+            if not isinstance(source, (list, tuple)) or len(source) < 2:
+                continue
+            name = str(source[0]).strip()
+            url = str(source[1]).strip()
+            description = str(source[2]).strip() if len(source) > 2 else ""
+            if not name or name in index:
+                continue
+            index[name] = {
+                "name": name,
+                "url": url,
+                "description": description,
+                "category": str(category),
+            }
+    return index
+
+
+def sanitize_source_bundle_id(value) -> str:
+    bundle_id = str(value or "").strip().lower()
+    if not SOURCE_BUNDLE_ID_PATTERN.match(bundle_id):
+        raise ValueError(f"Source bundle id {value!r} is invalid.")
+    return bundle_id
+
+
+def sanitize_source_bundle_catalog(manifest, blocklist_sources=None) -> list[dict]:
+    """Validate optional import bundles that reference manifest source names."""
+    if not isinstance(manifest, dict):
+        raise ValueError("Source manifest must be a JSON object.")
+
+    version = _coerce_source_manifest_schema_version(manifest.get("schema_version"))
+    if version != SOURCE_MANIFEST_SCHEMA_VERSION:
+        raise ValueError(
+            f"Unsupported source manifest schema_version {manifest.get('schema_version')!r}; "
+            f"expected {SOURCE_MANIFEST_SCHEMA_VERSION}."
+        )
+
+    if blocklist_sources is None:
+        blocklist_sources = sanitize_source_manifest(manifest)
+    source_index = build_source_manifest_index(blocklist_sources)
+    source_index_by_name = {name.lower(): record for name, record in source_index.items()}
+
+    bundles = manifest.get("bundles", [])
+    if bundles in (None, ""):
+        return []
+    if not isinstance(bundles, list):
+        raise ValueError("Source manifest bundles must be a list when present.")
+
+    sanitized: list[dict] = []
+    seen_bundle_ids = set()
+    seen_bundle_names = set()
+    for bundle_index, bundle_payload in enumerate(bundles, start=1):
+        if not isinstance(bundle_payload, dict):
+            raise ValueError(f"Source bundle {bundle_index} must be an object.")
+
+        bundle_id = sanitize_source_bundle_id(bundle_payload.get("id"))
+        name = str(bundle_payload.get("name", "")).strip()
+        description = str(bundle_payload.get("description", "")).strip()
+        risk = str(bundle_payload.get("risk", "medium")).strip().lower()
+
+        if not name or len(name) > 120 or _contains_control_chars(name):
+            raise ValueError(f"Source bundle {bundle_id!r} has an invalid name.")
+        if len(description) > 700 or _contains_control_chars(description):
+            raise ValueError(f"Source bundle {bundle_id!r} has an invalid description.")
+        if risk not in SOURCE_BUNDLE_RISK_LEVELS:
+            raise ValueError(
+                f"Source bundle {bundle_id!r} has unsupported risk {risk!r}; "
+                f"expected one of {', '.join(SOURCE_BUNDLE_RISK_LEVELS)}."
+            )
+
+        normalized_name = name.lower()
+        if bundle_id in seen_bundle_ids:
+            raise ValueError(f"Source bundle id {bundle_id!r} is duplicated.")
+        if normalized_name in seen_bundle_names:
+            raise ValueError(f"Source bundle name {name!r} is duplicated.")
+        seen_bundle_ids.add(bundle_id)
+        seen_bundle_names.add(normalized_name)
+
+        source_names = bundle_payload.get("source_names")
+        if not isinstance(source_names, list) or not source_names:
+            raise ValueError(f"Source bundle {bundle_id!r} must contain source_names.")
+
+        sources: list[dict] = []
+        seen_sources = set()
+        for source_index_in_bundle, raw_source_name in enumerate(source_names, start=1):
+            source_name = str(raw_source_name or "").strip()
+            if (
+                not source_name
+                or len(source_name) > 120
+                or _contains_control_chars(source_name)
+            ):
+                raise ValueError(
+                    f"Source bundle {bundle_id!r} source #{source_index_in_bundle} "
+                    "has an invalid name."
+                )
+            normalized_source_name = source_name.lower()
+            if normalized_source_name in seen_sources:
+                raise ValueError(
+                    f"Source bundle {bundle_id!r} repeats source {source_name!r}."
+                )
+            source_record = source_index_by_name.get(normalized_source_name)
+            if source_record is None:
+                raise ValueError(
+                    f"Source bundle {bundle_id!r} references unknown source {source_name!r}."
+                )
+            seen_sources.add(normalized_source_name)
+            sources.append(dict(source_record))
+
+        sanitized.append({
+            "id": bundle_id,
+            "name": name,
+            "description": description,
+            "risk": risk,
+            "source_count": len(sources),
+            "sources": sources,
+        })
+
+    return sanitized
+
+
+def load_source_bundle_catalog(path: str | None = None, blocklist_sources=None) -> list[dict]:
+    manifest_path = path or os.path.join(_BUNDLE_DIR, SOURCE_MANIFEST_RELATIVE_PATH)
+    try:
+        payload = json.loads(read_text_file_content(manifest_path))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Source manifest JSON is invalid: {e}") from e
+    except OSError as e:
+        raise ValueError(f"Source manifest could not be read from {manifest_path!r}: {e}") from e
+
+    return sanitize_source_bundle_catalog(payload, blocklist_sources=blocklist_sources)
+
+
+def find_source_bundle(bundle_catalog, bundle_id_or_name: str) -> dict | None:
+    needle = str(bundle_id_or_name or "").strip().lower()
+    if not needle:
+        return None
+    for bundle in bundle_catalog or []:
+        if not isinstance(bundle, dict):
+            continue
+        if str(bundle.get("id", "")).lower() == needle:
+            return bundle
+        if str(bundle.get("name", "")).lower() == needle:
+            return bundle
+    return None
+
+
+def source_bundle_to_import_sources(bundle: dict) -> list[tuple[str, str]]:
+    return [
+        (str(source.get("name", "")), str(source.get("url", "")))
+        for source in (bundle or {}).get("sources", [])
+        if isinstance(source, dict) and source.get("name") and source.get("url")
+    ]
+
+
+def format_source_bundle_catalog(bundle_catalog) -> str:
+    bundles = [bundle for bundle in (bundle_catalog or []) if isinstance(bundle, dict)]
+    lines = [
+        "Source Bundle Catalog",
+        f"Bundles: {len(bundles)}",
+    ]
+    if not bundles:
+        lines.extend(["", "- No source bundles are configured."])
+        return "\n".join(lines)
+
+    for bundle in bundles:
+        lines.append("")
+        lines.append(
+            f"- {bundle.get('name', 'Unnamed bundle')} "
+            f"({bundle.get('id', '')}; risk: {bundle.get('risk', 'medium')}; "
+            f"sources: {int(bundle.get('source_count') or 0)})"
+        )
+        description = str(bundle.get("description", "")).strip()
+        if description:
+            lines.append(f"  {description}")
+        source_names = [
+            str(source.get("name", "")).strip()
+            for source in bundle.get("sources", [])
+            if isinstance(source, dict) and source.get("name")
+        ]
+        if source_names:
+            lines.append(f"  Sources: {', '.join(source_names)}")
+    return "\n".join(lines)
+
+
+def format_source_bundle_report(bundle: dict | None) -> str:
+    if not bundle:
+        return "Source Bundle\n(no bundle selected)"
+
+    lines = [
+        f"Source Bundle: {bundle.get('name', 'Unnamed bundle')}",
+        f"ID: {bundle.get('id', '')}",
+        f"Risk: {bundle.get('risk', 'medium')}",
+        f"Sources: {int(bundle.get('source_count') or 0)}",
+    ]
+    description = str(bundle.get("description", "")).strip()
+    if description:
+        lines.extend(["", description])
+
+    lines.append("")
+    lines.append("Import sources:")
+    sources = [source for source in bundle.get("sources", []) if isinstance(source, dict)]
+    if not sources:
+        lines.append("- None")
+        return "\n".join(lines)
+    for source in sources:
+        category = str(source.get("category", "")).strip()
+        suffix = f" [{category}]" if category else ""
+        lines.append(f"- {source.get('name', 'Unnamed source')}{suffix}")
+        source_description = str(source.get("description", "")).strip()
+        if source_description:
+            lines.append(f"  {source_description}")
+    return "\n".join(lines)
 
 
 def normalize_locale_code(value: str) -> str:
@@ -9556,6 +9779,7 @@ class HostsFileEditor:
     # Extended Blocklist Definitions
     # Loaded from data/blocklist_sources.json so feed URLs are auditable outside the code.
     BLOCKLIST_SOURCES = load_blocklist_sources_manifest()
+    SOURCE_BUNDLES = load_source_bundle_catalog(blocklist_sources=BLOCKLIST_SOURCES)
 
     def __init__(self, root):
         self.root = root
@@ -11088,6 +11312,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="Start Tray Quick Switch...", command=self.start_profile_tray_quick_switch)
         tools_menu.add_command(label="DNS Interoperability Pack...", command=self.show_dns_integration_pack)
         tools_menu.add_command(label="Cloud DNS Adapters...", command=self.show_cloud_dns_adapters)
+        tools_menu.add_command(label="Source Bundle Selector...", command=self.show_source_bundle_selector)
         tools_menu.add_command(label="Sources Report...", command=self.show_sources_report)
         tools_menu.add_command(label="Goto Anything...", command=self.show_goto_anything)
         tools_menu.add_command(label="Find and Replace...", command=self.show_find_replace_dialog)
@@ -13457,6 +13682,122 @@ class HostsFileEditor:
         listbox.bind("<Double-Button-1>", on_enter)
         dialog.bind("<Escape>", lambda _e: dialog.destroy())
         refresh()
+        dialog.grab_set()
+
+    # -------------------------- Source Bundle Selector -----------------------
+    def show_source_bundle_selector(self):
+        if self._block_during_import("Source Bundle Selector"):
+            return
+
+        bundle_catalog = list(getattr(self, "SOURCE_BUNDLES", []) or [])
+        if not bundle_catalog:
+            self._show_notice_dialog(
+                "No source bundles are configured",
+                "The curated source manifest does not define any import bundles.",
+                tone="warning",
+            )
+            return
+
+        dialog = tk.Toplevel(self.root)
+        self._configure_modal_window(
+            dialog,
+            title="Source Bundle Selector",
+            size="900x640",
+            min_size=(760, 520),
+        )
+
+        intro, _ = self._create_sidebar_card(
+            dialog,
+            "Source bundle selector",
+            "Pick a manifest-defined bundle and import its sources through the normal batch pipeline.",
+            accent=PALETTE["blue"],
+        )
+        ttk.Label(
+            intro,
+            text=f"{len(bundle_catalog):,} bundle{'s' if len(bundle_catalog) != 1 else ''} available.",
+            style="SectionBody.TLabel",
+            wraplength=820,
+            justify="left",
+        ).pack(anchor="w")
+
+        body = ttk.Frame(dialog, padding=(20, 0, 20, 12))
+        body.pack(fill="both", expand=True)
+        body.grid_columnconfigure(0, weight=0)
+        body.grid_columnconfigure(1, weight=1)
+        body.grid_rowconfigure(0, weight=1)
+
+        listbox = tk.Listbox(
+            body,
+            width=34,
+            height=12,
+            bg=PALETTE["surface"],
+            fg=PALETTE["text"],
+            selectbackground=PALETTE["blue"],
+            selectforeground=PALETTE["ink"],
+            highlightbackground=PALETTE["border"],
+            highlightcolor=PALETTE["focus"],
+            relief="flat",
+            borderwidth=0,
+        )
+        listbox.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+
+        detail = scrolledtext.ScrolledText(body, wrap=tk.WORD, height=16)
+        self._style_code_surface(detail, font_spec=self.mono_small_font)
+        detail.grid(row=0, column=1, sticky="nsew")
+
+        for bundle in bundle_catalog:
+            listbox.insert(
+                tk.END,
+                f"{bundle.get('name', 'Unnamed bundle')} [{bundle.get('risk', 'medium')}]",
+            )
+
+        selected_bundle = {"value": bundle_catalog[0]}
+
+        def selected_index() -> int:
+            selection = listbox.curselection()
+            if selection:
+                return int(selection[0])
+            return 0
+
+        def refresh_detail(_event=None):
+            index = selected_index()
+            bundle = bundle_catalog[index]
+            selected_bundle["value"] = bundle
+            detail.configure(state="normal")
+            detail.delete("1.0", tk.END)
+            detail.insert(tk.END, format_source_bundle_report(bundle))
+            detail.configure(state="disabled")
+
+        def import_selected():
+            bundle = selected_bundle.get("value")
+            sources = source_bundle_to_import_sources(bundle)
+            if not sources:
+                self.update_status("Selected source bundle has no importable sources.", is_error=True)
+                return
+            dialog.destroy()
+            self.start_import_worker(sources)
+
+        listbox.bind("<<ListboxSelect>>", refresh_detail)
+        listbox.selection_set(0)
+        listbox.activate(0)
+
+        footer = ttk.Frame(dialog, padding=(20, 0, 20, 18))
+        footer.pack(fill="x")
+        ttk.Button(
+            footer,
+            text="Import Bundle",
+            command=import_selected,
+            style="Action.TButton",
+        ).pack(side="right", padx=(8, 0))
+        ttk.Button(
+            footer,
+            text="Close",
+            command=dialog.destroy,
+            style="Secondary.TButton",
+        ).pack(side="right")
+
+        refresh_detail()
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
         dialog.grab_set()
 
     # ----------------------------- Sources Report ----------------------------

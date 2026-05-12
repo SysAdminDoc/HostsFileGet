@@ -55,6 +55,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `data/blocklist_sources.json` | Versioned curated blocklist catalog loaded at startup |
 | `data/i18n/en-US.json` | Versioned English UI string catalog for future localization |
 | `docs/source-manifest.md` | Curated source manifest schema and maintenance rules |
+| `docs/source-bundles.md` | Manifest-defined source bundle selector behavior and validation rules |
 | `docs/source-health.md` | Source reachability checker and report format |
 | `docs/source-overlap.md` | Source overlap matrix behavior and limits |
 | `docs/false-positive-triage.md` | Check Domain triage behavior, actions, and limits |
@@ -132,7 +133,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Config sanitation and declarative profiles: `sanitize_custom_sources`, `sanitize_config_snapshot`, `sanitize_profile_snapshot`, `sanitize_profiles_snapshot`, `update_active_profile_snapshot`, `parse_declarative_config_text`, `format_declarative_config_payload`, `upsert_profile_in_config`, `set_active_profile_in_config`, `apply_declarative_profile_to_config`, `build_profile_quick_switch_report`, `apply_profile_quick_switch`, `build_profile_tray_availability_report`, `resolve_saved_state_hashes`.
 - Profile schedule helpers: `normalize_profile_activation_days`, `sanitize_profile_activation_schedule`, `evaluate_profile_activation_schedule`, `apply_profile_activation_schedule`, `format_profile_activation_schedule_report`.
 - Config location and portable export: `get_primary_config_path`, `get_config_root_dir`, `build_config_location_report`, `write_portable_bundle_config`, `format_portable_bundle_export_summary`.
-- Source catalog loading: `sanitize_source_manifest`, `load_blocklist_sources_manifest`.
+- Source catalog loading: `sanitize_source_manifest`, `load_blocklist_sources_manifest`, `sanitize_source_bundle_catalog`, `load_source_bundle_catalog`, `format_source_bundle_catalog`, `format_source_bundle_report`.
 - i18n catalog loading: `normalize_locale_code`, `sanitize_i18n_catalog`, `load_i18n_catalog`, `translate_message`, `build_i18n_catalog_report`.
 - Source response caching: `fetch_source_with_cache`, `sanitize_source_cache_metadata`, `build_source_request_headers`.
 - Source trust display: `build_source_trust_badges`, `source_trust_report_url`, `format_source_trust_details`.
@@ -171,7 +172,7 @@ Primary responsibilities:
 - Backups, restore, compare, panic restore, hosts disable/enable.
 - Import UI, source catalog, custom sources, manual imports, DNS log imports, whitelist import.
 - Search, removal, find/replace, adblock quarantine, context menu commands.
-- Source reports, provenance log view, entry provenance, health scan, adblock syntax lint, rule tier report, IDN/homograph report, NRD/DGA threat feed packs, CNAME cloaking workflow, encrypted-DNS bypass packs, DNS rebinding protection check, SafeSearch/restricted-mode templates, profile activation schedule report, profile quick switch and optional tray menu, false-positive triage, preferences, scheduler wizard.
+- Source reports, source bundle selector, provenance log view, entry provenance, health scan, adblock syntax lint, rule tier report, IDN/homograph report, NRD/DGA threat feed packs, CNAME cloaking workflow, encrypted-DNS bypass packs, DNS rebinding protection check, SafeSearch/restricted-mode templates, profile activation schedule report, profile quick switch and optional tray menu, false-positive triage, preferences, scheduler wizard.
 - Worker thread queue handling and safe Tk callback scheduling with `_safe_after`.
 
 `HostsFileEditor` is large enough that future refactors should split by behavior after tests are in place:
@@ -254,8 +255,8 @@ All writes that can affect the system hosts file should remain previewed or expl
 
 Current import flow:
 
-1. User selects curated/custom/manual/log/migration source.
-2. Curated source metadata comes from the validated bundled source manifest.
+1. User selects curated/custom/manual/log/migration source, or a manifest-defined source bundle.
+2. Curated source and bundle metadata comes from the validated bundled source manifest.
 3. Source rows show locally derived trust badges before import; badges are documented in `docs/source-trust.md`.
 4. Download or file parse happens with size limits and encoding guards; web sources use ETag/Last-Modified conditional requests when cached metadata exists, and migration importers use bounded local file/folder readers.
 5. Source content is decoded and obvious HTML/error pages are rejected.
@@ -304,7 +305,7 @@ Required before large refactors:
 
 - Full-text rescans during editor changes can lag on very large hosts files.
 - Tkinter `Text` is not virtualized; performance work must be measured before large UI rewrites.
-- Curated source edits must update `data/blocklist_sources.json`; invalid manifests fail startup and launcher validation.
+- Curated source and source bundle edits must update `data/blocklist_sources.json`; invalid manifests fail startup and launcher validation.
 - Public source health is inherently flaky; use reports for review and only gate when explicitly passing `--source-health-fail-on-unhealthy`.
 - PowerShell launcher changes need parser validation because quoting and elevation paths are easy to break.
 - PyInstaller packaging should be built from pinned dependencies and scanned for the PyInstaller CVE class noted in the roadmap.
