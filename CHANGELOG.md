@@ -12,6 +12,10 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added `--source-health` for bounded, non-admin reachability checks across the curated source manifest.
 - Added weekly/manual GitHub Actions source-health reporting that uploads JSON results without making transient upstream outages fail normal CI.
 
+**Conditional source cache**
+- Added schema-2 `source_cache_metadata` plus an on-disk source body cache for ETag / Last-Modified refreshes.
+- GUI imports and `--update` now send conditional source requests and can reuse verified cached bodies on `304 Not Modified` or temporary network failures.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

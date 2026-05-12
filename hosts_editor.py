@@ -33,7 +33,7 @@ import glob
 APP_NAME = "Hosts File Get"
 APP_SLUG = "HostsFileGet"
 APP_VERSION = "2.17.0"
-CONFIG_SCHEMA_VERSION = 1
+CONFIG_SCHEMA_VERSION = 2
 SOURCE_MANIFEST_SCHEMA_VERSION = 1
 SOURCE_MANIFEST_RELATIVE_PATH = os.path.join("data", "blocklist_sources.json")
 ELEVATION_ATTEMPT_FLAG = "--hostsfileget-elevation-attempted"
@@ -41,6 +41,7 @@ SOURCE_HEALTH_REPORT_SCHEMA_VERSION = 1
 SOURCE_HEALTH_SAMPLE_BYTES = 256 * 1024
 SOURCE_HEALTH_TIMEOUT_SECONDS = 15
 SOURCE_HEALTH_DEFAULT_WORKERS = 8
+SOURCE_CACHE_DIRNAME = "source_cache"
 
 # Hard cap for any single downloaded feed/whitelist payload (50 MB decompressed).
 # Even the biggest public blocklists are well under 20 MB; this guards against
@@ -1508,6 +1509,20 @@ def _roaming_config_path(config_filename: str) -> str:
     return os.path.join(get_app_config_dir(), config_filename)
 
 
+def get_source_cache_dir() -> str:
+    base_dir = _EXE_DIR if is_portable_mode() else get_app_config_dir()
+    return os.path.join(base_dir, SOURCE_CACHE_DIRNAME)
+
+
+def source_cache_key(url: str) -> str:
+    normalized = normalize_custom_source_url(url) or str(url).strip()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def get_source_cache_body_path(url: str, cache_dir: str | None = None) -> str:
+    return os.path.join(cache_dir or get_source_cache_dir(), f"{source_cache_key(url)}.bin")
+
+
 def _parse_valid_http_source_url(url: str):
     """Return a parsed URL only when it is a direct http(s) URL with a host."""
     try:
@@ -1589,6 +1604,179 @@ def sanitize_custom_sources(custom_sources) -> list[dict[str, str]]:
         sanitized_sources.append({"name": name, "url": url})
 
     return sanitized_sources
+
+
+def _valid_iso_timestamp(value: str) -> bool:
+    try:
+        datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _normalize_cache_header(value, max_length: int = 512) -> str:
+    if not isinstance(value, str):
+        return ""
+    value = value.strip()
+    if not value or len(value) > max_length or _contains_control_chars(value):
+        return ""
+    return value
+
+
+def _normalize_sha256(value) -> str:
+    if not isinstance(value, str):
+        return ""
+    value = value.strip().lower()
+    if len(value) != 64 or not all(ch in "0123456789abcdef" for ch in value):
+        return ""
+    return value
+
+
+def sanitize_source_cache_metadata(metadata) -> dict[str, dict[str, str | int]]:
+    if not isinstance(metadata, dict):
+        return {}
+
+    sanitized: dict[str, dict[str, str | int]] = {}
+    for url, entry in metadata.items():
+        if not isinstance(url, str) or _parse_valid_http_source_url(url) is None:
+            continue
+        if not isinstance(entry, dict):
+            continue
+
+        content_sha256 = _normalize_sha256(entry.get("content_sha256"))
+        if not content_sha256:
+            continue
+
+        try:
+            byte_count = int(entry.get("bytes", 0))
+        except (TypeError, ValueError):
+            byte_count = 0
+        if byte_count < 0 or byte_count > MAX_DOWNLOAD_BYTES:
+            byte_count = 0
+
+        fetched_at = entry.get("fetched_at", "")
+        if not isinstance(fetched_at, str) or len(fetched_at) > 64 or not _valid_iso_timestamp(fetched_at):
+            fetched_at = ""
+        validated_at = entry.get("validated_at", "")
+        if not isinstance(validated_at, str) or len(validated_at) > 64 or not _valid_iso_timestamp(validated_at):
+            validated_at = ""
+
+        sanitized[url] = {
+            "cache_key": source_cache_key(url),
+            "content_sha256": content_sha256,
+            "bytes": byte_count,
+            "etag": _normalize_cache_header(entry.get("etag")),
+            "last_modified": _normalize_cache_header(entry.get("last_modified")),
+            "content_encoding": _normalize_cache_header(entry.get("content_encoding"), max_length=120),
+            "fetched_at": fetched_at,
+            "validated_at": validated_at,
+        }
+
+    return sanitized
+
+
+def build_source_request_headers(cache_metadata: dict | None = None) -> dict[str, str]:
+    headers = {"User-Agent": f"Mozilla/5.0 ({APP_SLUG}/{APP_VERSION})"}
+    cache_metadata = cache_metadata if isinstance(cache_metadata, dict) else {}
+    etag = _normalize_cache_header(cache_metadata.get("etag"))
+    last_modified = _normalize_cache_header(cache_metadata.get("last_modified"))
+    if etag:
+        headers["If-None-Match"] = etag
+    if last_modified:
+        headers["If-Modified-Since"] = last_modified
+    return headers
+
+
+def build_source_cache_metadata(url: str, response, raw_bytes: bytes, fetched_at: str | None = None) -> dict[str, str | int]:
+    fetched_at = fetched_at or datetime.datetime.now().isoformat(timespec="seconds")
+    return {
+        "cache_key": source_cache_key(url),
+        "content_sha256": hashlib.sha256(raw_bytes).hexdigest(),
+        "bytes": len(raw_bytes),
+        "etag": _normalize_cache_header(_response_header(response, "ETag")),
+        "last_modified": _normalize_cache_header(_response_header(response, "Last-Modified")),
+        "content_encoding": _normalize_cache_header(_response_header(response, "Content-Encoding"), max_length=120),
+        "fetched_at": fetched_at,
+        "validated_at": fetched_at,
+    }
+
+
+def write_source_cache_body(url: str, raw_bytes: bytes, cache_dir: str | None = None) -> None:
+    path = get_source_cache_body_path(url, cache_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(prefix="source_cache_", suffix=".tmp", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(raw_bytes)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, path)
+    except Exception:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+        raise
+
+
+def read_source_cache_body(url: str, metadata: dict, cache_dir: str | None = None) -> bytes:
+    content_sha256 = _normalize_sha256(metadata.get("content_sha256") if isinstance(metadata, dict) else None)
+    if not content_sha256:
+        raise FileNotFoundError("source cache metadata does not include a valid content hash")
+    path = get_source_cache_body_path(url, cache_dir)
+    with open(path, "rb") as f:
+        raw_bytes = f.read(MAX_DOWNLOAD_BYTES + 1)
+    if len(raw_bytes) > MAX_DOWNLOAD_BYTES:
+        raise ValueError("cached source body exceeds the download size cap")
+    actual_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+    if actual_sha256 != content_sha256:
+        raise ValueError("cached source body hash does not match metadata")
+    return raw_bytes
+
+
+def fetch_source_with_cache(
+    url: str,
+    metadata_store: dict[str, dict] | None = None,
+    cache_dir: str | None = None,
+    timeout: float = 15,
+    opener=None,
+) -> tuple[list[str], dict[str, str | int], str]:
+    if opener is None:
+        opener = urllib.request.urlopen
+    metadata_store = metadata_store if isinstance(metadata_store, dict) else {}
+    cache_metadata = metadata_store.get(url, {})
+    request = urllib.request.Request(url, headers=build_source_request_headers(cache_metadata))
+    try:
+        with opener(request, timeout=timeout) as response:
+            status = _response_status_code(response)
+            if status == 304:
+                raw_bytes = read_source_cache_body(url, cache_metadata, cache_dir)
+                refreshed_metadata = dict(cache_metadata)
+                refreshed_metadata["validated_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+                lines = decode_downloaded_lines(url, raw_bytes, str(refreshed_metadata.get("content_encoding", "")))
+                return lines, refreshed_metadata, "not_modified"
+            if status != 200:
+                raise urllib.error.HTTPError(url, status or 0, f"HTTP {status}", response.info(), response.fp)
+            raw_bytes = read_http_body_limited(response)
+            metadata = build_source_cache_metadata(url, response, raw_bytes)
+            lines = decode_downloaded_lines(url, raw_bytes, str(metadata.get("content_encoding", "")))
+            write_source_cache_body(url, raw_bytes, cache_dir)
+            return lines, metadata, "network"
+    except urllib.error.HTTPError as e:
+        if getattr(e, "code", None) == 304:
+            raw_bytes = read_source_cache_body(url, cache_metadata, cache_dir)
+            refreshed_metadata = dict(cache_metadata)
+            refreshed_metadata["validated_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+            lines = decode_downloaded_lines(url, raw_bytes, str(refreshed_metadata.get("content_encoding", "")))
+            return lines, refreshed_metadata, "not_modified"
+        raise
+    except Exception:
+        if cache_metadata:
+            try:
+                raw_bytes = read_source_cache_body(url, cache_metadata, cache_dir)
+                lines = decode_downloaded_lines(url, raw_bytes, str(cache_metadata.get("content_encoding", "")))
+                return lines, dict(cache_metadata), "cache_fallback"
+            except Exception:
+                pass
+        raise
 
 
 def _coerce_source_manifest_schema_version(value) -> int:
@@ -1760,11 +1948,13 @@ def _source_health_base_result(source: dict, checked_at: str) -> dict:
 
 def check_source_health_record(
     source: dict,
-    opener=urllib.request.urlopen,
+    opener=None,
     timeout: float = SOURCE_HEALTH_TIMEOUT_SECONDS,
     sample_bytes: int = SOURCE_HEALTH_SAMPLE_BYTES,
 ) -> dict:
     """Fetch a bounded sample from one curated source and classify reachability."""
+    if opener is None:
+        opener = urllib.request.urlopen
     checked_at = _utc_timestamp()
     result = _source_health_base_result(source, checked_at)
     started = time.monotonic()
@@ -1838,7 +2028,7 @@ def check_source_health_record(
 
 def check_source_health_records(
     records: list[dict],
-    opener=urllib.request.urlopen,
+    opener=None,
     timeout: float = SOURCE_HEALTH_TIMEOUT_SECONDS,
     sample_bytes: int = SOURCE_HEALTH_SAMPLE_BYTES,
     max_workers: int = SOURCE_HEALTH_DEFAULT_WORKERS,
@@ -1889,7 +2079,7 @@ def summarize_source_health_results(results: list[dict]) -> dict:
 
 def build_source_health_report(
     blocklist_sources: dict[str, list[tuple[str, str, str]]],
-    opener=urllib.request.urlopen,
+    opener=None,
     timeout: float = SOURCE_HEALTH_TIMEOUT_SECONDS,
     sample_bytes: int = SOURCE_HEALTH_SAMPLE_BYTES,
     max_workers: int = SOURCE_HEALTH_DEFAULT_WORKERS,
@@ -2006,6 +2196,8 @@ def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
                 continue
             source_last_fetched[url] = stamp
 
+    source_cache_metadata = sanitize_source_cache_metadata(config.get("source_cache_metadata", {}))
+
     preferred_sink_raw = config.get("preferred_block_sink", "0.0.0.0")
     preferred_sink = preferred_sink_raw if preferred_sink_raw in BLOCK_SINK_IPS else "0.0.0.0"
 
@@ -2026,6 +2218,7 @@ def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
         "last_applied_cleaned_hash": _normalize_hash(config.get("last_applied_cleaned_hash")),
         "last_open_dir": last_open_dir,
         "source_last_fetched": source_last_fetched,
+        "source_cache_metadata": source_cache_metadata,
         "preferred_block_sink": preferred_sink,
         "backup_retention": backup_retention,
         "has_completed_first_run": has_completed_first_run,
@@ -3014,6 +3207,8 @@ class HostsFileEditor:
         # Persisted across sessions: URL -> ISO timestamp of last successful
         # fetch. Lets source tooltips surface how stale a feed is.
         self.source_last_fetched: dict[str, str] = {}
+        self.source_cache_metadata: dict[str, dict] = {}
+        self.source_cache_dir = get_source_cache_dir()
         self._source_metadata_dirty = False
         self._preferred_block_sink = "0.0.0.0"
         self._backup_retention = BACKUP_RETENTION
@@ -4858,6 +5053,7 @@ class HostsFileEditor:
         self._last_saved_whitelist_text = sanitized_config["whitelist"]
         self.last_open_dir = sanitized_config["last_open_dir"]
         self.source_last_fetched = sanitized_config.get("source_last_fetched", {})
+        self.source_cache_metadata = sanitized_config.get("source_cache_metadata", {})
         self._preferred_block_sink = sanitized_config.get("preferred_block_sink", "0.0.0.0")
         self._backup_retention = sanitized_config.get("backup_retention", BACKUP_RETENTION)
         self._has_completed_first_run = sanitized_config.get("has_completed_first_run", False)
@@ -4901,6 +5097,7 @@ class HostsFileEditor:
             "last_applied_cleaned_hash": self._last_applied_cleaned_hash,
             "last_open_dir": self.last_open_dir,
             "source_last_fetched": self.source_last_fetched,
+            "source_cache_metadata": self.source_cache_metadata,
             "preferred_block_sink": self._preferred_block_sink,
             "backup_retention": self._backup_retention,
             "has_completed_first_run": self._has_completed_first_run,
@@ -7353,6 +7550,8 @@ class HostsFileEditor:
         total = len(sources)
         success_count = 0
         failure_messages = []
+        metadata_snapshot = dict(getattr(self, "source_cache_metadata", {}))
+        cache_dir = getattr(self, "source_cache_dir", get_source_cache_dir())
         
         for i, (name, url) in enumerate(sources):
             if self.stop_import_flag.is_set():
@@ -7362,26 +7561,27 @@ class HostsFileEditor:
             self.import_queue.put(("progress", i, total, name))
             
             try:
-                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                # Use timeout to prevent hanging
-                with urllib.request.urlopen(req, timeout=15) as response:
-                    if response.getcode() != 200:
-                         raise urllib.error.HTTPError(url, response.getcode(), f"HTTP {response.getcode()}", response.info(), response.fp)
-                    raw_lines = decode_downloaded_lines(
-                        url,
-                        read_http_body_limited(response),
-                        response.headers.get("Content-Encoding", "")
-                    )
-                    if looks_like_html_document(raw_lines):
-                        raise ValueError("Received HTML instead of a hosts list.")
-                    if self.stop_import_flag.is_set():
-                        self.import_queue.put(("cancelled",))
-                        return
+                raw_lines, cache_metadata, cache_status = fetch_source_with_cache(
+                    url,
+                    metadata_snapshot,
+                    cache_dir=cache_dir,
+                    timeout=15,
+                )
+                metadata_snapshot[url] = cache_metadata
+                if looks_like_html_document(raw_lines):
+                    raise ValueError("Received HTML instead of a hosts list.")
+                if self.stop_import_flag.is_set():
+                    self.import_queue.put(("cancelled",))
+                    return
 
                 # Record success metadata so the "Check Domain" tool can
                 # cross-reference without re-fetching, and tooltips can show
                 # freshness.
-                self.import_queue.put(("source_fetched", name, url, raw_lines))
+                self.import_queue.put(("source_fetched", name, url, raw_lines, cache_metadata, cache_status))
+                if cache_status == "not_modified":
+                    self.import_queue.put(("log", f"{name}: upstream returned 304; reused cached source body.", False))
+                elif cache_status == "cache_fallback":
+                    self.import_queue.put(("log", f"{name}: network fetch failed; reused cached source body.", False))
 
                 processed = self._apply_import_mode_filter(name, raw_lines, mode)
                 if self.stop_import_flag.is_set():
@@ -7418,8 +7618,11 @@ class HostsFileEditor:
 
                 elif msg_type == "source_fetched":
                     name, url, raw_lines = msg[1], msg[2], msg[3]
+                    cache_metadata = msg[4] if len(msg) > 4 else None
                     self._cache_source_corpus(name, url, raw_lines)
                     self.source_last_fetched[url] = datetime.datetime.now().isoformat(timespec='seconds')
+                    if isinstance(cache_metadata, dict):
+                        self.source_cache_metadata[url] = cache_metadata
                     self._source_metadata_dirty = True
 
                 elif msg_type == "log":
@@ -8763,20 +8966,19 @@ def _cli_update(hosts_path: str) -> int:
         return backup_result
     collected: list[str] = []
     updated_stamps: dict[str, str] = dict(last_fetched)
+    updated_cache_metadata: dict[str, dict] = dict(sanitized.get("source_cache_metadata", {}))
+    cache_dir = get_source_cache_dir()
     now_iso = datetime.datetime.now().isoformat(timespec='seconds')
     successes, failures = 0, []
     for url in last_fetched:
         name = reverse.get(url, url)
         try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=20) as response:
-                if response.getcode() != 200:
-                    raise urllib.error.HTTPError(url, response.getcode(), f"HTTP {response.getcode()}", response.info(), response.fp)
-                raw_lines = decode_downloaded_lines(
-                    url,
-                    read_http_body_limited(response),
-                    response.headers.get("Content-Encoding", ""),
-                )
+            raw_lines, cache_metadata, cache_status = fetch_source_with_cache(
+                url,
+                updated_cache_metadata,
+                cache_dir=cache_dir,
+                timeout=20,
+            )
             if looks_like_html_document(raw_lines):
                 raise ValueError("received HTML instead of hosts list")
             safe_name = re.sub(r'[\r\n\t]+', ' ', name).strip() or "Imported Source"
@@ -8791,8 +8993,14 @@ def _cli_update(hosts_path: str) -> int:
             collected.append(f"# --- Normalized Import End: {safe_name} ---")
             collected.append("")
             updated_stamps[url] = now_iso
+            updated_cache_metadata[url] = cache_metadata
             successes += 1
-            _cli_print(f"OK  {name}")
+            status_label = "OK"
+            if cache_status == "not_modified":
+                status_label = "304"
+            elif cache_status == "cache_fallback":
+                status_label = "CACHE"
+            _cli_print(f"{status_label:<5}{name}")
         except Exception as e:
             failures.append(f"{name}: {e}")
             _cli_print(f"ERR {name}: {e}")
@@ -8833,6 +9041,7 @@ def _cli_update(hosts_path: str) -> int:
     try:
         snapshot = dict(sanitized)
         snapshot["source_last_fetched"] = updated_stamps
+        snapshot["source_cache_metadata"] = updated_cache_metadata
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
         write_text_file_atomic(config_path, json.dumps(snapshot, indent=2))
     except OSError:

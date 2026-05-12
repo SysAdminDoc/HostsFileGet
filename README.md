@@ -37,6 +37,7 @@ It is designed for people who work with large blocklists, external feed imports,
 - Import pipeline:
   - curated web blocklists from a versioned JSON source manifest
   - source health reporting for curated feed reachability
+  - ETag / Last-Modified refresh cache with cached-body fallback
   - batch import with filtering and progress
   - custom persistent sources
   - pfSense DNSBL log import
