@@ -24,6 +24,7 @@ It is not a DNS server, browser ad blocker, cloud filtering service, or endpoint
 | `hosts_editor.py` | GUI application, CLI, pure parsing/normalization helpers, config, imports, exports, and save logic |
 | `PythonLauncher.ps1` | Elevated bootstrapper that finds or installs Python, refreshes cached editor code, and launches the app |
 | `HostsFileGet.spec` | PyInstaller build definition |
+| `.github/workflows/source-health.yml` | Scheduled/manual curated-source reachability report |
 | `tests/test_hosts_editor_logic.py` | Regression suite for pure logic and selected GUI-adjacent helper paths |
 
 ## Repository Layout
@@ -38,6 +39,7 @@ It is not a DNS server, browser ad blocker, cloud filtering service, or endpoint
 | `CODEX_CHANGELOG.md` | Development-agent handoff notes |
 | `data/blocklist_sources.json` | Versioned curated blocklist catalog loaded at startup |
 | `docs/source-manifest.md` | Curated source manifest schema and maintenance rules |
+| `docs/source-health.md` | Source reachability checker and report format |
 | `CLAUDE.md` | Compact architecture and gotchas snapshot for agents |
 | `default.txt` | Sample/default hosts content |
 | `icon.png` | App branding asset |
@@ -85,6 +87,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Download guards: `read_http_body_limited`, `decode_downloaded_lines`, `looks_like_html_document`.
 - Config sanitation: `sanitize_custom_sources`, `sanitize_config_snapshot`, `resolve_saved_state_hashes`.
 - Source catalog loading: `sanitize_source_manifest`, `load_blocklist_sources_manifest`.
+- Source health reporting: `check_source_health_record`, `build_source_health_report`, `summarize_source_health_results`.
 - Cleanup/export/search helpers: `remove_lines_by_indices`, `rewrite_block_sink_ip`, `scan_suspicious_redirects`, `export_lines_as_format`, `strip_lines_by_category`.
 - Source analytics: `find_sources_containing_domain`, `summarize_source_contributions`, `categorize_entries_by_domain_hint`, `classify_source_freshness`.
 - Provenance and pinned-domain helpers: `append_provenance_event`, `read_provenance_events`, `build_pinned_export_payload`, `parse_pinned_import_payload`, `sanitize_pinned_domains`.
@@ -131,9 +134,10 @@ The CLI functions live near the bottom of `hosts_editor.py` and intentionally sh
 - `_cli_enable`
 - `_cli_apply`
 - `_cli_update`
+- `_cli_source_health`
 - `_handle_cli_args`
 
-Admin-required CLI actions must fail clearly when not elevated. Silent mode writes progress to the local CLI log instead of producing noisy scheduler output.
+Admin-required CLI actions must fail clearly when not elevated. Source health checks are read-only and do not require elevation. Silent mode writes progress to the local CLI log instead of producing noisy scheduler output.
 
 ## Data And State Files
 
@@ -192,6 +196,7 @@ Required before large refactors:
 - Keep `python -m unittest discover -s tests -v` green.
 - Add golden-file fixtures for cleaned output before changing parser/normalizer behavior.
 - Keep source-manifest schema tests green before changing curated source metadata.
+- Keep source-health tests mocked; live source failures belong in the scheduled report artifact, not normal unit tests.
 - Add a minimal GUI smoke test only after CI is available.
 
 ## Known Risk Areas
@@ -199,6 +204,7 @@ Required before large refactors:
 - Full-text rescans during editor changes can lag on very large hosts files.
 - Tkinter `Text` is not virtualized; performance work must be measured before large UI rewrites.
 - Curated source edits must update `data/blocklist_sources.json`; invalid manifests fail startup and launcher validation.
+- Public source health is inherently flaky; use reports for review and only gate when explicitly passing `--source-health-fail-on-unhealthy`.
 - PowerShell launcher changes need parser validation because quoting and elevation paths are easy to break.
 - PyInstaller packaging should be built from pinned dependencies and scanned for the PyInstaller CVE class noted in the roadmap.
 - DNS-over-HTTPS, DNS-over-QUIC, browser private DNS, VPN DNS, and hardcoded device resolvers can bypass the hosts file entirely.

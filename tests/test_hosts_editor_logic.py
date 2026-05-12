@@ -19,12 +19,16 @@ from hosts_editor import (
     FTL_BLOCKED_STATUS_CODES,
     HostsFileEditor,
     PROVENANCE_EVENT_KINDS,
+    SOURCE_HEALTH_REPORT_SCHEMA_VERSION,
     SOURCE_MANIFEST_SCHEMA_VERSION,
     STALE_FRESH_HOURS,
     STALE_WARN_HOURS,
     append_provenance_event,
     build_pinned_export_payload,
+    build_source_health_report,
     categorize_entries_by_domain_hint,
+    check_source_health_record,
+    check_source_health_records,
     classify_source_freshness,
     parse_pinned_import_payload,
     read_provenance_events,
@@ -72,6 +76,7 @@ from hosts_editor import (
     scan_suspicious_redirects,
     strip_lines_by_category,
     summarize_clean_changes,
+    summarize_source_health_results,
     write_text_file_atomic,
 )
 
@@ -326,6 +331,163 @@ class HostsEditorLogicTests(unittest.TestCase):
                 load_blocklist_sources_manifest(str(path)),
                 {"Security": [("Threat Feed", "https://threats.example/hosts.txt", "Threat domains.")]},
             )
+
+    def test_check_source_health_record_marks_host_sample_healthy(self):
+        class FakeResponse:
+            headers = {"Content-Type": "text/plain"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def getcode(self):
+                return 200
+
+            def read(self, size):
+                return b"0.0.0.0 tracker.example\n"
+
+        def opener(request, timeout=None):
+            self.assertEqual(request.full_url, "https://example.com/hosts.txt")
+            self.assertLessEqual(timeout, 5)
+            return FakeResponse()
+
+        result = check_source_health_record(
+            {"category": "Ads", "name": "Example", "url": "https://example.com/hosts.txt"},
+            opener=opener,
+            timeout=5,
+        )
+
+        self.assertEqual(result["status"], "healthy")
+        self.assertEqual(result["http_status"], 200)
+        self.assertEqual(result["bytes_read"], len(b"0.0.0.0 tracker.example\n"))
+        self.assertIn("host-like", result["diagnostic"])
+
+    def test_check_source_health_record_flags_html_and_empty_samples(self):
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+                self.headers = {"Content-Type": "text/html"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def getcode(self):
+                return 200
+
+            def read(self, size):
+                return self.payload
+
+        html = check_source_health_record(
+            {"category": "Ads", "name": "HTML", "url": "https://example.com/html"},
+            opener=lambda request, timeout=None: FakeResponse(b"<html><head><title>Nope</title></head><body></body></html>"),
+            timeout=1,
+        )
+        empty = check_source_health_record(
+            {"category": "Ads", "name": "Empty", "url": "https://example.com/empty"},
+            opener=lambda request, timeout=None: FakeResponse(b""),
+            timeout=1,
+        )
+
+        self.assertEqual(html["status"], "failed")
+        self.assertIn("HTML", html["diagnostic"])
+        self.assertEqual(empty["status"], "warning")
+        self.assertIn("empty", empty["diagnostic"])
+
+    def test_check_source_health_record_treats_oversized_sample_as_warning(self):
+        class FakeResponse:
+            headers = {"Content-Type": "text/plain"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def getcode(self):
+                return 200
+
+            def read(self, size):
+                return b"x" * size
+
+        result = check_source_health_record(
+            {"category": "Ads", "name": "Large", "url": "https://example.com/large.txt"},
+            opener=lambda request, timeout=None: FakeResponse(),
+            sample_bytes=1024,
+        )
+
+        self.assertEqual(result["status"], "warning")
+        self.assertIn("1 KB", result["diagnostic"])
+
+    def test_check_source_health_records_preserves_order_and_summarizes(self):
+        payloads = {
+            "https://one.example/hosts.txt": b"0.0.0.0 one.example\n",
+            "https://two.example/readme.txt": b"plain text without domains\n",
+        }
+
+        class FakeResponse:
+            headers = {"Content-Type": "text/plain"}
+
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def getcode(self):
+                return 200
+
+            def read(self, size):
+                return self.payload
+
+        def opener(request, timeout=None):
+            return FakeResponse(payloads[request.full_url])
+
+        records = [
+            {"category": "Ads", "name": "One", "url": "https://one.example/hosts.txt"},
+            {"category": "Docs", "name": "Two", "url": "https://two.example/readme.txt"},
+        ]
+        results = check_source_health_records(records, opener=opener, max_workers=1)
+
+        self.assertEqual([result["name"] for result in results], ["One", "Two"])
+        self.assertEqual([result["status"] for result in results], ["healthy", "warning"])
+        self.assertEqual(
+            summarize_source_health_results(results),
+            {"total": 2, "healthy": 1, "warning": 1, "failed": 0},
+        )
+
+    def test_build_source_health_report_shape(self):
+        class FakeResponse:
+            headers = {"Content-Type": "text/plain"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def getcode(self):
+                return 200
+
+            def read(self, size):
+                return b"0.0.0.0 ok.example\n"
+
+        report = build_source_health_report(
+            {"Ads": [("One", "https://one.example/hosts.txt", "Example")]},
+            opener=lambda request, timeout=None: FakeResponse(),
+            max_workers=1,
+        )
+
+        self.assertEqual(report["schema_version"], SOURCE_HEALTH_REPORT_SCHEMA_VERSION)
+        self.assertEqual(report["summary"], {"total": 1, "healthy": 1, "warning": 0, "failed": 0})
+        self.assertEqual(report["sources"][0]["category"], "Ads")
 
     def test_find_sources_containing_domain_accepts_structured_cache_entries(self):
         source_cache = {

@@ -48,6 +48,8 @@ Expected output:
 
 The release workflow is `.github/workflows/release.yml`.
 
+Curated source reachability is tracked by `.github/workflows/source-health.yml`. That workflow uploads a report artifact and does not turn transient upstream outages into normal CI failures.
+
 It runs on:
 
 - tags matching `v*`

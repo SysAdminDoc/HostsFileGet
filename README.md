@@ -36,6 +36,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - unsaved-change prompts on reload and exit
 - Import pipeline:
   - curated web blocklists from a versioned JSON source manifest
+  - source health reporting for curated feed reachability
   - batch import with filtering and progress
   - custom persistent sources
   - pfSense DNSBL log import
@@ -137,6 +138,12 @@ python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py
 python -m unittest discover -s tests -v
 ```
 
+Run a non-admin curated source health report with:
+
+```powershell
+python hosts_editor.py --source-health --source-health-output source-health-report.json
+```
+
 ## Repository Notes
 
 - Main application: `hosts_editor.py`
@@ -146,6 +153,7 @@ python -m unittest discover -s tests -v
 - Troubleshooting and hosts-file limits: `TROUBLESHOOTING.md`
 - Config schema: `docs/config-schema.md`
 - Curated source manifest: `docs/source-manifest.md`
+- Source health checks: `docs/source-health.md`
 - Sourced implementation plan: `ROADMAP.md`
 - Release build notes: `docs/release.md`
 - Codex handoff notes: `CODEX_CHANGELOG.md`

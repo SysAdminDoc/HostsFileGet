@@ -21,6 +21,8 @@ import re
 import tempfile
 import threading
 import queue
+import time
+import concurrent.futures
 import gzip
 import bz2
 import pathlib
@@ -35,6 +37,10 @@ CONFIG_SCHEMA_VERSION = 1
 SOURCE_MANIFEST_SCHEMA_VERSION = 1
 SOURCE_MANIFEST_RELATIVE_PATH = os.path.join("data", "blocklist_sources.json")
 ELEVATION_ATTEMPT_FLAG = "--hostsfileget-elevation-attempted"
+SOURCE_HEALTH_REPORT_SCHEMA_VERSION = 1
+SOURCE_HEALTH_SAMPLE_BYTES = 256 * 1024
+SOURCE_HEALTH_TIMEOUT_SECONDS = 15
+SOURCE_HEALTH_DEFAULT_WORKERS = 8
 
 # Hard cap for any single downloaded feed/whitelist payload (50 MB decompressed).
 # Even the biggest public blocklists are well under 20 MB; this guards against
@@ -1412,6 +1418,14 @@ def enable_hosts_file_transactionally(hosts_path: str, disabled_path: str) -> No
                 pass
         raise
 
+def _format_size_limit(size_bytes: int) -> str:
+    if size_bytes >= 1024 * 1024:
+        return f"{size_bytes // (1024 * 1024)} MB"
+    if size_bytes >= 1024:
+        return f"{size_bytes // 1024} KB"
+    return f"{size_bytes} bytes"
+
+
 def read_http_body_limited(response, max_bytes: int = MAX_DOWNLOAD_BYTES) -> bytes:
     """Read an HTTP response with a hard ceiling on total bytes.
 
@@ -1422,7 +1436,7 @@ def read_http_body_limited(response, max_bytes: int = MAX_DOWNLOAD_BYTES) -> byt
     data = response.read(max_bytes + 1)
     if len(data) > max_bytes:
         raise ValueError(
-            f"Response exceeded {max_bytes // (1024 * 1024)} MB size cap "
+            f"Response exceeded {_format_size_limit(max_bytes)} size cap "
             "(feed too large or server is streaming non-hosts content)."
         )
     return data
@@ -1681,6 +1695,219 @@ def load_blocklist_sources_manifest(path: str | None = None) -> dict[str, list[t
         raise ValueError(f"Source manifest could not be read from {manifest_path!r}: {e}") from e
 
     return sanitize_source_manifest(payload)
+
+
+def iter_curated_source_records(blocklist_sources: dict[str, list[tuple[str, str, str]]]):
+    for category, sources in blocklist_sources.items():
+        for name, url, description in sources:
+            yield {
+                "category": category,
+                "name": name,
+                "url": url,
+                "description": description,
+            }
+
+
+def _utc_timestamp() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _response_status_code(response) -> int | None:
+    try:
+        status = response.getcode()
+    except Exception:
+        status = getattr(response, "status", None)
+    try:
+        return int(status) if status is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _response_header(response, name: str) -> str:
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return ""
+    try:
+        value = headers.get(name, "")
+    except Exception:
+        return ""
+    return str(value or "")
+
+
+def _sample_contains_host_like_content(lines: list[str]) -> bool:
+    for line in lines[:200]:
+        entries, domains, _ = normalize_line_to_hosts_entries(line)
+        if entries or domains:
+            return True
+    return False
+
+
+def _source_health_base_result(source: dict, checked_at: str) -> dict:
+    return {
+        "category": str(source.get("category", "")).strip(),
+        "name": str(source.get("name", "")).strip(),
+        "url": str(source.get("url", "")).strip(),
+        "checked_at": checked_at,
+        "status": "failed",
+        "http_status": None,
+        "content_type": "",
+        "bytes_read": 0,
+        "sample_lines": 0,
+        "elapsed_ms": 0,
+        "diagnostic": "",
+    }
+
+
+def check_source_health_record(
+    source: dict,
+    opener=urllib.request.urlopen,
+    timeout: float = SOURCE_HEALTH_TIMEOUT_SECONDS,
+    sample_bytes: int = SOURCE_HEALTH_SAMPLE_BYTES,
+) -> dict:
+    """Fetch a bounded sample from one curated source and classify reachability."""
+    checked_at = _utc_timestamp()
+    result = _source_health_base_result(source, checked_at)
+    started = time.monotonic()
+
+    def finish(status: str, diagnostic: str) -> dict:
+        result["status"] = status
+        result["diagnostic"] = diagnostic
+        result["elapsed_ms"] = max(0, int((time.monotonic() - started) * 1000))
+        return result
+
+    parsed = _parse_valid_http_source_url(result["url"])
+    if parsed is None:
+        return finish("failed", "Invalid source URL.")
+
+    try:
+        timeout = max(1.0, float(timeout))
+    except (TypeError, ValueError):
+        timeout = SOURCE_HEALTH_TIMEOUT_SECONDS
+    try:
+        sample_bytes = max(1024, int(sample_bytes))
+    except (TypeError, ValueError):
+        sample_bytes = SOURCE_HEALTH_SAMPLE_BYTES
+
+    request = urllib.request.Request(
+        result["url"],
+        headers={
+            "User-Agent": f"{APP_SLUG}/{APP_VERSION} source-health",
+            "Accept": "text/plain,*/*;q=0.5",
+            "Range": f"bytes=0-{sample_bytes - 1}",
+        },
+    )
+
+    try:
+        with opener(request, timeout=timeout) as response:
+            result["http_status"] = _response_status_code(response)
+            result["content_type"] = _response_header(response, "Content-Type")
+            content_encoding = _response_header(response, "Content-Encoding")
+            if result["http_status"] and result["http_status"] >= 400:
+                return finish("failed", f"HTTP {result['http_status']}.")
+
+            try:
+                raw = read_http_body_limited(response, sample_bytes)
+            except ValueError as e:
+                return finish("warning", f"Source is reachable, but the sample exceeded the cap: {e}")
+            result["bytes_read"] = len(raw)
+            if not raw:
+                return finish("warning", "Source responded with an empty sample.")
+
+            try:
+                lines = decode_downloaded_lines(result["url"], raw, content_encoding)
+            except Exception:
+                lines = decode_text_bytes(raw).splitlines()
+
+            result["sample_lines"] = len(lines)
+            if looks_like_html_document(lines):
+                return finish("failed", "Source returned an HTML page instead of a list sample.")
+            if not _sample_contains_host_like_content(lines):
+                return finish("warning", "Source is reachable, but the sample did not contain host-like entries.")
+
+            return finish("healthy", "Source is reachable and returned host-like content.")
+    except urllib.error.HTTPError as e:
+        result["http_status"] = getattr(e, "code", None)
+        return finish("failed", f"HTTP {getattr(e, 'code', 'error')}.")
+    except urllib.error.URLError as e:
+        return finish("failed", f"Network error: {getattr(e, 'reason', e)}")
+    except TimeoutError:
+        return finish("failed", "Network timeout.")
+    except Exception as e:
+        return finish("failed", f"Health check failed: {e}")
+
+
+def check_source_health_records(
+    records: list[dict],
+    opener=urllib.request.urlopen,
+    timeout: float = SOURCE_HEALTH_TIMEOUT_SECONDS,
+    sample_bytes: int = SOURCE_HEALTH_SAMPLE_BYTES,
+    max_workers: int = SOURCE_HEALTH_DEFAULT_WORKERS,
+) -> list[dict]:
+    records = list(records)
+    if not records:
+        return []
+    try:
+        worker_count = int(max_workers)
+    except (TypeError, ValueError):
+        worker_count = SOURCE_HEALTH_DEFAULT_WORKERS
+    worker_count = max(1, min(worker_count, len(records)))
+
+    if worker_count == 1:
+        return [
+            check_source_health_record(record, opener=opener, timeout=timeout, sample_bytes=sample_bytes)
+            for record in records
+        ]
+
+    results: list[dict | None] = [None] * len(records)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_to_index = {
+            executor.submit(
+                check_source_health_record,
+                record,
+                opener,
+                timeout,
+                sample_bytes,
+            ): index
+            for index, record in enumerate(records)
+        }
+        for future in concurrent.futures.as_completed(future_to_index):
+            results[future_to_index[future]] = future.result()
+
+    return [result for result in results if result is not None]
+
+
+def summarize_source_health_results(results: list[dict]) -> dict:
+    summary = {"total": len(results), "healthy": 0, "warning": 0, "failed": 0}
+    for result in results:
+        status = result.get("status")
+        if status in summary:
+            summary[status] += 1
+        else:
+            summary["failed"] += 1
+    return summary
+
+
+def build_source_health_report(
+    blocklist_sources: dict[str, list[tuple[str, str, str]]],
+    opener=urllib.request.urlopen,
+    timeout: float = SOURCE_HEALTH_TIMEOUT_SECONDS,
+    sample_bytes: int = SOURCE_HEALTH_SAMPLE_BYTES,
+    max_workers: int = SOURCE_HEALTH_DEFAULT_WORKERS,
+) -> dict:
+    records = list(iter_curated_source_records(blocklist_sources))
+    results = check_source_health_records(
+        records,
+        opener=opener,
+        timeout=timeout,
+        sample_bytes=sample_bytes,
+        max_workers=max_workers,
+    )
+    return {
+        "schema_version": SOURCE_HEALTH_REPORT_SCHEMA_VERSION,
+        "checked_at": _utc_timestamp(),
+        "summary": summarize_source_health_results(results),
+        "sources": results,
+    }
 
 
 def _coerce_config_schema_version(value) -> int:
@@ -8615,6 +8842,47 @@ def _cli_update(hosts_path: str) -> int:
     return 0 if successes and not failures else (0 if successes else 1)
 
 
+def _cli_source_health(output_path: str | None, timeout: float, workers: int, fail_on_unhealthy: bool) -> int:
+    report = build_source_health_report(
+        HostsFileEditor.BLOCKLIST_SOURCES,
+        timeout=timeout,
+        max_workers=workers,
+    )
+    summary = report["summary"]
+    _cli_print(
+        "Source health: "
+        f"{summary['healthy']} healthy, {summary['warning']} warning, "
+        f"{summary['failed']} failed, {summary['total']} total."
+    )
+
+    notable = [
+        source for source in report["sources"]
+        if source.get("status") in {"warning", "failed"}
+    ]
+    for source in notable[:25]:
+        _cli_print(
+            f"{source['status'].upper():7} {source['name']} "
+            f"({source['category']}): {source['diagnostic']}"
+        )
+    if len(notable) > 25:
+        _cli_print(f"... {len(notable) - 25} additional warning/failed source(s) omitted from console output.")
+
+    if output_path:
+        try:
+            output_dir = os.path.dirname(os.path.abspath(output_path))
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+            write_text_file_atomic(output_path, json.dumps(report, indent=2))
+            _cli_print(f"Wrote source health report to {output_path}")
+        except OSError as e:
+            _cli_print(f"Could not write source health report: {e}")
+            return 2
+
+    if fail_on_unhealthy and summary["failed"]:
+        return 1
+    return 0
+
+
 def _handle_cli_args(argv: list[str]) -> int | None:
     """Return an exit code when a CLI action was performed; else ``None`` to
     continue launching the GUI.
@@ -8622,8 +8890,29 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     # Strip the elevation-probe flag so argparse doesn't choke on it; the
     # flag exists only to keep us from UAC-looping.
     argv = [arg for arg in argv if arg != ELEVATION_ATTEMPT_FLAG]
-    cli_flags = {"--version", "--disable", "--enable", "--backup", "--apply", "--update", "--silent", "-h", "--help"}
-    if not any(arg in cli_flags or arg.startswith("--apply=") for arg in argv):
+    cli_flags = {
+        "--version",
+        "--disable",
+        "--enable",
+        "--backup",
+        "--apply",
+        "--update",
+        "--source-health",
+        "--source-health-output",
+        "--source-health-timeout",
+        "--source-health-workers",
+        "--source-health-fail-on-unhealthy",
+        "--silent",
+        "-h",
+        "--help",
+    }
+    cli_prefixes = (
+        "--apply=",
+        "--source-health-output=",
+        "--source-health-timeout=",
+        "--source-health-workers=",
+    )
+    if not any(arg in cli_flags or any(arg.startswith(prefix) for prefix in cli_prefixes) for arg in argv):
         return None
 
     parser = argparse.ArgumentParser(
@@ -8636,6 +8925,11 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--backup", action="store_true", help="Create a timestamped backup of the current hosts file.")
     parser.add_argument("--apply", metavar="PATH", help="Overwrite the hosts file with the contents of PATH (creates backup first).")
     parser.add_argument("--update", action="store_true", help="Re-fetch every source previously imported in the GUI and apply a Cleaned Save of the merged result.")
+    parser.add_argument("--source-health", action="store_true", help="Check curated source reachability and print a summary without launching the GUI.")
+    parser.add_argument("--source-health-output", metavar="PATH", help="Write detailed source-health JSON to PATH.")
+    parser.add_argument("--source-health-timeout", type=float, default=SOURCE_HEALTH_TIMEOUT_SECONDS, help="Per-source network timeout in seconds.")
+    parser.add_argument("--source-health-workers", type=int, default=SOURCE_HEALTH_DEFAULT_WORKERS, help="Parallel source-health worker count.")
+    parser.add_argument("--source-health-fail-on-unhealthy", action="store_true", help="Return a non-zero exit code when any source fails.")
     parser.add_argument(
         "--silent", action="store_true",
         help="Suppress stderr progress. Progress is logged to %%LOCALAPPDATA%%\\HostsFileGet\\cli.log instead. Designed for Task Scheduler runs.",
@@ -8661,6 +8955,13 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         return _cli_apply(hosts_path, args.apply)
     if args.update:
         return _cli_update(hosts_path)
+    if args.source_health:
+        return _cli_source_health(
+            args.source_health_output,
+            args.source_health_timeout,
+            args.source_health_workers,
+            args.source_health_fail_on_unhealthy,
+        )
     return None
 
 

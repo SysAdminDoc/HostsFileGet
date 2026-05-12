@@ -1,0 +1,43 @@
+name: Source Health
+
+on:
+  schedule:
+    - cron: "17 8 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  curated-sources:
+    name: Check curated source reachability
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compile Python sources
+        shell: pwsh
+        run: python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py
+
+      - name: Check curated source health
+        shell: pwsh
+        run: |
+          python hosts_editor.py `
+            --source-health `
+            --source-health-timeout 12 `
+            --source-health-workers 12 `
+            --source-health-output source-health-report.json
+
+      - name: Upload source health report
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-health-report
+          path: source-health-report.json
+          if-no-files-found: error

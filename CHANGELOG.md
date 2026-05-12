@@ -8,6 +8,10 @@ All notable changes to HostsFileGet will be documented in this file.
 - Moved the built-in curated blocklist catalog to `data/blocklist_sources.json` with schema validation and regression coverage.
 - Updated the launcher and PyInstaller spec so the manifest is validated and bundled with raw-script and executable launches.
 
+**Source health checks**
+- Added `--source-health` for bounded, non-admin reachability checks across the curated source manifest.
+- Added weekly/manual GitHub Actions source-health reporting that uploads JSON results without making transient upstream outages fail normal CI.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**
