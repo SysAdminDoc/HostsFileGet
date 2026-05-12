@@ -156,6 +156,11 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added **Tools > DNS Rebinding Protection Check...**, `--dns-rebinding-report`, `--dns-rebinding-output`, and repeatable `--dns-rebinding-trusted-suffix` for local review JSON without live DNS queries or policy changes.
 - Documented resolver/router enforcement boundaries, trusted internal suffix handling, and source basis in `docs/dns-rebinding.md`.
 
+**SafeSearch and restricted-mode templates**
+- Added guarded SafeSearch and YouTube Restricted Mode template plans for Google, Bing, DuckDuckGo, and YouTube.
+- Added **Tools > SafeSearch / Restricted Mode Templates...**, `--safesearch-template-list`, and `--safesearch-template-plan TEMPLATE OUTPUT` for local review JSON without hosts, DNS, browser, or provider writes.
+- Documented hosts-file limits, DNS CNAME handoffs, provider IP drift, and source basis in `docs/safesearch-restricted-mode.md`.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

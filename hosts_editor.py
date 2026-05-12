@@ -6378,6 +6378,231 @@ ENCRYPTED_DNS_BYPASS_PACK_ALIASES = {
     "router": "router-firewall-handoff",
     "network": "router-firewall-handoff",
 }
+SAFESEARCH_TEMPLATE_WARNINGS = (
+    "Plan-only: HostsFileGet lists provider mappings and review controls; it does not apply SafeSearch, write DNS records, or edit browser policy.",
+    "Windows hosts files cannot express CNAME records or wildcard country domains; DNS CNAME actions must be configured in the resolver, router, or managed DNS service.",
+    "Provider VIPs and strict-mode targets can change; resolve the documented target immediately before saving hosts entries.",
+    "SafeSearch and restricted mode reduce explicit search/video results, but they are not a complete parental-control or endpoint-management system.",
+)
+SAFESEARCH_TEMPLATE_SOURCES = (
+    {
+        "id": "google-safesearch-vip",
+        "name": "Google SafeSearch VIP",
+        "provider": "Google Search",
+        "url": "https://support.google.com/websearch/answer/186669?hl=en",
+        "mode": "safe-search",
+        "hosts_file_fit": "partial-hosts-or-dns-cname",
+        "enforcement_requirement": "Map Google Search hostnames to forcesafesearch.google.com by DNS CNAME or by current VIP IPs in hosts.",
+        "source_ids": ("P1",),
+    },
+    {
+        "id": "youtube-restricted-mode",
+        "name": "YouTube Restricted Mode DNS mappings",
+        "provider": "YouTube",
+        "url": "https://support.google.com/a/answer/6212415?hl=en",
+        "mode": "restricted-video",
+        "hosts_file_fit": "dns-cname-preferred",
+        "enforcement_requirement": "CNAME selected YouTube hostnames to restrict.youtube.com or restrictmoderate.youtube.com.",
+        "source_ids": ("P2",),
+    },
+    {
+        "id": "bing-safe-search-strict",
+        "name": "Bing SafeSearch strict mapping",
+        "provider": "Microsoft Bing",
+        "url": "https://support.microsoft.com/topic/block-adult-content-with-safesearch-or-block-chat-11546adf-1bbc-4c2e-9ef9-fbd6799bc79d",
+        "mode": "safe-search",
+        "hosts_file_fit": "partial-hosts-or-dns-cname",
+        "enforcement_requirement": "Map Bing hostnames to strict.bing.com by DNS CNAME or by currently resolved IPs in hosts.",
+        "source_ids": ("P3",),
+    },
+    {
+        "id": "duckduckgo-safe-search",
+        "name": "DuckDuckGo Safe Search DNS mapping",
+        "provider": "DuckDuckGo",
+        "url": "https://duckduckgo.com/duckduckgo-help-pages/features/safe-search/",
+        "mode": "safe-search",
+        "hosts_file_fit": "dns-cname-required",
+        "enforcement_requirement": "CNAME duckduckgo.com to safe.duckduckgo.com at the DNS resolver.",
+        "source_ids": ("P4",),
+    },
+    {
+        "id": "managed-dns-parental-controls",
+        "name": "Managed DNS parental controls",
+        "provider": "AdGuard DNS / NextDNS",
+        "url": "https://adguard-dns.io/en/welcome.html",
+        "mode": "managed-dns",
+        "hosts_file_fit": "service-handoff",
+        "enforcement_requirement": "Use provider-side parental controls for account, device, category, and reporting workflows beyond a local hosts file.",
+        "source_ids": ("C1", "C5"),
+    },
+)
+SAFESEARCH_TEMPLATES = (
+    {
+        "id": "google-safesearch-hosts",
+        "label": "Google SafeSearch hosts/VIP plan",
+        "description": "Template for forcing Google Search through the SafeSearch VIP while documenting country-domain limits.",
+        "source_ids": ("google-safesearch-vip",),
+        "risk": "medium",
+        "review_level": "manual-provider-verification",
+        "enforcement": "hosts-vip-or-dns-cname",
+        "hosts_native": True,
+        "hosts_file_fit": "partial",
+        "actions": (
+            {
+                "kind": "hosts",
+                "hostname": "www.google.com",
+                "ip": "216.239.38.120",
+                "comment": "# forcesafesearch.google.com IPv4 VIP; resolve before use",
+                "provider_target": "forcesafesearch.google.com",
+            },
+            {
+                "kind": "hosts",
+                "hostname": "www.google.com",
+                "ip": "2001:4860:4802:32::78",
+                "comment": "# forcesafesearch.google.com IPv6 VIP; resolve before use",
+                "provider_target": "forcesafesearch.google.com",
+            },
+            {
+                "kind": "dns-cname",
+                "hostname": "www.google.com",
+                "target": "forcesafesearch.google.com",
+                "scope": "DNS resolver preferred for country-domain coverage",
+            },
+        ),
+        "controls": (
+            "Repeat the mapping for regional Google Search hostnames used in the environment.",
+            "Verify both IPv4 and IPv6 behavior; inconsistent address families can leave bypass paths.",
+            "Pair with browser/account policy where users can change search engines or encrypted DNS settings.",
+        ),
+    },
+    {
+        "id": "bing-strict-hosts",
+        "label": "Bing SafeSearch strict hosts/DNS plan",
+        "description": "Template for strict Bing SafeSearch with explicit resolver verification before hosts-file use.",
+        "source_ids": ("bing-safe-search-strict",),
+        "risk": "medium",
+        "review_level": "manual-provider-resolution",
+        "enforcement": "hosts-resolved-ip-or-dns-cname",
+        "hosts_native": True,
+        "hosts_file_fit": "partial",
+        "actions": (
+            {
+                "kind": "hosts",
+                "hostname": "www.bing.com",
+                "ip_placeholder": "<resolved strict.bing.com IP>",
+                "comment": "# resolve strict.bing.com immediately before use",
+                "provider_target": "strict.bing.com",
+            },
+            {
+                "kind": "hosts",
+                "hostname": "edgeservices.bing.com",
+                "ip_placeholder": "<resolved strict.bing.com IP>",
+                "comment": "# resolve strict.bing.com immediately before use",
+                "provider_target": "strict.bing.com",
+            },
+            {
+                "kind": "dns-cname",
+                "hostname": "www.bing.com",
+                "target": "strict.bing.com",
+                "scope": "DNS resolver preferred where CNAME rewrites are available",
+            },
+            {
+                "kind": "dns-cname",
+                "hostname": "edgeservices.bing.com",
+                "target": "strict.bing.com",
+                "scope": "DNS resolver preferred where CNAME rewrites are available",
+            },
+        ),
+        "controls": (
+            "Do not paste the placeholder into hosts; replace it with a fresh strict.bing.com address.",
+            "Test both Bing web search and chat/search side surfaces after applying DNS changes.",
+        ),
+    },
+    {
+        "id": "duckduckgo-strict-dns",
+        "label": "DuckDuckGo Safe Search DNS handoff",
+        "description": "DNS CNAME-only plan for DuckDuckGo Safe Search.",
+        "source_ids": ("duckduckgo-safe-search",),
+        "risk": "low",
+        "review_level": "dns-admin",
+        "enforcement": "dns-cname",
+        "hosts_native": False,
+        "hosts_file_fit": "not-native",
+        "actions": (
+            {
+                "kind": "dns-cname",
+                "hostname": "duckduckgo.com",
+                "target": "safe.duckduckgo.com",
+                "scope": "DNS resolver",
+            },
+        ),
+        "controls": (
+            "Use DNS CNAME rewriting instead of a static hosts IP because DuckDuckGo documents a CNAME target.",
+            "Confirm browser extensions, alternate domains, and app search providers are covered separately.",
+        ),
+    },
+    {
+        "id": "youtube-strict-dns",
+        "label": "YouTube Restricted Mode strict DNS handoff",
+        "description": "Strict YouTube Restricted Mode CNAME plan.",
+        "source_ids": ("youtube-restricted-mode",),
+        "risk": "medium",
+        "review_level": "dns-admin",
+        "enforcement": "dns-cname",
+        "hosts_native": False,
+        "hosts_file_fit": "not-native",
+        "actions": (
+            {"kind": "dns-cname", "hostname": "www.youtube.com", "target": "restrict.youtube.com", "scope": "DNS resolver"},
+            {"kind": "dns-cname", "hostname": "m.youtube.com", "target": "restrict.youtube.com", "scope": "DNS resolver"},
+            {"kind": "dns-cname", "hostname": "youtubei.googleapis.com", "target": "restrict.youtube.com", "scope": "DNS resolver"},
+            {"kind": "dns-cname", "hostname": "youtube.googleapis.com", "target": "restrict.youtube.com", "scope": "DNS resolver"},
+            {"kind": "dns-cname", "hostname": "www.youtube-nocookie.com", "target": "restrict.youtube.com", "scope": "DNS resolver"},
+        ),
+        "excluded_hosts": ("youtube.com",),
+        "controls": (
+            "Do not CNAME the bare youtube.com apex unless the DNS provider explicitly supports the documented exception.",
+            "Validate signed-out and signed-in YouTube behavior; user/account policy may still affect visible controls.",
+        ),
+    },
+    {
+        "id": "youtube-moderate-dns",
+        "label": "YouTube Restricted Mode moderate DNS handoff",
+        "description": "Moderate YouTube Restricted Mode CNAME plan.",
+        "source_ids": ("youtube-restricted-mode",),
+        "risk": "medium",
+        "review_level": "dns-admin",
+        "enforcement": "dns-cname",
+        "hosts_native": False,
+        "hosts_file_fit": "not-native",
+        "actions": (
+            {"kind": "dns-cname", "hostname": "www.youtube.com", "target": "restrictmoderate.youtube.com", "scope": "DNS resolver"},
+            {"kind": "dns-cname", "hostname": "m.youtube.com", "target": "restrictmoderate.youtube.com", "scope": "DNS resolver"},
+            {"kind": "dns-cname", "hostname": "youtubei.googleapis.com", "target": "restrictmoderate.youtube.com", "scope": "DNS resolver"},
+            {"kind": "dns-cname", "hostname": "youtube.googleapis.com", "target": "restrictmoderate.youtube.com", "scope": "DNS resolver"},
+            {"kind": "dns-cname", "hostname": "www.youtube-nocookie.com", "target": "restrictmoderate.youtube.com", "scope": "DNS resolver"},
+        ),
+        "excluded_hosts": ("youtube.com",),
+        "controls": (
+            "Do not CNAME the bare youtube.com apex unless the DNS provider explicitly supports the documented exception.",
+            "Use the strict template for environments that require the most restrictive YouTube filtering.",
+        ),
+    },
+)
+SAFESEARCH_TEMPLATE_ALIASES = {
+    "google": "google-safesearch-hosts",
+    "forcesafesearch": "google-safesearch-hosts",
+    "bing": "bing-strict-hosts",
+    "microsoft": "bing-strict-hosts",
+    "ddg": "duckduckgo-strict-dns",
+    "duckduckgo": "duckduckgo-strict-dns",
+    "youtube": "youtube-strict-dns",
+    "youtube-strict": "youtube-strict-dns",
+    "yt": "youtube-strict-dns",
+    "yt-strict": "youtube-strict-dns",
+    "youtube-moderate": "youtube-moderate-dns",
+    "yt-moderate": "youtube-moderate-dns",
+    "moderate": "youtube-moderate-dns",
+}
 
 
 def normalize_export_format(export_format: str) -> str:
@@ -7062,6 +7287,169 @@ def format_encrypted_dns_bypass_pack_plan(plan: dict) -> str:
         lines.append(f"- {control}")
     lines.extend(["", "Warnings:"])
     for warning in plan.get("warnings") or ENCRYPTED_DNS_BYPASS_WARNINGS:
+        lines.append(f"- {warning}")
+    references = plan.get("references") or []
+    if references:
+        lines.extend(["", "Roadmap source IDs:", f"- {', '.join(references)}"])
+    return "\n".join(lines)
+
+
+def normalize_safesearch_template_id(template_id: str) -> str:
+    normalized = (template_id or "").strip().lower().replace("_", "-")
+    return SAFESEARCH_TEMPLATE_ALIASES.get(normalized, normalized)
+
+
+def list_safesearch_template_sources() -> list[dict]:
+    return [dict(source) for source in SAFESEARCH_TEMPLATE_SOURCES]
+
+
+def list_safesearch_templates() -> list[dict]:
+    return [dict(template) for template in SAFESEARCH_TEMPLATES]
+
+
+def find_safesearch_template(template_id: str) -> dict:
+    normalized = normalize_safesearch_template_id(template_id)
+    for template in SAFESEARCH_TEMPLATES:
+        if template["id"] == normalized:
+            return dict(template)
+    known = ", ".join(template["id"] for template in SAFESEARCH_TEMPLATES)
+    raise ValueError(f"Unknown SafeSearch template: {template_id!r}. Known templates: {known}")
+
+
+def find_safesearch_template_source(source_id: str) -> dict:
+    normalized = (source_id or "").strip().lower().replace("_", "-")
+    for source in SAFESEARCH_TEMPLATE_SOURCES:
+        if source["id"] == normalized:
+            return dict(source)
+    known = ", ".join(source["id"] for source in SAFESEARCH_TEMPLATE_SOURCES)
+    raise ValueError(f"Unknown SafeSearch template source: {source_id!r}. Known sources: {known}")
+
+
+def _safesearch_hosts_line_template(action: dict) -> str:
+    ip = action.get("ip") or action.get("ip_placeholder") or "<resolved provider target IP>"
+    line = f"{ip} {action.get('hostname')}"
+    comment = (action.get("comment") or "").strip()
+    if comment:
+        line = f"{line} {comment}"
+    return line
+
+
+def build_safesearch_template_plan(template_id: str) -> dict:
+    template = find_safesearch_template(template_id)
+    sources = [find_safesearch_template_source(source_id) for source_id in template["source_ids"]]
+    actions = [dict(action) for action in template.get("actions") or ()]
+    hosts_line_templates = [
+        _safesearch_hosts_line_template(action)
+        for action in actions
+        if action.get("kind") == "hosts"
+    ]
+    dns_cname_records = [
+        {
+            "hostname": action.get("hostname"),
+            "target": action.get("target"),
+            "scope": action.get("scope"),
+        }
+        for action in actions
+        if action.get("kind") == "dns-cname"
+    ]
+    references = sorted({
+        reference
+        for source in sources
+        for reference in source.get("source_ids", ())
+    })
+    return {
+        "schema": "hostsfileget.safesearch-template-plan.v1",
+        "template_id": template["id"],
+        "label": template["label"],
+        "description": template["description"],
+        "risk": template["risk"],
+        "review_level": template["review_level"],
+        "enforcement": template["enforcement"],
+        "hosts_native": bool(template["hosts_native"]),
+        "hosts_file_fit": template["hosts_file_fit"],
+        "source_count": len(sources),
+        "source_ids": [source["id"] for source in sources],
+        "sources": sources,
+        "actions": actions,
+        "hosts_line_templates": hosts_line_templates,
+        "dns_cname_records": dns_cname_records,
+        "excluded_hosts": list(template.get("excluded_hosts") or ()),
+        "controls": list(template.get("controls") or ()),
+        "warnings": list(SAFESEARCH_TEMPLATE_WARNINGS),
+        "references": references,
+    }
+
+
+def format_safesearch_template_catalog() -> str:
+    lines = [
+        "SafeSearch and restricted-mode templates",
+        "",
+        "Templates generate local review plans only. HostsFileGet does not write SafeSearch entries, DNS CNAME records, or browser policy.",
+        "",
+        "Supported templates:",
+    ]
+    for template in SAFESEARCH_TEMPLATES:
+        source_count = len(template.get("source_ids") or ())
+        native_text = "hosts-reviewable" if template.get("hosts_native") else "DNS/provider handoff"
+        lines.extend([
+            f"- {template['id']}: {template['label']}",
+            f"  Fit: {native_text} ({template['hosts_file_fit']})",
+            f"  Enforcement: {template['enforcement']}",
+            f"  Risk: {template['risk']} ({template['review_level']} review)",
+            f"  Sources: {source_count}",
+            f"  Description: {template['description']}",
+        ])
+    lines.extend(["", "Sources:"])
+    for source in SAFESEARCH_TEMPLATE_SOURCES:
+        lines.extend([
+            f"- {source['id']}: {source['name']}",
+            f"  Provider: {source['provider']} | Mode: {source['mode']} | Hosts fit: {source['hosts_file_fit']}",
+            f"  Requirement: {source['enforcement_requirement']}",
+            f"  URL: {source['url']}",
+        ])
+    lines.extend(["", "Warnings:"])
+    lines.extend(f"- {warning}" for warning in SAFESEARCH_TEMPLATE_WARNINGS)
+    return "\n".join(lines)
+
+
+def format_safesearch_template_plan(plan: dict) -> str:
+    lines = [
+        "SafeSearch / Restricted Mode Template Plan",
+        f"Template: {plan.get('template_id')} - {plan.get('label')}",
+        f"Risk: {plan.get('risk')} ({plan.get('review_level')} review)",
+        f"Enforcement: {plan.get('enforcement')}",
+        f"Hosts-native: {'yes' if plan.get('hosts_native') else 'no'} ({plan.get('hosts_file_fit')})",
+        f"Sources: {int(plan.get('source_count') or 0):,}",
+        "",
+        "Hosts line templates:",
+    ]
+    hosts_lines = plan.get("hosts_line_templates") or []
+    if hosts_lines:
+        lines.extend(f"- {line}" for line in hosts_lines)
+    else:
+        lines.append("- (none; use DNS/provider configuration)")
+    lines.extend(["", "DNS CNAME records:"])
+    cname_records = plan.get("dns_cname_records") or []
+    if cname_records:
+        for record in cname_records:
+            lines.append(f"- {record.get('hostname')} -> {record.get('target')} ({record.get('scope')})")
+    else:
+        lines.append("- (none)")
+    excluded_hosts = plan.get("excluded_hosts") or []
+    if excluded_hosts:
+        lines.extend(["", "Do not CNAME unless provider docs explicitly allow it:"])
+        lines.extend(f"- {hostname}" for hostname in excluded_hosts)
+    lines.extend(["", "Controls:"])
+    for control in plan.get("controls") or []:
+        lines.append(f"- {control}")
+    lines.extend(["", "Source URLs:"])
+    for source in plan.get("sources") or []:
+        lines.append(
+            f"- {source.get('id')}: {source.get('url')} "
+            f"({source.get('provider')}, {source.get('mode')}, hosts={source.get('hosts_file_fit')})"
+        )
+    lines.extend(["", "Warnings:"])
+    for warning in plan.get("warnings") or SAFESEARCH_TEMPLATE_WARNINGS:
         lines.append(f"- {warning}")
     references = plan.get("references") or []
     if references:
@@ -10186,6 +10574,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="DNS Bypass Diagnostics...", command=self.show_dns_bypass_diagnostics)
         tools_menu.add_command(label="Encrypted DNS Bypass Packs...", command=self.show_encrypted_dns_bypass_packs)
         tools_menu.add_command(label="DNS Rebinding Protection Check...", command=self.show_dns_rebinding_report)
+        tools_menu.add_command(label="SafeSearch / Restricted Mode Templates...", command=self.show_safesearch_templates)
         tools_menu.add_command(label="DNS Interoperability Pack...", command=self.show_dns_integration_pack)
         tools_menu.add_command(label="Cloud DNS Adapters...", command=self.show_cloud_dns_adapters)
         tools_menu.add_command(label="Sources Report...", command=self.show_sources_report)
@@ -11229,6 +11618,16 @@ class HostsFileEditor:
             tone="warning",
             width=960,
             height=720,
+        )
+
+    def show_safesearch_templates(self):
+        self._show_text_report_dialog(
+            "SafeSearch / restricted-mode templates",
+            "Review SafeSearch and YouTube Restricted Mode hosts/DNS templates without applying them automatically.",
+            format_safesearch_template_catalog(),
+            tone="warning",
+            width=960,
+            height=740,
         )
 
     def show_dns_rebinding_report(self):
@@ -15537,6 +15936,26 @@ def _cli_encrypted_dns_bypass_plan(pack_id: str, output_path: str) -> int:
     return 0
 
 
+def _cli_safesearch_template_list() -> int:
+    _cli_print(format_safesearch_template_catalog())
+    return 0
+
+
+def _cli_safesearch_template_plan(template_id: str, output_path: str) -> int:
+    try:
+        plan = build_safesearch_template_plan(template_id)
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        write_text_file_atomic(output_path, json.dumps(plan, indent=2))
+    except (OSError, ValueError) as exc:
+        _cli_print(f"SafeSearch template plan failed: {exc}")
+        return 2
+    _cli_print(format_safesearch_template_plan(plan))
+    _cli_print(f"Wrote SafeSearch template plan to {output_path}")
+    return 0
+
+
 def _cli_dns_rebinding_report(
     input_path: str,
     output_path: str | None = None,
@@ -15902,6 +16321,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--cname-cloaking-plan",
         "--encrypted-dns-bypass-list",
         "--encrypted-dns-bypass-plan",
+        "--safesearch-template-list",
+        "--safesearch-template-plan",
         "--dns-rebinding-report",
         "--dns-rebinding-output",
         "--dns-rebinding-trusted-suffix",
@@ -15939,6 +16360,7 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--threat-feed-plan=",
         "--cname-cloaking-plan=",
         "--encrypted-dns-bypass-plan=",
+        "--safesearch-template-plan=",
         "--dns-rebinding-report=",
         "--dns-rebinding-output=",
         "--dns-rebinding-trusted-suffix=",
@@ -16022,6 +16444,13 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         nargs=2,
         metavar=("PACK", "OUTPUT"),
         help="Write a local JSON plan for an encrypted-DNS bypass PACK to OUTPUT. No firewall or remote writes are performed.",
+    )
+    parser.add_argument("--safesearch-template-list", action="store_true", help="List guarded SafeSearch and restricted-mode templates.")
+    parser.add_argument(
+        "--safesearch-template-plan",
+        nargs=2,
+        metavar=("TEMPLATE", "OUTPUT"),
+        help="Write a local JSON plan for a SafeSearch or restricted-mode TEMPLATE to OUTPUT. No hosts or DNS writes are performed.",
     )
     parser.add_argument(
         "--dns-rebinding-report",
@@ -16139,6 +16568,10 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         return _cli_encrypted_dns_bypass_list()
     if args.encrypted_dns_bypass_plan:
         return _cli_encrypted_dns_bypass_plan(args.encrypted_dns_bypass_plan[0], args.encrypted_dns_bypass_plan[1])
+    if args.safesearch_template_list:
+        return _cli_safesearch_template_list()
+    if args.safesearch_template_plan:
+        return _cli_safesearch_template_plan(args.safesearch_template_plan[0], args.safesearch_template_plan[1])
     if args.dns_rebinding_report or args.dns_rebinding_output:
         if not args.dns_rebinding_report:
             parser.error("--dns-rebinding-output requires --dns-rebinding-report INPUT")

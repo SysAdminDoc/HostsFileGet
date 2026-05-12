@@ -100,6 +100,7 @@ from hosts_editor import (
     build_cname_cloaking_plan,
     build_encrypted_dns_bypass_pack_plan,
     build_dns_rebinding_report,
+    build_safesearch_template_plan,
     build_threat_feed_pack_plan,
     export_lines_as_format,
     export_lines_as_bytes,
@@ -130,6 +131,8 @@ from hosts_editor import (
     format_dns_rebinding_report,
     format_encrypted_dns_bypass_catalog,
     format_encrypted_dns_bypass_pack_plan,
+    format_safesearch_template_catalog,
+    format_safesearch_template_plan,
     format_portable_bundle_export_summary,
     format_scheduler_activity_report,
     format_source_trust_badges,
@@ -145,6 +148,8 @@ from hosts_editor import (
     list_cname_cloaking_sources,
     list_encrypted_dns_bypass_packs,
     list_encrypted_dns_bypass_sources,
+    list_safesearch_template_sources,
+    list_safesearch_templates,
     list_cloud_dns_adapters,
     list_dns_integration_packs,
     list_threat_feed_packs,
@@ -1948,6 +1953,24 @@ profile:
             self.assertEqual(plan["source_count"], 3)
             self.assertIn("hagezi-doh-ips", plan["source_ids"])
 
+    def test_cli_safesearch_template_plan_writes_review_file(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plan_path = Path(tmpdir) / "safesearch-template-plan.json"
+
+            with mock.patch.object(hosts_editor, "_cli_print"):
+                self.assertEqual(hosts_editor._cli_safesearch_template_plan("duckduckgo", str(plan_path)), 0)
+
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            self.assertEqual(plan["schema"], "hostsfileget.safesearch-template-plan.v1")
+            self.assertEqual(plan["template_id"], "duckduckgo-strict-dns")
+            self.assertFalse(plan["hosts_native"])
+            self.assertEqual(plan["hosts_line_templates"], [])
+            self.assertEqual(plan["dns_cname_records"][0]["target"], "safe.duckduckgo.com")
+            self.assertIn("P4", plan["references"])
+
     def test_handle_cli_args_routes_integration_flags(self):
         with mock.patch.object(hosts_editor, "_cli_integration_list", return_value=0) as mocked_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--integration-list"]), 0)
@@ -2017,6 +2040,18 @@ profile:
                 0,
             )
             mocked_plan.assert_called_once_with("doh", "plan.json")
+
+    def test_handle_cli_args_routes_safesearch_template_flags(self):
+        with mock.patch.object(hosts_editor, "_cli_safesearch_template_list", return_value=0) as mocked_list:
+            self.assertEqual(hosts_editor._handle_cli_args(["--safesearch-template-list"]), 0)
+            mocked_list.assert_called_once_with()
+
+        with mock.patch.object(hosts_editor, "_cli_safesearch_template_plan", return_value=0) as mocked_plan:
+            self.assertEqual(
+                hosts_editor._handle_cli_args(["--safesearch-template-plan", "youtube", "plan.json"]),
+                0,
+            )
+            mocked_plan.assert_called_once_with("youtube", "plan.json")
 
     def test_handle_cli_args_routes_dns_rebinding_flags(self):
         with mock.patch.object(hosts_editor, "_cli_dns_rebinding_report", return_value=0) as mocked_report:
@@ -3060,6 +3095,53 @@ profile:
 
         with self.assertRaises(ValueError):
             build_encrypted_dns_bypass_pack_plan("unknown-bypass-pack")
+
+    def test_safesearch_template_catalog_lists_guarded_templates_and_sources(self):
+        template_ids = {template["id"] for template in list_safesearch_templates()}
+        source_ids = {source["id"] for source in list_safesearch_template_sources()}
+
+        self.assertEqual(
+            template_ids,
+            {
+                "google-safesearch-hosts",
+                "bing-strict-hosts",
+                "duckduckgo-strict-dns",
+                "youtube-strict-dns",
+                "youtube-moderate-dns",
+            },
+        )
+        self.assertIn("google-safesearch-vip", source_ids)
+        self.assertIn("youtube-restricted-mode", source_ids)
+        self.assertIn("duckduckgo-safe-search", source_ids)
+
+        catalog = format_safesearch_template_catalog()
+        self.assertIn("SafeSearch and restricted-mode templates", catalog)
+        self.assertIn("DNS/provider handoff", catalog)
+        self.assertIn("cannot express CNAME records", catalog)
+
+    def test_build_safesearch_template_plan_separates_hosts_and_dns_handoffs(self):
+        google_plan = build_safesearch_template_plan("google")
+        google_rendered = format_safesearch_template_plan(google_plan)
+
+        self.assertEqual(google_plan["template_id"], "google-safesearch-hosts")
+        self.assertTrue(google_plan["hosts_native"])
+        self.assertIn("216.239.38.120 www.google.com", google_plan["hosts_line_templates"][0])
+        self.assertIn("forcesafesearch.google.com", google_rendered)
+        self.assertIn("P1", google_plan["references"])
+
+        youtube_plan = build_safesearch_template_plan("yt-moderate")
+        self.assertEqual(youtube_plan["template_id"], "youtube-moderate-dns")
+        self.assertFalse(youtube_plan["hosts_native"])
+        self.assertEqual(youtube_plan["hosts_line_templates"], [])
+        self.assertIn({"hostname": "www.youtube.com", "target": "restrictmoderate.youtube.com", "scope": "DNS resolver"}, youtube_plan["dns_cname_records"])
+        self.assertIn("youtube.com", youtube_plan["excluded_hosts"])
+        self.assertIn("P2", youtube_plan["references"])
+
+        bing_plan = build_safesearch_template_plan("bing")
+        self.assertIn("<resolved strict.bing.com IP> www.bing.com", bing_plan["hosts_line_templates"][0])
+
+        with self.assertRaises(ValueError):
+            build_safesearch_template_plan("unknown-safesearch-template")
 
     def test_export_lines_as_bytes_supports_compressed_hosts(self):
         lines = ["0.0.0.0 ads.example", "# comment", "0.0.0.0 tracker.example"]
