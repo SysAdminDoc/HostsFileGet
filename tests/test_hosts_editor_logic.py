@@ -39,6 +39,8 @@ from hosts_editor import (
     check_source_health_records,
     classify_source_freshness,
     collect_recent_windows_dns_client_queries,
+    collect_dns_bypass_policy_snapshot,
+    dns_bypass_policy_status,
     parse_pinned_import_payload,
     read_provenance_events,
     IPV4_REGEX,
@@ -71,6 +73,7 @@ from hosts_editor import (
     format_false_positive_triage_report,
     format_source_trust_badges,
     format_source_overlap_report,
+    format_dns_bypass_diagnostics,
     build_schtasks_create_command,
     get_source_cache_body_path,
     looks_like_domain,
@@ -2095,6 +2098,47 @@ class HostsEditorLogicTests(unittest.TestCase):
             collect_recent_windows_dns_client_queries(runner=lambda *_args, **_kwargs: Completed())
 
         self.assertIn("channel", str(ctx.exception))
+
+    # ---- v2.17+: DNS bypass diagnostics ----
+    def test_collect_dns_bypass_policy_snapshot_reads_known_policy_values(self):
+        values = {
+            ("HKCU", r"Software\Policies\Google\Chrome", "DnsOverHttpsMode"): "secure",
+            ("HKLM", r"Software\Policies\Mozilla\Firefox\DNSOverHTTPS", "Enabled"): 1,
+        }
+
+        def fake_reader(root, path, name):
+            return values.get((root, path, name))
+
+        snapshot = collect_dns_bypass_policy_snapshot(reader=fake_reader)
+
+        self.assertEqual(len(snapshot), 2)
+        self.assertEqual(snapshot[0]["browser"], "Chrome")
+        self.assertEqual(snapshot[0]["value"], "secure")
+        self.assertEqual(snapshot[1]["browser"], "Firefox")
+        self.assertEqual(snapshot[1]["value"], "1")
+
+    def test_dns_bypass_policy_status_classifies_common_values(self):
+        self.assertIn("enabled", dns_bypass_policy_status("DnsOverHttpsMode", "secure"))
+        self.assertIn("disabled", dns_bypass_policy_status("DnsOverHttpsMode", "off"))
+        self.assertIn("custom encrypted DNS endpoint", dns_bypass_policy_status("ProviderURL", "https://dns.example/dns-query"))
+
+    def test_format_dns_bypass_diagnostics_includes_policy_and_proxy_signals(self):
+        report = format_dns_bypass_diagnostics(
+            [
+                {
+                    "browser": "Chrome",
+                    "scope": "HKCU",
+                    "path": r"Software\Policies\Google\Chrome",
+                    "name": "DnsOverHttpsMode",
+                    "value": "secure",
+                }
+            ],
+            env={"HTTPS_PROXY": "http://proxy.example:8080"},
+        )
+
+        self.assertIn("Chrome HKCU DnsOverHttpsMode=secure", report)
+        self.assertIn("HTTPS_PROXY is set", report)
+        self.assertIn("Hosts entries affect", report)
 
     # ---- v2.15: Pi-hole FTL ----
     def test_ftl_blocked_status_codes_covers_known_block_statuses(self):

@@ -53,6 +53,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - entry provenance view for import-section ownership, source matches, and local audit events
 - Operational utilities:
   - DNS cache flush
+  - DNS bypass diagnostics for browser encrypted-DNS and proxy signals
   - backup restore preview
   - emergency DNS recovery helper
 
@@ -165,6 +166,7 @@ python hosts_editor.py --source-health --source-health-output source-health-repo
 - False-positive triage: `docs/false-positive-triage.md`
 - Entry provenance: `docs/entry-provenance.md`
 - Windows DNS Client snapshot: `docs/windows-dns-client.md`
+- DNS bypass diagnostics: `docs/dns-bypass-diagnostics.md`
 - Sourced implementation plan: `ROADMAP.md`
 - Release build notes: `docs/release.md`
 - Codex handoff notes: `CODEX_CHANGELOG.md`
