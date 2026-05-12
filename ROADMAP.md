@@ -49,6 +49,7 @@ Non-negotiables:
 - [x] F027 - CLI profile apply/export/import (`docs/cli-profiles.md`, explicit profile list/import/apply/export commands)
 - [x] F028 - Scheduler hardening and activity report (`docs/scheduler-activity.md`, silent task command, activity JSONL/report CLI)
 - [x] F029 - Managed portable bundle config (`docs/portable-config.md`, config-location report, portable config export)
+- [x] F030 - Pi-hole/AdGuard/Technitium/blocky interoperability pack (`docs/dns-integrations.md`, DNS export presets, integration CLI)
 
 ## State Of The Repo
 
@@ -57,8 +58,8 @@ Non-negotiables:
 - Language and runtime: Python 3.x, Tkinter desktop UI, Windows-first assumptions, PowerShell launcher.
 - Entry points: `hosts_editor.py` for GUI and CLI, `PythonLauncher.ps1` for elevated launch/bootstrap, `HostsFileGet.spec` for PyInstaller.
 - Packaging: PyInstaller one-file Windows EXE with `uac_admin=True`; build artifacts exist locally under `build/` and `dist/` but are not tracked.
-- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 195 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation, migration importer fixtures, export-format fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, and find/replace.
-- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `LICENSE`, and this roadmap.
+- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 200 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation, migration importer fixtures, export-format fixtures, DNS integration fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, and find/replace.
+- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `LICENSE`, and this roadmap.
 - License: MIT.
 
 ### Product Reality
@@ -72,6 +73,7 @@ HostsFileGet already provides:
 - Explicit CLI profile list/import/apply/export commands for staging and switching saved profiles without touching the system hosts file.
 - Scheduled updates use `--update --silent`, bounded activity JSONL, and `--activity-report` for local scheduler observability.
 - `--config-location` and `--portable-export` make local-user versus portable bundle config paths explicit.
+- `--integration-list` and `--integration-export` provide file-only Pi-hole, AdGuard Home/DNS, Technitium, and blocky DNS export handoffs.
 - Optional local Git-backed history commands for snapshot, status, and admin-gated rollback with normal `.bak` backup creation.
 - Live stats, category hints, source report, health scan, DNS flush, domain check, find/replace, cleanup commands, import-section removal, backup diff, pinned domains, and export formats.
 
@@ -287,12 +289,13 @@ Legend:
 11. Completed - Migration imports: F022.
 12. Completed - Migration/export interoperability: F023.
 13. Completed - Declarative profile/history/scheduler/portable automation: F025-F029.
+14. Completed - DNS resolver interoperability pack: F030.
 
 Rationale: these items reduce maintenance risk, make the current product more trustworthy, and create the internal contracts needed for the larger profile/integration work.
 
 ### Next
 
-1. DNS ecosystem interoperability: F030, F031, F032, F033, F034.
+1. DNS ecosystem interoperability: F031, F032, F033, F034.
 2. Security packs and rule intelligence: F035, F036, F037, F038, F039, F040.
 3. Faster large-scale operations: F041, F042, F043, F047, F048, F049, F050, F051.
 4. Packaging, plugin, collaboration growth: F045, F046, F052, F053, F054, F055.

@@ -5,12 +5,25 @@
 ## Text Formats
 
 - `hosts`: the cleaned hosts file content.
-- `domains` / `pihole`: one blocking domain per line.
+- `domains` / `pihole` / `technitium` / `blocky`: one blocking domain per line.
 - `adblock`: `||domain^` rules for tools that accept Adblock-style DNS rules.
+- `adguard`: `||domain^` rules for AdGuard Home and AdGuard DNS filtering surfaces.
 - `dnsmasq`: `address=/domain/0.0.0.0`.
 - `rpz`: a Response Policy Zone with exact QNAME trigger rows using `CNAME .` for NXDOMAIN-style blocking.
 - `unbound`: `local-zone: "domain." always_nxdomain` rows under a `server:` block.
 - `privoxy`: a `+block{...}` actions-file section with one URL host pattern per domain.
+
+## DNS Integration Pack
+
+F030 adds named presets around the shared export layer:
+
+- `pihole`: plain-domain adlist/gravity handoff.
+- `adguard-home`: AdGuard-style DNS filter rules.
+- `adguard-dns`: AdGuard-style DNS filter rules for AdGuard DNS.
+- `technitium`: plain-domain block-list handoff.
+- `blocky`: plain-domain file/URL list source handoff.
+
+Use `Tools > DNS Interoperability Pack...` or `python hosts_editor.py --integration-list` to inspect current presets. Use `--integration-export PACK INPUT OUTPUT` to convert a reviewed hosts-like text file without launching the GUI or writing a remote DNS server. See `docs/dns-integrations.md` for source references and per-tool import notes.
 
 ## Compressed Hosts
 

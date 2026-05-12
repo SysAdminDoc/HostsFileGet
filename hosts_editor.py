@@ -4551,13 +4551,90 @@ TEXT_EXPORT_FORMATS = {
     "hosts",
     "domains",
     "adblock",
+    "adguard",
     "dnsmasq",
     "pihole",
+    "technitium",
+    "blocky",
     "rpz",
     "unbound",
     "privoxy",
 }
 BINARY_EXPORT_FORMATS = {"hosts-gzip", "hosts-bzip2"}
+DNS_INTEGRATION_PACK_WARNINGS = (
+    "File-only export: HostsFileGet does not authenticate to or write into DNS servers.",
+    "Hosts-file data is exact-domain data; wildcard, regex, client, rewrite, and policy rules stay in the downstream DNS tool.",
+)
+DNS_INTEGRATION_PACKS = (
+    {
+        "id": "pihole",
+        "label": "Pi-hole adlist / gravity",
+        "export_format": "pihole",
+        "rule_shape": "plain domains",
+        "default_extension": ".txt",
+        "filetype_label": "Plain domain list",
+        "import_hint": "Host the exported text file or copy it to the Pi-hole host, add it as an adlist, then refresh gravity.",
+        "import_supported": "Blocked query history can also be imported from pihole-FTL.db.",
+        "source_url": "https://docs.pi-hole.net/database/domain-database/",
+    },
+    {
+        "id": "adguard-home",
+        "label": "AdGuard Home DNS filter",
+        "export_format": "adguard",
+        "rule_shape": "Adblock-style DNS rules",
+        "default_extension": ".txt",
+        "filetype_label": "AdGuard DNS filter",
+        "import_hint": "Use the exported file as a DNS blocklist/filter source or paste selected rules into custom filtering rules.",
+        "import_supported": "Blocked query history can be imported from AdGuard Home querylog JSON/NDJSON.",
+        "source_url": "https://github.com/AdguardTeam/AdGuardHome/wiki/Hosts-Blocklists",
+    },
+    {
+        "id": "adguard-dns",
+        "label": "AdGuard DNS custom filter",
+        "export_format": "adguard",
+        "rule_shape": "Adblock-style DNS rules",
+        "default_extension": ".txt",
+        "filetype_label": "AdGuard DNS filter",
+        "import_hint": "Upload or paste the exported rules where AdGuard DNS accepts custom DNS filtering rules.",
+        "import_supported": "No remote API writes are attempted by HostsFileGet.",
+        "source_url": "https://adguard-dns.io/kb/general/dns-filtering-syntax/",
+    },
+    {
+        "id": "technitium",
+        "label": "Technitium DNS Server block list",
+        "export_format": "technitium",
+        "rule_shape": "plain domains",
+        "default_extension": ".txt",
+        "filetype_label": "Plain domain list",
+        "import_hint": "Serve or copy the exported text file and add its path/URL to Technitium DNS Server block list settings.",
+        "import_supported": "Use Technitium's web console/API for server-side configuration; HostsFileGet exports the file only.",
+        "source_url": "https://technitium.com/dns/",
+    },
+    {
+        "id": "blocky",
+        "label": "blocky allow/deny source",
+        "export_format": "blocky",
+        "rule_shape": "plain domains",
+        "default_extension": ".txt",
+        "filetype_label": "Plain domain list",
+        "import_hint": "Reference the exported file path or hosted URL from a blocky list source group.",
+        "import_supported": "HostsFileGet writes list files; blocky remains responsible for config reload and client grouping.",
+        "source_url": "https://0xerr0r.github.io/blocky/v0.24/configuration/",
+    },
+)
+DNS_INTEGRATION_PACK_ALIASES = {
+    "pi-hole": "pihole",
+    "pihole-gravity": "pihole",
+    "gravity": "pihole",
+    "agh": "adguard-home",
+    "adguard": "adguard-home",
+    "adguardhome": "adguard-home",
+    "adguard-home": "adguard-home",
+    "adguard-dns": "adguard-dns",
+    "technitium-dns": "technitium",
+    "technitium-dns-server": "technitium",
+    "blocky-dns": "blocky",
+}
 
 
 def normalize_export_format(export_format: str) -> str:
@@ -4566,6 +4643,16 @@ def normalize_export_format(export_format: str) -> str:
         "domain": "domains",
         "plain": "domains",
         "gravity": "pihole",
+        "pi-hole": "pihole",
+        "pihole-gravity": "pihole",
+        "agh": "adguard",
+        "adguardhome": "adguard",
+        "adguard-home": "adguard",
+        "adguard-dns": "adguard",
+        "adguard-dns-filter": "adguard",
+        "technitium-dns": "technitium",
+        "technitium-dns-server": "technitium",
+        "blocky-dns": "blocky",
         "bind-rpz": "rpz",
         "bind": "rpz",
         "unbound-conf": "unbound",
@@ -4584,6 +4671,87 @@ def normalize_export_format(export_format: str) -> str:
 
 def is_binary_export_format(export_format: str) -> bool:
     return normalize_export_format(export_format) in BINARY_EXPORT_FORMATS
+
+
+def normalize_dns_integration_pack_id(pack_id: str) -> str:
+    normalized = (pack_id or "").strip().lower().replace("_", "-")
+    return DNS_INTEGRATION_PACK_ALIASES.get(normalized, normalized)
+
+
+def list_dns_integration_packs() -> list[dict[str, str]]:
+    return [dict(pack) for pack in DNS_INTEGRATION_PACKS]
+
+
+def find_dns_integration_pack(pack_id: str) -> dict[str, str]:
+    normalized = normalize_dns_integration_pack_id(pack_id)
+    for pack in DNS_INTEGRATION_PACKS:
+        if pack["id"] == normalized:
+            return dict(pack)
+    known = ", ".join(pack["id"] for pack in DNS_INTEGRATION_PACKS)
+    raise ValueError(f"Unknown DNS integration pack: {pack_id!r}. Known packs: {known}")
+
+
+def build_dns_integration_export(lines: list[str], pack_id: str) -> dict:
+    pack = find_dns_integration_pack(pack_id)
+    records = build_export_domain_records(lines)
+    content = export_lines_as_format(lines, pack["export_format"])
+    return {
+        "schema_version": 1,
+        "integration_id": pack["id"],
+        "label": pack["label"],
+        "export_format": pack["export_format"],
+        "rule_shape": pack["rule_shape"],
+        "domain_count": len(records),
+        "line_count": len(content.splitlines()) if content else 0,
+        "content": content,
+        "warnings": list(DNS_INTEGRATION_PACK_WARNINGS),
+        "import_hint": pack["import_hint"],
+        "import_supported": pack["import_supported"],
+        "source_url": pack["source_url"],
+    }
+
+
+def format_dns_integration_pack_report() -> str:
+    lines = [
+        "DNS interoperability pack",
+        "",
+        "All presets are local file exports. HostsFileGet does not perform remote DNS-server writes.",
+        "",
+        "Supported presets:",
+    ]
+    for pack in DNS_INTEGRATION_PACKS:
+        lines.extend([
+            f"- {pack['id']}: {pack['label']}",
+            f"  Format: {pack['export_format']} ({pack['rule_shape']})",
+            f"  Import: {pack['import_hint']}",
+            f"  Existing import: {pack['import_supported']}",
+            f"  Source: {pack['source_url']}",
+        ])
+    lines.append("")
+    lines.append("Warnings:")
+    lines.extend(f"- {warning}" for warning in DNS_INTEGRATION_PACK_WARNINGS)
+    return "\n".join(lines)
+
+
+def format_dns_integration_export_summary(export_report: dict, output_path: str | None = None) -> str:
+    lines = [
+        "DNS Integration Export",
+        f"Preset: {export_report.get('integration_id')} - {export_report.get('label')}",
+        f"Format: {export_report.get('export_format')} ({export_report.get('rule_shape')})",
+        f"Domains: {int(export_report.get('domain_count') or 0):,}",
+        f"Lines: {int(export_report.get('line_count') or 0):,}",
+    ]
+    if output_path:
+        lines.append(f"Output: {output_path}")
+    lines.extend([
+        f"Import: {export_report.get('import_hint')}",
+        f"Existing import: {export_report.get('import_supported')}",
+        f"Source: {export_report.get('source_url')}",
+        "Warnings:",
+    ])
+    for warning in export_report.get("warnings") or DNS_INTEGRATION_PACK_WARNINGS:
+        lines.append(f"- {warning}")
+    return "\n".join(lines)
 
 
 def build_export_domain_records(lines: list[str]) -> list[dict[str, str]]:
@@ -4621,6 +4789,9 @@ def export_lines_as_format(lines: list[str], export_format: str) -> str:
         adblock     - ``||domain^`` uBlock/AdGuard syntax
         dnsmasq     - ``address=/domain/0.0.0.0``
         pihole      - pi-hole gravity-style plain domain list (same as domains)
+        adguard     - AdGuard Home/DNS Adblock-style DNS rules
+        technitium  - Technitium-compatible plain domain list
+        blocky      - blocky-compatible plain domain list
         rpz         - BIND/Unbound Response Policy Zone using CNAME .
         unbound     - Unbound local-zone always_nxdomain entries
         privoxy     - Privoxy user.action +block section
@@ -4634,9 +4805,9 @@ def export_lines_as_format(lines: list[str], export_format: str) -> str:
     records = build_export_domain_records(lines)
     domains = [record["domain"] for record in records]
 
-    if export_format in ("domains", "pihole"):
+    if export_format in ("domains", "pihole", "technitium", "blocky"):
         return '\n'.join(domains)
-    if export_format == "adblock":
+    if export_format in ("adblock", "adguard"):
         return '\n'.join(f"||{domain}^" for domain in domains)
     if export_format == "dnsmasq":
         return '\n'.join(f"address=/{domain}/0.0.0.0" for domain in domains)
@@ -7689,6 +7860,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="Entry Provenance...", command=self.show_entry_provenance_panel)
         tools_menu.add_command(label="Hosts Health Scan...", command=self.show_health_scan)
         tools_menu.add_command(label="DNS Bypass Diagnostics...", command=self.show_dns_bypass_diagnostics)
+        tools_menu.add_command(label="DNS Interoperability Pack...", command=self.show_dns_integration_pack)
         tools_menu.add_command(label="Sources Report...", command=self.show_sources_report)
         tools_menu.add_command(label="Goto Anything...", command=self.show_goto_anything)
         tools_menu.add_command(label="Find and Replace...", command=self.show_find_replace_dialog)
@@ -8668,6 +8840,16 @@ class HostsFileEditor:
             height=620,
         )
 
+    def show_dns_integration_pack(self):
+        self._show_text_report_dialog(
+            "DNS interoperability pack",
+            "File-only export presets for moving cleaned hosts data into network DNS blockers.",
+            format_dns_integration_pack_report(),
+            tone="info",
+            width=860,
+            height=620,
+        )
+
     # ----------------------------- Check Domain ------------------------------
     def show_check_domain(self, initial_domain: str | None = None):
         dialog = tk.Toplevel(self.root)
@@ -8984,8 +9166,11 @@ class HostsFileEditor:
             ("hosts", "Hosts file (what Cleaned Save writes)"),
             ("domains", "Plain domains, one per line"),
             ("adblock", "Adblock / uBlock (||domain^)"),
+            ("adguard", "AdGuard Home / AdGuard DNS (||domain^)"),
             ("dnsmasq", "dnsmasq (address=/domain/0.0.0.0)"),
-            ("pihole", "Pi-hole gravity (plain domains)"),
+            ("pihole", "Pi-hole adlist / gravity (plain domains)"),
+            ("technitium", "Technitium DNS Server block list (plain domains)"),
+            ("blocky", "blocky allow/deny source (plain domains)"),
             ("rpz", "BIND / Unbound RPZ (CNAME .)"),
             ("unbound", "Unbound local-zone (always_nxdomain)"),
             ("privoxy", "Privoxy user.action (+block)"),
@@ -9005,11 +9190,13 @@ class HostsFileEditor:
             fmt = format_var.get()
             default_ext = {
                 "hosts": ".txt", "domains": ".txt", "adblock": ".txt",
-                "dnsmasq": ".conf", "pihole": ".txt", "rpz": ".rpz",
+                "adguard": ".txt", "dnsmasq": ".conf", "pihole": ".txt",
+                "technitium": ".txt", "blocky": ".txt", "rpz": ".rpz",
                 "unbound": ".conf", "privoxy": ".action", "hosts-gzip": ".gz",
                 "hosts-bzip2": ".bz2",
             }.get(fmt, ".txt")
             filetypes = {
+                "adguard": [("AdGuard DNS filter", "*.txt"), ("Text file", "*.txt"), ("All files", "*.*")],
                 "rpz": [("RPZ zone", "*.rpz"), ("Text file", "*.txt"), ("All files", "*.*")],
                 "unbound": [("Unbound config", "*.conf"), ("Text file", "*.txt"), ("All files", "*.*")],
                 "privoxy": [("Privoxy action", "*.action"), ("Text file", "*.txt"), ("All files", "*.*")],
@@ -12792,6 +12979,26 @@ def _cli_source_health(output_path: str | None, timeout: float, workers: int, fa
     return 0
 
 
+def _cli_integration_list() -> int:
+    _cli_print(format_dns_integration_pack_report())
+    return 0
+
+
+def _cli_integration_export(pack_id: str, input_path: str, output_path: str) -> int:
+    try:
+        source_lines = read_text_file_lines(input_path)
+        report = build_dns_integration_export(source_lines, pack_id)
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        write_text_file_atomic(output_path, report["content"])
+    except (OSError, ValueError) as exc:
+        _cli_print(f"DNS integration export failed: {exc}")
+        return 2
+    _cli_print(format_dns_integration_export_summary(report, output_path))
+    return 0
+
+
 def _cli_activity_report(output_path: str | None) -> int:
     report = build_scheduler_activity_report()
     _cli_print(format_scheduler_activity_report(report))
@@ -13051,6 +13258,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--history-restore",
         "--activity-report",
         "--activity-report-output",
+        "--integration-list",
+        "--integration-export",
         "--source-health",
         "--source-health-output",
         "--source-health-timeout",
@@ -13071,6 +13280,7 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--profile-export=",
         "--history-restore=",
         "--activity-report-output=",
+        "--integration-export=",
         "--source-health-output=",
         "--source-health-timeout=",
         "--source-health-workers=",
@@ -13103,6 +13313,13 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--history-restore", metavar="REF", help="Restore the hosts file from an optional local Git history commit ref after creating a normal backup.")
     parser.add_argument("--activity-report", action="store_true", help="Show scheduled-update task status plus recent silent CLI activity.")
     parser.add_argument("--activity-report-output", metavar="PATH", help="Write detailed scheduled-update activity JSON to PATH.")
+    parser.add_argument("--integration-list", action="store_true", help="List file-only Pi-hole/AdGuard/Technitium/blocky export presets.")
+    parser.add_argument(
+        "--integration-export",
+        nargs=3,
+        metavar=("PACK", "INPUT", "OUTPUT"),
+        help="Export INPUT hosts-like text through a DNS integration PACK to OUTPUT without remote writes.",
+    )
     parser.add_argument("--source-health", action="store_true", help="Check curated source reachability and print a summary without launching the GUI.")
     parser.add_argument("--source-health-output", metavar="PATH", help="Write detailed source-health JSON to PATH.")
     parser.add_argument("--source-health-timeout", type=float, default=SOURCE_HEALTH_TIMEOUT_SECONDS, help="Per-source network timeout in seconds.")
@@ -13159,6 +13376,14 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         return _cli_history_restore(hosts_path, args.history_restore)
     if args.activity_report or args.activity_report_output:
         return _cli_activity_report(args.activity_report_output)
+    if args.integration_list:
+        return _cli_integration_list()
+    if args.integration_export:
+        return _cli_integration_export(
+            args.integration_export[0],
+            args.integration_export[1],
+            args.integration_export[2],
+        )
     if args.source_health:
         return _cli_source_health(
             args.source_health_output,
