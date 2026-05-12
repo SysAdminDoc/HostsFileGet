@@ -4,23 +4,24 @@ HostsFileGet stores user settings in JSON. The primary path is `%LOCALAPPDATA%\H
 
 ## Version
 
-Current schema version: `2`
+Current schema version: `3`
 
 Every saved config now includes:
 
 ```json
 {
-  "config_version": 2
+  "config_version": 3,
+  "profile_schema_version": 1
 }
 ```
 
-Configs without `config_version` are treated as legacy schema `0`, migrated in memory, sanitized, and written back as schema `2` on the next save or legacy-path migration.
+Configs without `config_version` are treated as legacy schema `0`, migrated in memory, sanitized, and written back as schema `3` on the next save or legacy-path migration.
 
 ## Keys
 
 | Key | Type | Notes |
 | --- | --- | --- |
-| `config_version` | integer | Current value is `2` |
+| `config_version` | integer | Current value is `3` |
 | `whitelist` | string | Newline-separated whitelist text |
 | `custom_sources` | array | Objects with `name` and `url` |
 | `last_applied_raw_hash` | string or null | SHA-256 hex digest for saved raw state |
@@ -34,6 +35,9 @@ Configs without `config_version` are treated as legacy schema `0`, migrated in m
 | `pinned_domains` | array | Sanitized domain list |
 | `update_on_launch` | boolean | Opt-in stale-source refresh |
 | `lock_after_save` | boolean | Opt-in read-only hosts attribute after save |
+| `profile_schema_version` | integer | Current value is `1` |
+| `active_profile_id` | string | Safe profile slug for the mirrored active editor profile |
+| `profiles` | array | Versioned named profile payloads; see below |
 
 Unknown keys are ignored by the sanitizer. They are not preserved when the app writes a fresh config.
 
@@ -50,7 +54,33 @@ Schema `0` includes all configs without a valid `config_version`. The migrator r
 
 If both the current key and legacy alias are present, the current key wins.
 
-Invalid, negative, future, or boolean `config_version` values are treated as legacy schema `0`. The known fields are still sanitized and emitted as current schema `2`.
+Invalid, negative, future, or boolean `config_version` values are treated as legacy schema `0`. The known fields are still sanitized and emitted as current schema `3`.
+
+## Profile Payloads
+
+Schema `3` adds profile groundwork without changing the current single-editor workflow. The top-level `whitelist`, `custom_sources`, `pinned_domains`, and `preferred_block_sink` fields remain the active runtime fields. On save, the app mirrors those fields into the active profile so later profile switching, CLI profile apply, and migration importers have a stable data model to build on.
+
+Every sanitized config contains at least one profile:
+
+```json
+{
+  "profile_schema_version": 1,
+  "active_profile_id": "default",
+  "profiles": [
+    {
+      "schema_version": 1,
+      "id": "default",
+      "name": "Default",
+      "whitelist": "",
+      "custom_sources": [],
+      "pinned_domains": [],
+      "preferred_block_sink": "0.0.0.0"
+    }
+  ]
+}
+```
+
+Profile IDs are lowercase slugs containing letters, numbers, `_`, and `-`, up to 64 characters. Duplicate IDs are deterministically suffixed (`work`, `work-2`, and so on). The sanitizer also accepts a mapping shape (`"profiles": {"work": {...}}`) and emits the canonical array shape.
 
 ## Source Cache Metadata
 

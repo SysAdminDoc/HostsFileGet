@@ -40,6 +40,10 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added **DNS Bypass Diagnostics...** to explain hosts-file limits around browser encrypted DNS, proxies, VPNs, and hardcoded resolvers.
 - The report surfaces managed Chrome/Edge/Firefox encrypted-DNS policy values and common proxy environment variables without enforcing or uploading anything.
 
+**Profile schema groundwork**
+- Bumped the config schema to `3` and added sanitized `profile_schema_version`, `active_profile_id`, and `profiles` fields.
+- Saves now mirror the current single-editor whitelist, custom sources, pinned domains, and block sink into the active profile without changing the existing UI workflow.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

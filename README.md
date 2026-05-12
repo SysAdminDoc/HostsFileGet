@@ -56,6 +56,9 @@ It is designed for people who work with large blocklists, external feed imports,
   - DNS bypass diagnostics for browser encrypted-DNS and proxy signals
   - backup restore preview
   - emergency DNS recovery helper
+- Configuration:
+  - versioned JSON config migration
+  - profile-ready schema mirror for future named whitelist/source/pin sets
 
 ## Supported Input Shapes
 

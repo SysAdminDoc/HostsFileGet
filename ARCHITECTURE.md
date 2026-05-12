@@ -90,7 +90,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - File IO helpers: `decode_text_bytes`, `read_text_file_lines`, `write_text_file_atomic`.
 - Transactional hosts enable/disable helpers: `disable_hosts_file_transactionally`, `enable_hosts_file_transactionally`.
 - Download guards: `read_http_body_limited`, `decode_downloaded_lines`, `looks_like_html_document`.
-- Config sanitation: `sanitize_custom_sources`, `sanitize_config_snapshot`, `resolve_saved_state_hashes`.
+- Config sanitation: `sanitize_custom_sources`, `sanitize_config_snapshot`, `sanitize_profile_snapshot`, `sanitize_profiles_snapshot`, `update_active_profile_snapshot`, `resolve_saved_state_hashes`.
 - Source catalog loading: `sanitize_source_manifest`, `load_blocklist_sources_manifest`.
 - Source response caching: `fetch_source_with_cache`, `sanitize_source_cache_metadata`, `build_source_request_headers`.
 - Source trust display: `build_source_trust_badges`, `source_trust_report_url`, `format_source_trust_details`.
