@@ -3647,6 +3647,124 @@ def collect_recent_windows_dns_client_queries(
     return parse_windows_dns_client_events_xml(getattr(completed, "stdout", ""))
 
 
+DNS_BYPASS_POLICY_LOCATIONS = (
+    ("Chrome", "HKCU", r"Software\Policies\Google\Chrome", ("DnsOverHttpsMode", "DnsOverHttpsTemplates")),
+    ("Chrome", "HKLM", r"Software\Policies\Google\Chrome", ("DnsOverHttpsMode", "DnsOverHttpsTemplates")),
+    ("Edge", "HKCU", r"Software\Policies\Microsoft\Edge", ("DnsOverHttpsMode", "DnsOverHttpsTemplates")),
+    ("Edge", "HKLM", r"Software\Policies\Microsoft\Edge", ("DnsOverHttpsMode", "DnsOverHttpsTemplates")),
+    ("Firefox", "HKCU", r"Software\Policies\Mozilla\Firefox\DNSOverHTTPS", ("Enabled", "ProviderURL", "Locked")),
+    ("Firefox", "HKLM", r"Software\Policies\Mozilla\Firefox\DNSOverHTTPS", ("Enabled", "ProviderURL", "Locked")),
+)
+
+
+def _read_windows_registry_value(root_name: str, path: str, value_name: str):
+    if os.name != "nt":
+        return None
+    import winreg
+
+    roots = {
+        "HKCU": winreg.HKEY_CURRENT_USER,
+        "HKLM": winreg.HKEY_LOCAL_MACHINE,
+    }
+    root = roots.get(root_name)
+    if root is None:
+        return None
+    try:
+        with winreg.OpenKey(root, path) as key:
+            value, _value_type = winreg.QueryValueEx(key, value_name)
+            return value
+    except OSError:
+        return None
+
+
+def collect_dns_bypass_policy_snapshot(reader=None) -> list[dict[str, str]]:
+    """Read known browser encrypted-DNS policy values, when present."""
+    reader = reader or _read_windows_registry_value
+    items: list[dict[str, str]] = []
+    for browser, root_name, path, value_names in DNS_BYPASS_POLICY_LOCATIONS:
+        for value_name in value_names:
+            value = reader(root_name, path, value_name)
+            if value is None or value == "":
+                continue
+            items.append({
+                "browser": browser,
+                "scope": root_name,
+                "path": path,
+                "name": value_name,
+                "value": str(value),
+            })
+    return items
+
+
+def dns_bypass_policy_status(name: str, value: str) -> str:
+    """Classify a browser encrypted-DNS policy value for display."""
+    clean_name = str(name or "").lower()
+    clean_value = str(value or "").strip().lower()
+    if clean_name == "dnsoverhttpsmode":
+        if clean_value in {"secure", "automatic"}:
+            return "encrypted DNS enabled or opportunistic; browser queries may bypass OS resolver expectations"
+        if clean_value in {"off", "disabled", "false", "0"}:
+            return "browser encrypted DNS is disabled by policy"
+        return "browser encrypted DNS mode policy present; review the value"
+    if clean_name in {"dnsoverhttpstemplates", "providerurl"}:
+        return "custom encrypted DNS endpoint configured"
+    if clean_name == "enabled":
+        if clean_value in {"1", "true", "yes"}:
+            return "Firefox DNS-over-HTTPS appears enabled by policy"
+        if clean_value in {"0", "false", "no"}:
+            return "Firefox DNS-over-HTTPS appears disabled by policy"
+    if clean_name == "locked":
+        return "Firefox DNS-over-HTTPS policy lock is configured"
+    return "policy value present"
+
+
+def format_dns_bypass_diagnostics(
+    policy_snapshot: list[dict[str, str]] | None = None,
+    env: dict[str, str] | None = None,
+) -> str:
+    """Render local DNS bypass diagnostics and limitation guidance."""
+    env = env if env is not None else dict(os.environ)
+    proxy_vars = [
+        name for name in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy")
+        if env.get(name)
+    ]
+    lines = [
+        "DNS bypass diagnostics",
+        "",
+        "Hosts-file boundary:",
+        "  Hosts entries affect name resolution paths that ask the OS resolver for a hostname.",
+        "  They cannot enforce browser DoH/DoT/DoQ, VPN resolvers, remote proxy DNS, or hardcoded app resolvers.",
+        "",
+        "Browser encrypted-DNS policy signals:",
+    ]
+    if policy_snapshot:
+        for item in policy_snapshot:
+            status = dns_bypass_policy_status(item.get("name", ""), item.get("value", ""))
+            lines.append(
+                f"  - {item.get('browser')} {item.get('scope')} {item.get('name')}={item.get('value')} -> {status}"
+            )
+    else:
+        lines.append("  (no managed Chrome, Edge, or Firefox encrypted-DNS policy values detected)")
+
+    lines.extend(["", "Proxy environment signals:"])
+    if proxy_vars:
+        for name in proxy_vars:
+            lines.append(f"  - {name} is set")
+        lines.append("  Remote proxy DNS can resolve names outside the local hosts-file path.")
+    else:
+        lines.append("  (no common HTTP(S)/ALL proxy environment variables detected)")
+
+    lines.extend([
+        "",
+        "Recommended follow-up:",
+        "  - Use browser or enterprise policies to disable or pin encrypted DNS when local hosts enforcement matters.",
+        "  - Enforce resolver policy at the router/firewall for devices or apps that ignore the OS resolver.",
+        "  - Use the Windows DNS Client snapshot importer to inspect OS-resolver queries that are visible locally.",
+        "  - Treat absence of detected policy as inconclusive; browsers and apps can still use settings or built-in resolvers.",
+    ])
+    return "\n".join(lines)
+
+
 # Pi-hole FTL stores per-query rows with integer status codes. Codes 1,4,5,
 # 6,7,8,9,10,11 all represent some form of block (upstream block, regex
 # match, gravity, wildcard, external block, etc.). Codes 2,3,12 are allow
@@ -5571,6 +5689,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="Check Domain...", command=self.show_check_domain)
         tools_menu.add_command(label="Entry Provenance...", command=self.show_entry_provenance_panel)
         tools_menu.add_command(label="Hosts Health Scan...", command=self.show_health_scan)
+        tools_menu.add_command(label="DNS Bypass Diagnostics...", command=self.show_dns_bypass_diagnostics)
         tools_menu.add_command(label="Sources Report...", command=self.show_sources_report)
         tools_menu.add_command(label="Goto Anything...", command=self.show_goto_anything)
         tools_menu.add_command(label="Find and Replace...", command=self.show_find_replace_dialog)
@@ -6493,6 +6612,19 @@ class HostsFileEditor:
             ).pack(side="left")
         ttk.Button(btn_row, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
         dialog.grab_set()
+
+    # ----------------------------- DNS Bypass Diagnostics --------------------
+    def show_dns_bypass_diagnostics(self):
+        policy_snapshot = collect_dns_bypass_policy_snapshot()
+        report = format_dns_bypass_diagnostics(policy_snapshot, dict(os.environ))
+        self._show_text_report_dialog(
+            "DNS bypass diagnostics",
+            "Local signals that can explain why a hosts entry did not affect a browser or app.",
+            report,
+            tone="warning" if policy_snapshot else "info",
+            width=860,
+            height=620,
+        )
 
     # ----------------------------- Check Domain ------------------------------
     def show_check_domain(self, initial_domain: str | None = None):

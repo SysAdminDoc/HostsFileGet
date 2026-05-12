@@ -44,6 +44,7 @@ It is not a DNS server, browser ad blocker, cloud filtering service, or endpoint
 | `docs/false-positive-triage.md` | Check Domain triage behavior, actions, and limits |
 | `docs/entry-provenance.md` | Line-level provenance/blame report behavior and limits |
 | `docs/windows-dns-client.md` | Windows DNS Client Operational snapshot import behavior and limits |
+| `docs/dns-bypass-diagnostics.md` | Browser encrypted-DNS/proxy bypass diagnostic behavior and limits |
 | `CLAUDE.md` | Compact architecture and gotchas snapshot for agents |
 | `default.txt` | Sample/default hosts content |
 | `icon.png` | App branding asset |
@@ -96,6 +97,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Source health reporting: `check_source_health_record`, `build_source_health_report`, `summarize_source_health_results`.
 - False-positive triage: `build_false_positive_triage_report`, `format_false_positive_triage_report`, `add_domain_to_whitelist_text`, `remove_false_positive_matches_from_lines`.
 - Windows diagnostics import: `parse_windows_dns_client_events_xml`, `build_windows_dns_client_wevtutil_command`, `collect_recent_windows_dns_client_queries`.
+- DNS bypass diagnostics: `collect_dns_bypass_policy_snapshot`, `dns_bypass_policy_status`, `format_dns_bypass_diagnostics`.
 - Cleanup/export/search helpers: `remove_lines_by_indices`, `rewrite_block_sink_ip`, `scan_suspicious_redirects`, `export_lines_as_format`, `strip_lines_by_category`.
 - Source analytics: `find_sources_containing_domain`, `summarize_source_contributions`, `build_source_domain_index`, `build_source_overlap_report`, `categorize_entries_by_domain_hint`, `classify_source_freshness`.
 - Provenance and pinned-domain helpers: `append_provenance_event`, `read_provenance_events`, `build_entry_provenance_report`, `format_entry_provenance_report`, `build_pinned_export_payload`, `parse_pinned_import_payload`, `sanitize_pinned_domains`.

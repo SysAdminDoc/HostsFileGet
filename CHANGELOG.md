@@ -36,6 +36,10 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added an opt-in Windows DNS Client Operational event snapshot importer backed by `wevtutil`.
 - Added local XML parsing for DNS query names, bounded event counts, and a second confirmation before appending observed queries as hosts entries.
 
+**DNS bypass diagnostics**
+- Added **DNS Bypass Diagnostics...** to explain hosts-file limits around browser encrypted DNS, proxies, VPNs, and hardcoded resolvers.
+- The report surfaces managed Chrome/Edge/Firefox encrypted-DNS policy values and common proxy environment variables without enforcing or uploading anything.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

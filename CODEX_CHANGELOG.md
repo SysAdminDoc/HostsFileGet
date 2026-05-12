@@ -29,6 +29,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F012 complete. Next roadmap item: F013 Windows DNS Client ETW import/live tail spike.
 - Completed F013: added a guarded Windows DNS Client Operational snapshot importer using `wevtutil`, local XML query parsing, double-confirm append flow, docs, and regression tests for parser/command/runner behavior.
 - Updated `ROADMAP.md` to mark F013 complete. Next roadmap item: F014 DoH/DoT/DoQ bypass diagnostics.
+- Completed F014: added DNS Bypass Diagnostics for browser encrypted-DNS policy and proxy signals, static hosts-file limit guidance, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F014 complete. Next roadmap item: F015 named profile data model groundwork.
 
 ## Scope
 

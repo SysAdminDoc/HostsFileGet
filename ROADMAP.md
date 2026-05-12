@@ -33,7 +33,7 @@ Non-negotiables:
 - [x] F011 - Source overlap matrix (`docs/source-overlap.md`, fetched-source domain index, Sources Report matrix)
 - [x] F012 - Entry provenance/blame panel (`docs/entry-provenance.md`, Tools/context report, import/source/audit correlation)
 - [x] F013 - Windows DNS Client ETW import/live tail spike (`docs/windows-dns-client.md`, guarded Operational-log snapshot import)
-- [ ] F014 - DoH/DoT/DoQ bypass diagnostics
+- [x] F014 - DoH/DoT/DoQ bypass diagnostics (`docs/dns-bypass-diagnostics.md`, policy/proxy diagnostic report)
 - [ ] F015 - Named profile data model groundwork
 - [ ] F016 - Golden-file cleaned-output tests
 - [ ] F017 - Property-based parser/fuzzer tests
@@ -267,8 +267,8 @@ Legend:
 1. Completed - Documentation and architecture baseline: F001, F024.
 2. Completed - CI and release hygiene: F002, F003, F004.
 3. Completed - Config and source-data foundations: F005-F009.
-4. Next - Explainability and diagnostics: F014.
-5. Profile groundwork and migrations: F015, F022, F023.
+4. Completed - Explainability and diagnostics: F010-F014.
+5. Next - Profile groundwork and migrations: F015, F022, F023.
 6. Quality gates: F016, F017, F018, F019.
 7. Accessibility and i18n foundations: F020, F021.
 

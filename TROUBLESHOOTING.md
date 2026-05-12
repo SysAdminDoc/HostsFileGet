@@ -210,3 +210,5 @@ Use a DNS server, DNS filtering provider, browser blocker, or firewall when you 
 - Enforced DoH/DoT/DoQ controls.
 
 HostsFileGet can still help generate, inspect, or export source data for those systems, but the hosts file itself has hard limits.
+
+Use **Tools > DNS Bypass Diagnostics...** when a browser or app appears to ignore a hosts entry. It checks local browser encrypted-DNS policy signals and proxy environment variables, then summarizes where enforcement must move outside the hosts file.
