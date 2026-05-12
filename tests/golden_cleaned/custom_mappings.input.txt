@@ -1,0 +1,7 @@
+192.168.1.10 NAS
+192.168.1.10 nas
+255.255.255.0 gateway
+printer.local
+127.0.0.1 loop.example
+::1 ipv6-loop.example
+*.wild.example

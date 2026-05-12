@@ -1,0 +1,11 @@
+# old header
+
+0.0.0.0 Ads.Example
+0.0.0.0 ads.example
+example.com
+http://phish.example/login
+||tracker.example^$third-party
+address=/telemetry.example/0.0.0.0
+0.0.0.0 multi.example another.example
+0.0.0.0 whitelist.example
+bad token

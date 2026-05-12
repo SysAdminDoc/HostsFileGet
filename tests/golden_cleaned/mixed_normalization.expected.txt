@@ -1,0 +1,26 @@
+# Copyright (c) 1993-2009 Microsoft Corp.
+#
+# This is a sample HOSTS file used by Microsoft TCP/IP for Windows.
+#
+# This file contains the mappings of IP addresses to host names. Each
+# entry should be kept on an individual line. The IP address should
+# be placed in the first column followed by the corresponding host name.
+# The IP address and the host name should be separated by at least one space.
+#
+# Additionally, comments (such as these) may be inserted on individual
+# lines or following the machine name denoted by a '#' symbol.
+#
+# For example:
+#
+#	127.0.0.1       localhost (7 active entries prepared by editor)
+#	::1             localhost
+
+# --- Active Hosts Entries (Cleaned & Sorted by {APP_NAME} v{APP_VERSION}) ---
+0.0.0.0 ads.example
+0.0.0.0 another.example
+0.0.0.0 example.com
+0.0.0.0 multi.example
+0.0.0.0 phish.example
+0.0.0.0 telemetry.example
+0.0.0.0 tracker.example
+

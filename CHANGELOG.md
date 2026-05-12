@@ -44,6 +44,10 @@ All notable changes to HostsFileGet will be documented in this file.
 - Bumped the config schema to `3` and added sanitized `profile_schema_version`, `active_profile_id`, and `profiles` fields.
 - Saves now mirror the current single-editor whitelist, custom sources, pinned domains, and block sink into the active profile without changing the existing UI workflow.
 
+**Golden cleaned-output tests**
+- Added manifest-driven golden fixtures under `tests/golden_cleaned/` for mixed normalization, custom mappings, and pinned-domain whitelist overrides.
+- The golden harness verifies exact cleaned output plus key discard/transform stats.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

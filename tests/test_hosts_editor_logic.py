@@ -179,6 +179,33 @@ class HostsEditorLogicTests(unittest.TestCase):
         self.assertEqual(stats["removed_whitelist"], 1)
         self.assertEqual(stats["final_active"], 1)
 
+    def test_cleaned_output_matches_golden_files(self):
+        from pathlib import Path
+
+        fixture_dir = Path(__file__).parent / "golden_cleaned"
+        manifest = json.loads((fixture_dir / "manifest.json").read_text(encoding="utf-8"))
+
+        for case in manifest["cases"]:
+            with self.subTest(case=case["name"]):
+                input_lines = read_text_file_lines(str(fixture_dir / case["input"]))
+                expected_text = (fixture_dir / case["expected"]).read_text(encoding="utf-8")
+                expected_raw_lines = expected_text.rstrip("\n").split("\n")
+                if expected_text.endswith("\n"):
+                    expected_raw_lines.append("")
+                expected_lines = [
+                    line.replace("{APP_NAME}", hosts_editor.APP_NAME).replace("{APP_VERSION}", hosts_editor.APP_VERSION)
+                    for line in expected_raw_lines
+                ]
+                cleaned, stats = _get_canonical_cleaned_output_and_stats(
+                    input_lines,
+                    set(case.get("whitelist", [])),
+                    set(case.get("pinned_domains", [])),
+                )
+
+                self.assertEqual(cleaned, expected_lines)
+                for key, expected_value in case.get("stats", {}).items():
+                    self.assertEqual(stats[key], expected_value, f"{case['name']}.{key}")
+
     def test_decode_downloaded_lines_supports_compressed_payloads(self):
         text = "0.0.0.0 compressed.example\n"
 

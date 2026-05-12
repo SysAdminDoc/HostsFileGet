@@ -1,0 +1,64 @@
+{
+  "cases": [
+    {
+      "name": "mixed_normalization",
+      "input": "mixed_normalization.input.txt",
+      "expected": "mixed_normalization.expected.txt",
+      "whitelist": ["whitelist.example"],
+      "pinned_domains": [],
+      "stats": {
+        "lines_total": 11,
+        "removed_blanks": 1,
+        "removed_comments": 1,
+        "removed_whitelist": 1,
+        "removed_duplicates": 1,
+        "removed_invalid": 1,
+        "transformed": 5,
+        "pinned_preserved": 0,
+        "final_active": 7,
+        "final_total": 26,
+        "total_discarded": 5
+      }
+    },
+    {
+      "name": "custom_mappings",
+      "input": "custom_mappings.input.txt",
+      "expected": "custom_mappings.expected.txt",
+      "whitelist": [],
+      "pinned_domains": [],
+      "stats": {
+        "lines_total": 7,
+        "removed_blanks": 0,
+        "removed_comments": 0,
+        "removed_whitelist": 0,
+        "removed_duplicates": 1,
+        "removed_invalid": 0,
+        "transformed": 4,
+        "pinned_preserved": 0,
+        "final_active": 6,
+        "final_total": 25,
+        "total_discarded": 1
+      }
+    },
+    {
+      "name": "pinned_overrides",
+      "input": "pinned_overrides.input.txt",
+      "expected": "pinned_overrides.expected.txt",
+      "whitelist": ["ads.example", "tracker.example"],
+      "pinned_domains": ["ads.example", "absent.example"],
+      "stats": {
+        "lines_total": 4,
+        "removed_blanks": 0,
+        "removed_comments": 0,
+        "removed_whitelist": 1,
+        "removed_duplicates": 1,
+        "removed_invalid": 0,
+        "transformed": 0,
+        "pinned_preserved": 1,
+        "final_active": 3,
+        "final_total": 22,
+        "total_discarded": 2
+      }
+    }
+  ]
+}
