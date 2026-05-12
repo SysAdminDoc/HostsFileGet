@@ -47,6 +47,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F021 complete. Next roadmap item: F022 importers for SwitchHosts, Gas Mask, and HostsFileEditor archives.
 - Completed F022: added bounded append-only migration importers for SwitchHosts v3/v4 JSON exports, Gas Mask Local/Remote/Combined folders, and HostsFileEditor archive folders; wired them into the sidebar and Tools menu; added format docs and regression tests.
 - Updated `ROADMAP.md` to mark F022 complete. Next roadmap item: F023 RPZ, Unbound, Privoxy, and compressed-hosts exports.
+- Completed F023: expanded Export Cleaned with RPZ, Unbound, Privoxy, gzip-compressed hosts, and bzip2-compressed hosts outputs; added a shared export domain record layer, atomic binary writes, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F023 complete. Next roadmap item: F025 declarative YAML/TOML source of truth.
 
 ## Scope
 

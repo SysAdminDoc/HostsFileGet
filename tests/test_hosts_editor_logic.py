@@ -72,7 +72,9 @@ from hosts_editor import (
     parse_switchhosts_export_text,
     parse_windows_dns_client_events_xml,
     summarize_source_contributions,
+    build_export_domain_records,
     export_lines_as_format,
+    export_lines_as_bytes,
     extract_blocking_domains_from_lines,
     fetch_source_with_cache,
     find_keyword_match_line_indices,
@@ -121,6 +123,7 @@ from hosts_editor import (
     translate_message,
     update_active_profile_snapshot,
     write_text_file_atomic,
+    write_bytes_file_atomic,
 )
 
 
@@ -1882,6 +1885,59 @@ class HostsEditorLogicTests(unittest.TestCase):
             export_lines_as_format(lines, "dnsmasq").splitlines(),
             ["address=/ads.example/0.0.0.0", "address=/tracker.example/0.0.0.0"],
         )
+
+    def test_build_export_domain_records_keeps_stable_ir(self):
+        records = build_export_domain_records([
+            "0.0.0.0 ADS.example",
+            "0.0.0.0 tracker.example",
+            "192.168.1.10 printer",
+            "# 0.0.0.0 ignored.example",
+            "0.0.0.0 ads.example",
+        ])
+
+        self.assertEqual(records, [
+            {"domain": "ads.example", "entry": "0.0.0.0 ads.example"},
+            {"domain": "tracker.example", "entry": "0.0.0.0 tracker.example"},
+        ])
+
+    def test_export_lines_as_format_supports_dns_integration_formats(self):
+        lines = ["0.0.0.0 ads.example", "0.0.0.0 tracker.example"]
+
+        rpz = export_lines_as_format(lines, "rpz")
+        self.assertIn("$TTL 2h", rpz)
+        self.assertIn("ads.example CNAME .", rpz)
+        self.assertIn("tracker.example CNAME .", rpz)
+
+        unbound = export_lines_as_format(lines, "unbound")
+        self.assertIn('local-zone: "ads.example." always_nxdomain', unbound)
+        self.assertIn('local-zone: "tracker.example." always_nxdomain', unbound)
+
+        privoxy = export_lines_as_format(lines, "privoxy")
+        self.assertIn("{+block{HostsFileGet blocked domain}}", privoxy)
+        self.assertIn("ads.example/", privoxy)
+        self.assertIn("tracker.example/", privoxy)
+
+    def test_export_lines_as_bytes_supports_compressed_hosts(self):
+        lines = ["0.0.0.0 ads.example", "# comment", "0.0.0.0 tracker.example"]
+        expected = "\n".join(lines)
+
+        gz_bytes = export_lines_as_bytes(lines, "hosts-gzip")
+        bz2_bytes = export_lines_as_bytes(lines, "hosts-bzip2")
+
+        self.assertEqual(gzip.decompress(gz_bytes).decode("utf-8"), expected)
+        self.assertEqual(bz2.decompress(bz2_bytes).decode("utf-8"), expected)
+        self.assertEqual(gz_bytes, export_lines_as_bytes(lines, "hosts.gz"))
+
+    def test_write_bytes_file_atomic_replaces_file_contents(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "hosts.gz"
+            write_bytes_file_atomic(str(path), b"old")
+            write_bytes_file_atomic(str(path), b"new")
+
+            self.assertEqual(path.read_bytes(), b"new")
 
     def test_export_lines_as_format_rejects_unknown_format(self):
         with self.assertRaises(ValueError):

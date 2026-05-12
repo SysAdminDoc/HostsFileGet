@@ -52,6 +52,9 @@ It is designed for people who work with large blocklists, external feed imports,
   - remove matching entries with selection + preview
   - false-positive triage for whitelist, pin, source-match, and upstream report decisions
   - entry provenance view for import-section ownership, source matches, and local audit events
+- Export adapters:
+  - cleaned hosts, plain domains, Adblock, dnsmasq, and Pi-hole formats
+  - RPZ, Unbound, Privoxy, gzip-compressed hosts, and bzip2-compressed hosts
 - Operational utilities:
   - DNS cache flush
   - DNS bypass diagnostics for browser encrypted-DNS and proxy signals
@@ -186,6 +189,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Windows DNS Client snapshot: `docs/windows-dns-client.md`
 - DNS bypass diagnostics: `docs/dns-bypass-diagnostics.md`
 - Migration imports: `docs/migration-imports.md`
+- Export formats: `docs/export-formats.md`
 - Accessibility audit: `docs/accessibility.md`
 - i18n string catalog: `docs/i18n.md`
 - Sourced implementation plan: `ROADMAP.md`
