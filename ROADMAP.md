@@ -52,6 +52,7 @@ Non-negotiables:
 - [x] F030 - Pi-hole/AdGuard/Technitium/blocky interoperability pack (`docs/dns-integrations.md`, DNS export presets, integration CLI)
 - [x] F031 - NextDNS and Control D import/export adapters (`docs/cloud-dns-adapters.md`, plan-only cloud adapter CLI, CSV log importers)
 - [x] F032 - Adblock syntax linter and cosmetic-rule quarantine (`docs/adblock-lint.md`, lint/quarantine CLI, browser-only rule guards)
+- [x] F033 - Regex/exact/wildcard rule tiers with hosts warnings (`docs/rule-tiers.md`, rule tier CLI/report, provider-only warnings)
 
 ## State Of The Repo
 
@@ -60,8 +61,8 @@ Non-negotiables:
 - Language and runtime: Python 3.x, Tkinter desktop UI, Windows-first assumptions, PowerShell launcher.
 - Entry points: `hosts_editor.py` for GUI and CLI, `PythonLauncher.ps1` for elevated launch/bootstrap, `HostsFileGet.spec` for PyInstaller.
 - Packaging: PyInstaller one-file Windows EXE with `uac_admin=True`; build artifacts exist locally under `build/` and `dist/` but are not tracked.
-- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 211 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation, migration importer fixtures, export-format fixtures, DNS integration fixtures, cloud DNS adapter fixtures, adblock syntax lint/quarantine fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, NextDNS/Control D CSV logs, and find/replace.
-- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/cloud-dns-adapters.md`, `docs/adblock-lint.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `LICENSE`, and this roadmap.
+- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 215 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation, migration importer fixtures, export-format fixtures, DNS integration fixtures, cloud DNS adapter fixtures, adblock syntax lint/quarantine fixtures, rule tier fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, NextDNS/Control D CSV logs, and find/replace.
+- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/cloud-dns-adapters.md`, `docs/adblock-lint.md`, `docs/rule-tiers.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `LICENSE`, and this roadmap.
 - License: MIT.
 
 ### Product Reality
@@ -78,6 +79,7 @@ HostsFileGet already provides:
 - `--integration-list` and `--integration-export` provide file-only Pi-hole, AdGuard Home/DNS, Technitium, and blocky DNS export handoffs.
 - `--cloud-adapter-list`, `--cloud-adapter-plan`, and `--cloud-log-import` provide plan-only NextDNS/Control D adapter artifacts and local CSV log extraction without storing credentials or performing remote writes.
 - `--adblock-lint`, `--adblock-lint-output`, and `--adblock-quarantine` review mixed filter lists and quarantine browser-only rules before hosts-file conversion.
+- `--rule-tier-report` and `--rule-tier-output` explain exact, subdomain, wildcard, regex, path, exception, and browser-only tiers before hosts-file conversion.
 - Optional local Git-backed history commands for snapshot, status, and admin-gated rollback with normal `.bak` backup creation.
 - Live stats, category hints, source report, health scan, DNS flush, domain check, find/replace, cleanup commands, import-section removal, backup diff, pinned domains, and export formats.
 
@@ -217,7 +219,7 @@ Legend:
 | F030 | Pi-hole/AdGuard/Technitium/blocky interoperability pack | Integrations | table-stakes | Yes | 5 | 4 | Prefer export/import files and APIs before remote writes. | Next | O6, O7, O8, O15 |
 | F031 | NextDNS and Control D import/export adapters | Integrations | common | Guarded | 4 | 4 | API keys, privacy, and quotas; never default. | Next | C1, C2, C3, C4, C8, C9, C10, C11 |
 | F032 | Adblock syntax linter and cosmetic-rule quarantine | Data, UX | common | Yes | 4 | 4 | Must distinguish DNS-compatible rules from browser-only syntax. | Next | O7, O17, K4, K7, C12, C13, C14 |
-| F033 | Regex/exact/wildcard rule tiers with hosts warnings | UX, data | common | Yes | 5 | 4 | Must warn hosts cannot natively express wildcards. | Next | C3, K9, S12 |
+| F033 | Regex/exact/wildcard rule tiers with hosts warnings | UX, data | common | Yes | 5 | 4 | Must warn hosts cannot natively express wildcards. | Next | C3, C12, K9, S12 |
 | F034 | IDN/punycode and homograph warnings | Security, i18n | common | Yes | 4 | 3 | Use deterministic checks; do not over-block. | Next | C1, S1 |
 | F035 | NRD/DGA threat feed pack | Security | common | Yes | 4 | 3 | Needs freshness and false-positive controls. | Next | C1, O10, A1, A2, A3 |
 | F036 | CNAME cloaking source and explanation workflow | Security, privacy | common | Yes | 4 | 3 | Hosts cannot resolve CNAME dynamically; keep as feed/import guidance. | Next | C1, O8, S11, A4, A5 |
@@ -296,12 +298,13 @@ Legend:
 14. Completed - DNS resolver interoperability pack: F030.
 15. Completed - Guarded cloud DNS adapters: F031.
 16. Completed - Adblock syntax lint and quarantine: F032.
+17. Completed - Rule tier warnings: F033.
 
 Rationale: these items reduce maintenance risk, make the current product more trustworthy, and create the internal contracts needed for the larger profile/integration work.
 
 ### Next
 
-1. DNS ecosystem interoperability: F033, F034.
+1. DNS ecosystem interoperability: F034.
 2. Security packs and rule intelligence: F035, F036, F037, F038, F039, F040.
 3. Faster large-scale operations: F041, F042, F043, F047, F048, F049, F050, F051.
 4. Packaging, plugin, collaboration growth: F045, F046, F052, F053, F054, F055.
@@ -496,6 +499,7 @@ Representative queries used:
 - `DNS blocklist false positives study domain blocklist evaluation academic`
 - `CNAME cloaking blocklist detection research paper ad tracking`
 - `AdGuard DNS filtering syntax cosmetic rules Adblock Plus exception rules hosts file`
+- `Control D custom rules wildcard regex exact hosts file wildcard limitation`
 - `PyInstaller changelog latest 2026 security changes`
 - `GitHub Advisory Database PyInstaller vulnerability 2025 2026`
 

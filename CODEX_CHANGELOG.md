@@ -65,6 +65,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F031 complete. Next roadmap item: F032 Adblock syntax linter and cosmetic-rule quarantine.
 - Completed F032: added adblock syntax classification, normalized-import protection against cosmetic/path/exception over-blocking, GUI lint/quarantine commands, `--adblock-lint`, `--adblock-lint-output`, `--adblock-quarantine`, docs, and regression tests.
 - Updated `ROADMAP.md` to mark F032 complete. Next roadmap item: F033 Regex/exact/wildcard rule tiers with hosts warnings.
+- Completed F033: added rule tier classification for exact, subdomain-scoped, wildcard, regex, path, exception, browser-only, hosts exact, and custom mapping rows; added GUI and CLI reports with JSON output, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F033 complete. Next roadmap item: F034 IDN/punycode and homograph warnings.
 
 ## Scope
 

@@ -122,6 +122,11 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added `--adblock-lint`, `--adblock-lint-output`, and `--adblock-quarantine` for CLI review workflows.
 - Documented DNS-compatible versus browser-only rule boundaries in `docs/adblock-lint.md`.
 
+**Rule tier report**
+- Added exact/subdomain/wildcard/regex/path/exception/browser-only rule tier classification with explicit hosts-file support warnings.
+- Added **Tools > Rule Tier Report...** plus `--rule-tier-report` and `--rule-tier-output` for read-only review before hosts conversion.
+- Documented the exact-hostname hosts boundary and downstream DNS-provider handoff guidance in `docs/rule-tiers.md`.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

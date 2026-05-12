@@ -1270,6 +1270,15 @@ ADBLOCK_COSMETIC_MARKERS = (
     ("##", "cosmetic"),
 )
 ADBLOCK_QUARANTINE_COMMENT_PREFIX = "# HostsFileGet quarantined browser-only rule:"
+RULE_TIER_FINDING_CATEGORIES = {
+    "subdomain-scoped",
+    "wildcard",
+    "regex",
+    "path-network",
+    "browser-only",
+    "exception",
+    "invalid",
+}
 
 def looks_like_domain(token: str, allow_single_label: bool = False) -> bool:
     if len(token) > 253: return False
@@ -1634,6 +1643,289 @@ def quarantine_adblock_rule_lines(lines: list[str]) -> tuple[list[str], dict]:
             quarantined_lines.append(line)
     report["changed_lines"] = changed
     return quarantined_lines, report
+
+
+def _split_filter_pattern_and_modifiers(stripped: str) -> tuple[str, str, bool]:
+    exception = stripped.startswith("@@")
+    body = stripped[2:] if exception else stripped
+    if body.startswith("/") and body.endswith("/") and len(body) > 2:
+        return body.strip(), "", exception
+    pattern, _, modifiers = body.partition("$")
+    return pattern.strip(), modifiers.strip(), exception
+
+
+def _pattern_domain_label(pattern: str) -> str | None:
+    candidate = pattern.strip()
+    if candidate.startswith("||"):
+        candidate = candidate[2:]
+    candidate = candidate.strip("|")
+    if candidate.lower().startswith(("http://", "https://", "ftp://")):
+        try:
+            parsed = urllib.parse.urlsplit(candidate)
+        except ValueError:
+            return None
+        candidate = parsed.hostname or ""
+    candidate = candidate.split("^", 1)[0].strip(".")
+    if not candidate:
+        return None
+    validation_candidate = candidate.replace("*", "wildcard")
+    validation_candidate = validation_candidate.replace("..", ".")
+    if looks_like_domain(validation_candidate, allow_single_label=False):
+        return candidate.lower()
+    return None
+
+
+def classify_rule_tier_line(line: str) -> dict:
+    """Classify a rule by the matching tier that a hosts file can preserve."""
+    stripped = (line or "").strip()
+    result = {
+        "line": line,
+        "category": "blank",
+        "tier": "blank",
+        "severity": "info",
+        "hosts_native": False,
+        "hosts_effect": "ignored",
+        "provider_effect": "ignored",
+        "domain": None,
+        "normalized": None,
+        "warning": None,
+    }
+    if not stripped:
+        return result
+
+    if stripped.startswith(ADBLOCK_QUARANTINE_COMMENT_PREFIX):
+        result.update({
+            "category": "quarantine-comment",
+            "tier": "comment",
+            "hosts_effect": "ignored comment",
+            "provider_effect": "ignored comment",
+        })
+        return result
+
+    cosmetic_marker = _find_adblock_cosmetic_marker(stripped)
+    if cosmetic_marker:
+        marker, label = cosmetic_marker
+        result.update({
+            "category": "browser-only",
+            "tier": "browser-only",
+            "severity": "warning",
+            "hosts_effect": "unsupported",
+            "provider_effect": label,
+            "warning": f"{marker} is browser filter syntax; hosts files cannot hide elements or run scriptlets.",
+        })
+        return result
+
+    if _is_comment_line(stripped):
+        result.update({
+            "category": "comment",
+            "tier": "comment",
+            "hosts_effect": "ignored comment",
+            "provider_effect": "ignored comment",
+        })
+        return result
+
+    pattern, modifiers, exception = _split_filter_pattern_and_modifiers(stripped)
+    is_regex = pattern.startswith("/") and pattern.endswith("/") and len(pattern) > 2
+    has_wildcard = "*" in pattern
+    domain_label = _pattern_domain_label(pattern)
+
+    if is_regex:
+        result.update({
+            "category": "regex",
+            "tier": "regex",
+            "severity": "warning",
+            "hosts_effect": "unsupported",
+            "provider_effect": "regular expression rule",
+            "domain": domain_label,
+            "warning": "Hosts files cannot evaluate regex rules; keep this in a DNS provider or filter engine that documents regex support.",
+        })
+        return result
+
+    if _adblock_pattern_has_url_path(pattern):
+        result.update({
+            "category": "path-network",
+            "tier": "path",
+            "severity": "warning",
+            "hosts_effect": "unsupported",
+            "provider_effect": "URL path/request filter",
+            "domain": _pattern_domain_label(pattern),
+            "warning": "Hosts files only see hostnames; URL path rules must stay in a browser or DNS provider that supports them.",
+        })
+        return result
+
+    if has_wildcard:
+        result.update({
+            "category": "wildcard",
+            "tier": "wildcard",
+            "severity": "warning",
+            "hosts_effect": "exact hosts entries only",
+            "provider_effect": "wildcard rule",
+            "domain": domain_label,
+            "warning": "Hosts files do not support wildcards; cleaned output can only preserve exact domains.",
+        })
+        return result
+
+    if exception:
+        result.update({
+            "category": "exception",
+            "tier": "exception",
+            "severity": "warning",
+            "hosts_effect": "unsupported allow rule",
+            "provider_effect": "exception or bypass rule",
+            "domain": domain_label,
+            "warning": "Hosts files have no rule-level allow/exception semantics; use the whitelist or downstream DNS provider.",
+        })
+        return result
+
+    tokens = [token for token in TOKEN_SPLITTER.split(stripped.split("#", 1)[0].strip()) if token]
+    if tokens and _looks_like_ip_token(tokens[0]):
+        domains = []
+        for token in tokens[1:]:
+            token_domain, _ = _extract_domain_from_token(token, allow_single_label=True)
+            if token_domain:
+                domains.append(token_domain)
+        if domains:
+            mapping_ip, _, is_block_entry = _normalize_mapping_ip(tokens[0])
+            result.update({
+                "category": "hosts-exact" if is_block_entry else "hosts-custom-mapping",
+                "tier": "exact",
+                "hosts_native": True,
+                "hosts_effect": "exact domain block" if is_block_entry else "exact custom mapping",
+                "provider_effect": "exact domain rule",
+                "domain": domains[0],
+                "normalized": f"{mapping_ip} {domains[0]}",
+            })
+            return result
+
+    lint = classify_adblock_rule_line(stripped)
+    if lint.get("category") == "path-network":
+        result.update({
+            "category": "path-network",
+            "tier": "path",
+            "severity": "warning",
+            "hosts_effect": "unsupported",
+            "provider_effect": "URL path/request filter",
+            "domain": lint.get("domain") or domain_label,
+            "warning": lint.get("reason"),
+        })
+        return result
+    if lint.get("dns_compatible") and pattern.startswith("||"):
+        result.update({
+            "category": "subdomain-scoped",
+            "tier": "subdomain-scoped",
+            "severity": "warning",
+            "hosts_effect": "exact domain only after normalization",
+            "provider_effect": "domain and subdomain rule",
+            "domain": lint.get("domain") or domain_label,
+            "normalized": lint.get("normalized"),
+            "warning": "Rules beginning with || usually include subdomains in DNS filters; a hosts file needs one exact line per hostname.",
+        })
+        return result
+    if lint.get("dns_compatible"):
+        result.update({
+            "category": "exact",
+            "tier": "exact",
+            "hosts_native": True,
+            "hosts_effect": "exact domain block",
+            "provider_effect": "exact domain rule",
+            "domain": lint.get("domain") or domain_label,
+            "normalized": lint.get("normalized"),
+        })
+        return result
+
+    result.update({
+        "category": "invalid",
+        "tier": "invalid",
+        "severity": "warning",
+        "hosts_effect": "unsupported",
+        "provider_effect": "unclassified",
+        "warning": "Line is not a recognized exact, wildcard, regex, or hosts mapping rule.",
+    })
+    return result
+
+
+def build_rule_tier_report(lines: list[str], max_findings: int = 50) -> dict:
+    counts: dict[str, int] = {}
+    tiers: dict[str, int] = {}
+    findings: list[dict] = []
+    hosts_native = 0
+    warning_count = 0
+    for index, line in enumerate(lines, start=1):
+        classification = classify_rule_tier_line(line)
+        category = classification["category"]
+        tier = classification["tier"]
+        counts[category] = counts.get(category, 0) + 1
+        tiers[tier] = tiers.get(tier, 0) + 1
+        if classification.get("hosts_native"):
+            hosts_native += 1
+        if classification.get("severity") == "warning":
+            warning_count += 1
+        if category in RULE_TIER_FINDING_CATEGORIES and len(findings) < max_findings:
+            findings.append({
+                "line_number": index,
+                "category": category,
+                "tier": tier,
+                "domain": classification.get("domain"),
+                "hosts_effect": classification.get("hosts_effect"),
+                "provider_effect": classification.get("provider_effect"),
+                "warning": classification.get("warning"),
+                "line": line,
+            })
+    return {
+        "schema": "hostsfileget.rule-tier-report.v1",
+        "total_lines": len(lines),
+        "hosts_native": hosts_native,
+        "warning_count": warning_count,
+        "counts": counts,
+        "tiers": tiers,
+        "findings": findings,
+        "finding_limit": max_findings,
+        "truncated_findings": max(0, warning_count - len(findings)),
+        "warnings": [
+            "Windows hosts files are exact hostname mappings, not wildcard or regex rule engines.",
+            "Wildcard, regex, path, exception, client, redirect, and private-domain semantics belong in DNS-provider or browser-filter exports.",
+            "Subdomain-scoped DNS rules need explicit exact hostnames before they can be represented faithfully in a hosts file.",
+        ],
+    }
+
+
+def format_rule_tier_report(report: dict) -> str:
+    lines = [
+        "Rule tier report",
+        f"Lines: {int(report.get('total_lines') or 0):,}",
+        f"Native hosts entries: {int(report.get('hosts_native') or 0):,}",
+        f"Warning candidates: {int(report.get('warning_count') or 0):,}",
+        "",
+        "Tiers:",
+    ]
+    tiers = report.get("tiers") or {}
+    for tier in sorted(tiers):
+        lines.append(f"- {tier}: {int(tiers[tier]):,}")
+    counts = report.get("counts") or {}
+    lines.extend(["", "Categories:"])
+    for category in sorted(counts):
+        lines.append(f"- {category}: {int(counts[category]):,}")
+    lines.extend(["", "Warnings:"])
+    for warning in report.get("warnings") or []:
+        lines.append(f"- {warning}")
+    findings = report.get("findings") or []
+    if findings:
+        lines.extend(["", "Findings:"])
+        for finding in findings:
+            preview = str(finding.get("line") or "").strip()
+            if len(preview) > 140:
+                preview = preview[:137] + "..."
+            warning = finding.get("warning") or finding.get("hosts_effect") or ""
+            lines.append(
+                f"- Line {finding.get('line_number')}: {finding.get('tier')} / {finding.get('category')} - "
+                f"{warning} [{preview}]"
+            )
+        truncated = int(report.get("truncated_findings") or 0)
+        if truncated:
+            lines.append(f"- ... {truncated:,} additional warning candidate(s) omitted.")
+    else:
+        lines.extend(["", "Findings: none"])
+    return "\n".join(lines)
 
 # -------------------------------- Canonical Output Builder -----------------------------------
 
@@ -8340,6 +8632,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="Entry Provenance...", command=self.show_entry_provenance_panel)
         tools_menu.add_command(label="Hosts Health Scan...", command=self.show_health_scan)
         tools_menu.add_command(label="Adblock Syntax Lint...", command=self.show_adblock_syntax_lint)
+        tools_menu.add_command(label="Rule Tier Report...", command=self.show_rule_tier_report)
         tools_menu.add_command(label="DNS Bypass Diagnostics...", command=self.show_dns_bypass_diagnostics)
         tools_menu.add_command(label="DNS Interoperability Pack...", command=self.show_dns_integration_pack)
         tools_menu.add_command(label="Cloud DNS Adapters...", command=self.show_cloud_dns_adapters)
@@ -9330,6 +9623,17 @@ class HostsFileEditor:
             "Find browser-only adblock rules that hosts files cannot safely represent.",
             format_adblock_syntax_report(report),
             tone="warning" if report["quarantined"] else "info",
+            width=920,
+            height=680,
+        )
+
+    def show_rule_tier_report(self):
+        report = build_rule_tier_report(self.get_lines())
+        self._show_text_report_dialog(
+            "Rule tier report",
+            "Separate exact hosts entries from subdomain, wildcard, regex, path, and provider-only rules.",
+            format_rule_tier_report(report),
+            tone="warning" if report["warning_count"] else "info",
             width=920,
             height=680,
         )
@@ -13604,6 +13908,24 @@ def _cli_adblock_quarantine(input_path: str, output_path: str) -> int:
     return 0
 
 
+def _cli_rule_tier_report(input_path: str, output_path: str | None = None) -> int:
+    try:
+        lines = read_text_file_lines(input_path)
+        report = build_rule_tier_report(lines)
+        if output_path:
+            output_dir = os.path.dirname(os.path.abspath(output_path))
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+            write_text_file_atomic(output_path, json.dumps(report, indent=2))
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Rule tier report failed: {exc}")
+        return 2
+    _cli_print(format_rule_tier_report(report))
+    if output_path:
+        _cli_print(f"Wrote rule tier report to {output_path}")
+    return 0
+
+
 def _cli_activity_report(output_path: str | None) -> int:
     report = build_scheduler_activity_report()
     _cli_print(format_scheduler_activity_report(report))
@@ -13872,6 +14194,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--adblock-lint",
         "--adblock-lint-output",
         "--adblock-quarantine",
+        "--rule-tier-report",
+        "--rule-tier-output",
         "--source-health",
         "--source-health-output",
         "--source-health-timeout",
@@ -13899,6 +14223,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--adblock-lint=",
         "--adblock-lint-output=",
         "--adblock-quarantine=",
+        "--rule-tier-report=",
+        "--rule-tier-output=",
         "--source-health-output=",
         "--source-health-timeout=",
         "--source-health-workers=",
@@ -13960,6 +14286,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         metavar=("INPUT", "OUTPUT"),
         help="Comment browser-only or unsafe adblock rules from INPUT into OUTPUT for review.",
     )
+    parser.add_argument("--rule-tier-report", metavar="INPUT", help="Report exact, subdomain, wildcard, regex, and provider-only rule tiers without launching the GUI.")
+    parser.add_argument("--rule-tier-output", metavar="PATH", help="Write the detailed rule tier JSON report to PATH.")
     parser.add_argument("--source-health", action="store_true", help="Check curated source reachability and print a summary without launching the GUI.")
     parser.add_argument("--source-health-output", metavar="PATH", help="Write detailed source-health JSON to PATH.")
     parser.add_argument("--source-health-timeout", type=float, default=SOURCE_HEALTH_TIMEOUT_SECONDS, help="Per-source network timeout in seconds.")
@@ -14045,6 +14373,10 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         return _cli_adblock_lint(args.adblock_lint, args.adblock_lint_output)
     if args.adblock_quarantine:
         return _cli_adblock_quarantine(args.adblock_quarantine[0], args.adblock_quarantine[1])
+    if args.rule_tier_report or args.rule_tier_output:
+        if not args.rule_tier_report:
+            parser.error("--rule-tier-output requires --rule-tier-report INPUT")
+        return _cli_rule_tier_report(args.rule_tier_report, args.rule_tier_output)
     if args.source_health:
         return _cli_source_health(
             args.source_health_output,
