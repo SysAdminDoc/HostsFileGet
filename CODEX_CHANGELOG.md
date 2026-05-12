@@ -225,6 +225,28 @@ The Codex pass added keyboard shortcuts (`Ctrl+F`, `Ctrl+S`, `Ctrl+Shift+S`, `F5
 
 - F003: add a pinned PyInstaller release workflow and local release-build documentation.
 
+## Autonomous Roadmap Progress — 2026-05-12 Release Workflow
+
+### Completed
+
+- F003: Added `requirements-build.txt` to pin PyInstaller for reproducible Windows release builds.
+- Added `.github/workflows/release.yml`, a Windows release workflow that installs pinned build dependencies, compiles Python sources, runs unit tests, parses `PythonLauncher.ps1`, builds `dist\HostsFileGet.exe`, writes a SHA-256 checksum file, uploads workflow artifacts, and publishes tag assets to GitHub Releases.
+- Added `docs/release.md` with local build commands, workflow behavior, release checklist, and the current unsigned-artifact boundary.
+- Fixed `HostsFileGet.spec` to resolve the project root from PyInstaller's `SPECPATH`; pinned PyInstaller 6.20.0 does not define `__file__` while executing the spec.
+- Updated `.gitignore` to keep generated `.spec` files ignored while explicitly tracking the canonical `HostsFileGet.spec` required by CI and release builds.
+- Updated `README.md` and `ROADMAP.md` to reference the new release workflow artifacts and mark F003 complete.
+
+### Validation
+
+- `python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py`
+- `python -m unittest discover -s tests -v`
+- PowerShell parser validation for `PythonLauncher.ps1`
+- `python -m PyInstaller --clean --noconfirm HostsFileGet.spec`
+
+### Next
+
+- F004: add checksum/SBOM/advisory scanning and document the code-signing boundary.
+
 ## Codex Follow-Up — 2026-04-15
 
 ### Additional hardening completed
