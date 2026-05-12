@@ -29,6 +29,7 @@ import pathlib
 import datetime
 import argparse
 import glob
+import unicodedata
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback path
@@ -1279,6 +1280,27 @@ RULE_TIER_FINDING_CATEGORIES = {
     "exception",
     "invalid",
 }
+IDN_WARNING_CATEGORIES = {"homograph-risk", "invalid-punycode"}
+IDN_LABEL_TOKEN_SPLITTER = re.compile(r'[\s,;]+')
+CONFUSABLE_ASCII_MAP = {
+    "\u0430": "a", "\u0410": "A",
+    "\u0435": "e", "\u0415": "E",
+    "\u043e": "o", "\u041e": "O",
+    "\u0440": "p", "\u0420": "P",
+    "\u0441": "c", "\u0421": "C",
+    "\u0445": "x", "\u0425": "X",
+    "\u0443": "y", "\u0423": "Y",
+    "\u0456": "i", "\u0406": "I",
+    "\u0458": "j", "\u0408": "J",
+    "\u0455": "s", "\u0405": "S",
+    "\u03b1": "a", "\u0391": "A",
+    "\u03bf": "o", "\u039f": "O",
+    "\u03c1": "p", "\u03a1": "P",
+    "\u03b5": "e", "\u0395": "E",
+    "\u03c7": "x", "\u03a7": "X",
+    "\u03bd": "v", "\u039d": "N",
+    "\u03b9": "i", "\u0399": "I",
+}
 
 def looks_like_domain(token: str, allow_single_label: bool = False) -> bool:
     if len(token) > 253: return False
@@ -1356,6 +1378,332 @@ def _extract_domain_from_token(token: str, allow_single_label: bool = False) -> 
         return None, transformed
 
     return domain, transformed
+
+
+def _domain_shape_matches(domain: str, allow_single_label: bool = False) -> bool:
+    if allow_single_label and "." not in domain:
+        return bool(HOST_LABEL_REGEX.match(domain)) and any(character.isalpha() for character in domain)
+    return looks_like_domain(domain, allow_single_label=False)
+
+
+def _contains_non_ascii(value: str) -> bool:
+    return any(ord(character) > 127 for character in value)
+
+
+def _decode_idna_domain(domain: str) -> tuple[str | None, str | None]:
+    try:
+        return domain.encode("ascii").decode("idna"), None
+    except (UnicodeError, UnicodeEncodeError) as exc:
+        return None, str(exc)
+
+
+def _encode_idna_domain(domain: str) -> tuple[str | None, str | None]:
+    try:
+        return domain.encode("idna").decode("ascii").lower(), None
+    except UnicodeError as exc:
+        return None, str(exc)
+
+
+def _script_bucket(character: str) -> str | None:
+    if character in ".-" or character.isdigit() or unicodedata.category(character).startswith("M"):
+        return None
+    if "A" <= character <= "Z" or "a" <= character <= "z":
+        return "Latin"
+    name = unicodedata.name(character, "")
+    if not name:
+        return "Other"
+    for prefix, bucket in (
+        ("LATIN", "Latin"),
+        ("CYRILLIC", "Cyrillic"),
+        ("GREEK", "Greek"),
+        ("HEBREW", "Hebrew"),
+        ("ARABIC", "Arabic"),
+        ("DEVANAGARI", "Devanagari"),
+        ("CJK", "CJK"),
+        ("HIRAGANA", "Hiragana"),
+        ("KATAKANA", "Katakana"),
+        ("HANGUL", "Hangul"),
+    ):
+        if name.startswith(prefix):
+            return bucket
+    return "Other"
+
+
+def _label_scripts(label: str) -> list[str]:
+    scripts = {
+        script
+        for character in label
+        for script in [_script_bucket(character)]
+        if script
+    }
+    return sorted(scripts)
+
+
+def _confusable_ascii_skeleton(domain: str) -> str:
+    return "".join(CONFUSABLE_ASCII_MAP.get(character, character) for character in domain).lower()
+
+
+def _extract_idn_candidate_from_token(token: str, allow_single_label: bool = False) -> str | None:
+    candidate = token.strip().strip('\'"()[]{}<>')
+    if not candidate:
+        return None
+    if candidate.startswith("@@"):
+        candidate = candidate[2:]
+
+    dnsmasq_match = DNSMASQ_RULE_REGEX.match(candidate)
+    if dnsmasq_match:
+        candidate = dnsmasq_match.group(1)
+
+    pattern = candidate.split("$", 1)[0].strip()
+    if pattern.startswith("||"):
+        pattern = pattern[2:]
+    elif pattern.startswith("|"):
+        pattern = pattern[1:]
+    pattern = pattern.rstrip("|")
+    pattern = pattern.split("^", 1)[0].strip()
+
+    if pattern.lower().startswith(("http://", "https://", "ftp://")):
+        try:
+            hostname = urllib.parse.urlsplit(pattern).hostname
+        except ValueError:
+            hostname = None
+        if not hostname:
+            return None
+        pattern = hostname
+    elif any(separator in pattern for separator in ("/", "?", ":")):
+        try:
+            hostname = urllib.parse.urlsplit(f"http://{pattern}").hostname
+        except ValueError:
+            hostname = None
+        if hostname:
+            pattern = hostname
+
+    wildcard_match = WILDCARD_STRIPPER.match(pattern)
+    if wildcard_match:
+        pattern = wildcard_match.group(1)
+
+    candidate = pattern.strip().strip(".").lower()
+    if not candidate or candidate in LOCAL_DOMAINS or _looks_like_ip_token(candidate):
+        return None
+
+    has_idn_signal = _contains_non_ascii(candidate) or any(
+        label.startswith("xn--") for label in candidate.split(".")
+    )
+    if not has_idn_signal:
+        return None
+
+    ascii_domain, _ = _encode_idna_domain(candidate)
+    if ascii_domain and _domain_shape_matches(ascii_domain, allow_single_label=allow_single_label):
+        return candidate
+    if any(label.startswith("xn--") for label in candidate.split(".")):
+        return candidate
+    return None
+
+
+def extract_idn_domain_candidates(lines: list[str]) -> list[dict]:
+    candidates: list[dict] = []
+    seen: set[tuple[int, str]] = set()
+    for line_number, line in enumerate(lines, start=1):
+        stripped = (line or "").strip()
+        if not stripped or _is_comment_line(stripped):
+            continue
+        body = stripped
+        if "#" in body and not _find_adblock_cosmetic_marker(body):
+            body = body.split("#", 1)[0]
+        tokens = [token for token in IDN_LABEL_TOKEN_SPLITTER.split(body) if token]
+        allow_single_label = bool(tokens and _looks_like_ip_token(tokens[0]))
+        for token in tokens:
+            candidate = _extract_idn_candidate_from_token(token, allow_single_label=allow_single_label)
+            if not candidate:
+                continue
+            key = (line_number, candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append({"line_number": line_number, "domain": candidate, "line": line})
+    return candidates
+
+
+def classify_idn_domain(domain: str) -> dict:
+    normalized = (domain or "").strip().strip(".").lower()
+    result = {
+        "domain": normalized,
+        "category": "ascii",
+        "severity": "info",
+        "ascii": normalized if not _contains_non_ascii(normalized) else None,
+        "unicode": normalized,
+        "scripts": [],
+        "mixed_script_labels": [],
+        "confusable_skeleton": None,
+        "warnings": [],
+    }
+    if not normalized:
+        result["category"] = "invalid"
+        result["severity"] = "warning"
+        result["warnings"].append("Empty domain candidate.")
+        return result
+
+    has_punycode = any(label.startswith("xn--") for label in normalized.split("."))
+    has_non_ascii = _contains_non_ascii(normalized)
+    unicode_domain = normalized
+    ascii_domain = normalized
+
+    if has_punycode:
+        decoded, decode_error = _decode_idna_domain(normalized)
+        if decode_error or not decoded:
+            result.update({
+                "category": "invalid-punycode",
+                "severity": "warning",
+                "ascii": normalized,
+                "unicode": None,
+            })
+            result["warnings"].append(f"Punycode label could not be decoded as valid IDNA: {decode_error}")
+            return result
+        unicode_domain = decoded.lower()
+
+    encoded, encode_error = _encode_idna_domain(unicode_domain)
+    if encode_error or not encoded:
+        result.update({
+            "category": "invalid-idn",
+            "severity": "warning",
+            "unicode": unicode_domain,
+        })
+        result["warnings"].append(f"Unicode domain could not be encoded as IDNA: {encode_error}")
+        return result
+    ascii_domain = encoded
+
+    label_script_rows = []
+    mixed_labels = []
+    for label in unicode_domain.split("."):
+        scripts = _label_scripts(label)
+        label_script_rows.append({"label": label, "scripts": scripts})
+        if len(scripts) > 1:
+            mixed_labels.append({"label": label, "scripts": scripts})
+
+    skeleton = _confusable_ascii_skeleton(unicode_domain)
+    skeleton_is_ascii = skeleton != unicode_domain.lower() and all(ord(character) < 128 for character in skeleton)
+    if mixed_labels or skeleton_is_ascii:
+        result["category"] = "homograph-risk"
+        result["severity"] = "warning"
+        if mixed_labels:
+            result["warnings"].append(
+                "At least one label mixes writing systems; review before trusting or broadening this rule."
+            )
+        if skeleton_is_ascii:
+            result["confusable_skeleton"] = skeleton
+            result["warnings"].append(
+                f"Known Cyrillic/Greek confusables resemble ASCII domain '{skeleton}'."
+            )
+    elif has_punycode:
+        result["category"] = "punycode"
+        result["warnings"].append("Punycode A-label decodes to a Unicode IDN; review the displayed Unicode form.")
+    elif has_non_ascii:
+        result["category"] = "idn"
+        result["warnings"].append("Unicode IDN label is validly encodable; keep the ASCII A-label nearby for audits.")
+
+    result.update({
+        "ascii": ascii_domain,
+        "unicode": unicode_domain,
+        "scripts": label_script_rows,
+        "mixed_script_labels": mixed_labels,
+    })
+    return result
+
+
+def build_idn_homograph_report(lines: list[str], max_findings: int = 50) -> dict:
+    counts: dict[str, int] = {}
+    findings: list[dict] = []
+    warning_count = 0
+    punycode_count = 0
+    idn_count = 0
+    candidates = extract_idn_domain_candidates(lines)
+    for candidate in candidates:
+        classification = classify_idn_domain(candidate["domain"])
+        category = classification["category"]
+        counts[category] = counts.get(category, 0) + 1
+        if category in {"idn", "punycode", "homograph-risk"}:
+            idn_count += 1
+        if any(label.startswith("xn--") for label in str(classification.get("ascii") or "").split(".")):
+            punycode_count += 1
+        if classification["severity"] == "warning":
+            warning_count += 1
+        if category != "ascii" and len(findings) < max_findings:
+            findings.append({
+                "line_number": candidate["line_number"],
+                "domain": candidate["domain"],
+                "category": category,
+                "severity": classification["severity"],
+                "ascii": classification.get("ascii"),
+                "unicode": classification.get("unicode"),
+                "confusable_skeleton": classification.get("confusable_skeleton"),
+                "warnings": classification.get("warnings") or [],
+                "line": candidate["line"],
+            })
+    return {
+        "schema": "hostsfileget.idn-homograph-report.v1",
+        "total_lines": len(lines),
+        "candidate_domains": len(candidates),
+        "idn_domains": idn_count,
+        "punycode_domains": punycode_count,
+        "warning_count": warning_count,
+        "counts": counts,
+        "findings": findings,
+        "finding_limit": max_findings,
+        "truncated_findings": max(0, len(candidates) - len(findings)),
+        "warnings": [
+            "This report is advisory; HostsFileGet does not automatically block or rewrite IDNs.",
+            "Punycode A-labels and Unicode U-labels can be equivalent under IDNA, but visual spoofing is a separate security problem.",
+            "Mixed-script and small confusable checks are deterministic heuristics, not a complete Unicode security engine.",
+        ],
+    }
+
+
+def format_idn_homograph_report(report: dict) -> str:
+    counts = report.get("counts") or {}
+    lines = [
+        "IDN and homograph report",
+        f"Lines: {int(report.get('total_lines') or 0):,}",
+        f"IDN/Punycode candidates: {int(report.get('candidate_domains') or 0):,}",
+        f"Valid IDN domains: {int(report.get('idn_domains') or 0):,}",
+        f"Punycode A-labels: {int(report.get('punycode_domains') or 0):,}",
+        f"Warning candidates: {int(report.get('warning_count') or 0):,}",
+        "",
+        "Counts:",
+    ]
+    if counts:
+        for category in sorted(counts):
+            lines.append(f"- {category}: {int(counts[category]):,}")
+    else:
+        lines.append("- none: 0")
+    lines.extend(["", "Warnings:"])
+    for warning in report.get("warnings") or []:
+        lines.append(f"- {warning}")
+    findings = report.get("findings") or []
+    if findings:
+        lines.extend(["", "Findings:"])
+        for finding in findings:
+            details = []
+            if finding.get("ascii"):
+                details.append(f"ASCII={finding.get('ascii')}")
+            if finding.get("unicode"):
+                details.append(f"Unicode={finding.get('unicode')}")
+            if finding.get("confusable_skeleton"):
+                details.append(f"Skeleton={finding.get('confusable_skeleton')}")
+            detail_text = "; ".join(details)
+            warning_text = " ".join(finding.get("warnings") or [])
+            line_preview = str(finding.get("line") or "").strip()
+            if len(line_preview) > 120:
+                line_preview = line_preview[:117] + "..."
+            lines.append(
+                f"- Line {finding.get('line_number')}: {finding.get('category')} "
+                f"{detail_text} - {warning_text} [{line_preview}]"
+            )
+        truncated = int(report.get("truncated_findings") or 0)
+        if truncated:
+            lines.append(f"- ... {truncated:,} additional candidate(s) omitted.")
+    else:
+        lines.extend(["", "Findings: none"])
+    return "\n".join(lines)
 
 
 def _find_adblock_cosmetic_marker(stripped: str) -> tuple[str, str] | None:
@@ -8633,6 +8981,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="Hosts Health Scan...", command=self.show_health_scan)
         tools_menu.add_command(label="Adblock Syntax Lint...", command=self.show_adblock_syntax_lint)
         tools_menu.add_command(label="Rule Tier Report...", command=self.show_rule_tier_report)
+        tools_menu.add_command(label="IDN / Homograph Report...", command=self.show_idn_homograph_report)
         tools_menu.add_command(label="DNS Bypass Diagnostics...", command=self.show_dns_bypass_diagnostics)
         tools_menu.add_command(label="DNS Interoperability Pack...", command=self.show_dns_integration_pack)
         tools_menu.add_command(label="Cloud DNS Adapters...", command=self.show_cloud_dns_adapters)
@@ -9633,6 +9982,17 @@ class HostsFileEditor:
             "Rule tier report",
             "Separate exact hosts entries from subdomain, wildcard, regex, path, and provider-only rules.",
             format_rule_tier_report(report),
+            tone="warning" if report["warning_count"] else "info",
+            width=920,
+            height=680,
+        )
+
+    def show_idn_homograph_report(self):
+        report = build_idn_homograph_report(self.get_lines())
+        self._show_text_report_dialog(
+            "IDN and homograph report",
+            "Review Punycode, Unicode IDNs, mixed scripts, and obvious confusable labels.",
+            format_idn_homograph_report(report),
             tone="warning" if report["warning_count"] else "info",
             width=920,
             height=680,
@@ -13926,6 +14286,24 @@ def _cli_rule_tier_report(input_path: str, output_path: str | None = None) -> in
     return 0
 
 
+def _cli_idn_homograph_report(input_path: str, output_path: str | None = None) -> int:
+    try:
+        lines = read_text_file_lines(input_path)
+        report = build_idn_homograph_report(lines)
+        if output_path:
+            output_dir = os.path.dirname(os.path.abspath(output_path))
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+            write_text_file_atomic(output_path, json.dumps(report, indent=2))
+    except (OSError, ValueError) as exc:
+        _cli_print(f"IDN homograph report failed: {exc}")
+        return 2
+    _cli_print(format_idn_homograph_report(report))
+    if output_path:
+        _cli_print(f"Wrote IDN homograph report to {output_path}")
+    return 0
+
+
 def _cli_activity_report(output_path: str | None) -> int:
     report = build_scheduler_activity_report()
     _cli_print(format_scheduler_activity_report(report))
@@ -14196,6 +14574,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--adblock-quarantine",
         "--rule-tier-report",
         "--rule-tier-output",
+        "--idn-report",
+        "--idn-output",
         "--source-health",
         "--source-health-output",
         "--source-health-timeout",
@@ -14225,6 +14605,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--adblock-quarantine=",
         "--rule-tier-report=",
         "--rule-tier-output=",
+        "--idn-report=",
+        "--idn-output=",
         "--source-health-output=",
         "--source-health-timeout=",
         "--source-health-workers=",
@@ -14288,6 +14670,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     )
     parser.add_argument("--rule-tier-report", metavar="INPUT", help="Report exact, subdomain, wildcard, regex, and provider-only rule tiers without launching the GUI.")
     parser.add_argument("--rule-tier-output", metavar="PATH", help="Write the detailed rule tier JSON report to PATH.")
+    parser.add_argument("--idn-report", metavar="INPUT", help="Report Punycode, Unicode IDN, and homograph-risk candidates without launching the GUI.")
+    parser.add_argument("--idn-output", metavar="PATH", help="Write the detailed IDN homograph JSON report to PATH.")
     parser.add_argument("--source-health", action="store_true", help="Check curated source reachability and print a summary without launching the GUI.")
     parser.add_argument("--source-health-output", metavar="PATH", help="Write detailed source-health JSON to PATH.")
     parser.add_argument("--source-health-timeout", type=float, default=SOURCE_HEALTH_TIMEOUT_SECONDS, help="Per-source network timeout in seconds.")
@@ -14377,6 +14761,10 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         if not args.rule_tier_report:
             parser.error("--rule-tier-output requires --rule-tier-report INPUT")
         return _cli_rule_tier_report(args.rule_tier_report, args.rule_tier_output)
+    if args.idn_report or args.idn_output:
+        if not args.idn_report:
+            parser.error("--idn-output requires --idn-report INPUT")
+        return _cli_idn_homograph_report(args.idn_report, args.idn_output)
     if args.source_health:
         return _cli_source_health(
             args.source_health_output,

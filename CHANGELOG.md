@@ -127,6 +127,12 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added **Tools > Rule Tier Report...** plus `--rule-tier-report` and `--rule-tier-output` for read-only review before hosts conversion.
 - Documented the exact-hostname hosts boundary and downstream DNS-provider handoff guidance in `docs/rule-tiers.md`.
 
+**IDN and homograph report**
+- Added IDN/Punycode classification for hosts rows, URL hostnames, dnsmasq rows, and DNS-compatible adblock tokens.
+- Added mixed-script and small Cyrillic/Greek confusable warnings without changing cleaned-save behavior or automatically blocking IDNs.
+- Added **Tools > IDN / Homograph Report...** plus `--idn-report` and `--idn-output` for read-only review.
+- Documented the advisory workflow, limitations, and IDNA/NRPT sources in `docs/idn-homograph.md`.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

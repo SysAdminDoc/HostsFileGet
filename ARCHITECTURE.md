@@ -60,6 +60,7 @@ It is not a DNS server, browser ad blocker, cloud filtering service, or endpoint
 | `docs/cloud-dns-adapters.md` | Plan-only NextDNS and Control D adapters plus local CSV log import behavior |
 | `docs/adblock-lint.md` | Adblock syntax lint and browser-only rule quarantine behavior |
 | `docs/rule-tiers.md` | Exact, subdomain, wildcard, regex, path, exception, and browser-only tier reporting |
+| `docs/idn-homograph.md` | IDN/Punycode decoding and deterministic homograph-risk report behavior |
 | `docs/accessibility.md` | Contrast audit, font assumptions, and manual Windows accessibility release checks |
 | `docs/i18n.md` | String catalog schema, fallback behavior, and localization guardrails |
 | `CLAUDE.md` | Compact architecture and gotchas snapshot for agents |
@@ -122,6 +123,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Accessibility audit: `relative_luminance`, `contrast_ratio`, `build_accessibility_audit_report`, `format_accessibility_audit_report`.
 - Adblock syntax linting: `classify_adblock_rule_line`, `build_adblock_syntax_report`, `format_adblock_syntax_report`, `quarantine_adblock_rule_lines`.
 - Rule tier reporting: `classify_rule_tier_line`, `build_rule_tier_report`, `format_rule_tier_report`.
+- IDN/homograph reporting: `classify_idn_domain`, `build_idn_homograph_report`, `format_idn_homograph_report`.
 - Cleanup/export/search helpers: `remove_lines_by_indices`, `rewrite_block_sink_ip`, `scan_suspicious_redirects`, `build_export_domain_records`, `build_dns_integration_export`, `build_cloud_dns_adapter_plan`, `format_dns_integration_pack_report`, `format_cloud_dns_adapter_catalog`, `export_lines_as_format`, `export_lines_as_bytes`, `strip_lines_by_category`.
 - Source analytics: `find_sources_containing_domain`, `summarize_source_contributions`, `build_source_domain_index`, `build_source_overlap_report`, `categorize_entries_by_domain_hint`, `classify_source_freshness`.
 - Provenance and pinned-domain helpers: `append_provenance_event`, `read_provenance_events`, `build_entry_provenance_report`, `format_entry_provenance_report`, `build_pinned_export_payload`, `parse_pinned_import_payload`, `sanitize_pinned_domains`.
@@ -144,7 +146,7 @@ Primary responsibilities:
 - Backups, restore, compare, panic restore, hosts disable/enable.
 - Import UI, source catalog, custom sources, manual imports, DNS log imports, whitelist import.
 - Search, removal, find/replace, adblock quarantine, context menu commands.
-- Source reports, provenance log view, entry provenance, health scan, adblock syntax lint, rule tier report, false-positive triage, preferences, scheduler wizard.
+- Source reports, provenance log view, entry provenance, health scan, adblock syntax lint, rule tier report, IDN/homograph report, false-positive triage, preferences, scheduler wizard.
 - Worker thread queue handling and safe Tk callback scheduling with `_safe_after`.
 
 `HostsFileEditor` is large enough that future refactors should split by behavior after tests are in place:
@@ -190,6 +192,7 @@ The CLI functions live near the bottom of `hosts_editor.py` and intentionally sh
 - `_cli_adblock_lint`
 - `_cli_adblock_quarantine`
 - `_cli_rule_tier_report`
+- `_cli_idn_homograph_report`
 - `_cli_source_health`
 - `_handle_cli_args`
 
@@ -272,6 +275,7 @@ Required before large refactors:
 - PyInstaller packaging should be built from pinned dependencies and scanned for the PyInstaller CVE class noted in the roadmap.
 - DNS-over-HTTPS, DNS-over-QUIC, browser private DNS, VPN DNS, and hardcoded device resolvers can bypass the hosts file entirely.
 - Browser adblock syntax includes cosmetic, scriptlet, exception, and URL-path rules that hosts files cannot represent; keep these as lint/quarantine findings instead of broad domain rewrites.
+- IDN/Punycode and homograph findings are advisory. Do not auto-block all IDNs; legitimate internationalized domains are common and false positives are expected.
 
 ## Refactor Rules
 

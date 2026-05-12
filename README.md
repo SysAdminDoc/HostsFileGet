@@ -53,6 +53,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - remove matching entries with selection + preview
   - adblock syntax linting plus cosmetic/path-rule quarantine for hosts-safe reviews
   - rule tier reporting for exact, subdomain, wildcard, regex, path, exception, and browser-only rules
+  - IDN/Punycode and homograph-risk reporting before trusting mixed internationalized lists
   - false-positive triage for whitelist, pin, source-match, and upstream report decisions
   - entry provenance view for import-section ownership, source matches, and local audit events
 - Export adapters:
@@ -241,6 +242,12 @@ Inspect exact/wildcard/regex/provider-only rule tiers before hosts conversion:
 python hosts_editor.py --rule-tier-report .\filters.txt --rule-tier-output .\rule-tiers.json
 ```
 
+Review IDN/Punycode and mixed-script homograph candidates with:
+
+```powershell
+python hosts_editor.py --idn-report .\filters.txt --idn-output .\idn-report.json
+```
+
 Run the deterministic large-file benchmark with:
 
 ```powershell
@@ -268,6 +275,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Cloud DNS adapters: `docs/cloud-dns-adapters.md`
 - Adblock syntax lint: `docs/adblock-lint.md`
 - Rule tier report: `docs/rule-tiers.md`
+- IDN and homograph report: `docs/idn-homograph.md`
 - Troubleshooting and hosts-file limits: `TROUBLESHOOTING.md`
 - Config schema: `docs/config-schema.md`
 - Curated source manifest: `docs/source-manifest.md`
