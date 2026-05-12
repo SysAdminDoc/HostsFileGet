@@ -181,6 +181,9 @@ SOURCE_CORPUS_CACHE_MAX_ENTRIES = 24
 SOURCE_METRICS_HISTORY_MAX_SOURCES = 200
 SOURCE_METRICS_HISTORY_MAX_POINTS = 30
 SOURCE_METRICS_REPORT_MAX_SOURCES = 30
+IMPORT_FETCH_MAX_WORKERS = 4
+IMPORT_FETCH_MAX_ATTEMPTS = 3
+IMPORT_FETCH_RETRY_DELAY_SECONDS = 0.25
 FILTER_QUERY_HISTORY_MAX_ITEMS = 25
 FILTER_QUERY_MAX_LENGTH = 240
 FILTER_BUILDER_MATCH_LIMIT = 50
@@ -3682,6 +3685,59 @@ def fetch_source_with_cache(
             except Exception:
                 pass
         raise
+
+
+def resolve_import_fetch_worker_count(source_count, max_workers=IMPORT_FETCH_MAX_WORKERS) -> int:
+    try:
+        source_count = int(source_count)
+    except (TypeError, ValueError):
+        return 0
+    if source_count <= 0:
+        return 0
+    try:
+        max_workers = int(max_workers)
+    except (TypeError, ValueError):
+        max_workers = IMPORT_FETCH_MAX_WORKERS
+    return max(1, min(source_count, max_workers))
+
+
+def fetch_source_with_retries(
+    url: str,
+    metadata_store: dict[str, dict] | None = None,
+    cache_dir: str | None = None,
+    timeout: float = 15,
+    max_attempts: int = IMPORT_FETCH_MAX_ATTEMPTS,
+    retry_delay: float = IMPORT_FETCH_RETRY_DELAY_SECONDS,
+    sleep_fn=time.sleep,
+    fetch_fn=fetch_source_with_cache,
+) -> tuple[list[str], dict[str, str | int], str, int]:
+    try:
+        attempt_limit = int(max_attempts)
+    except (TypeError, ValueError):
+        attempt_limit = IMPORT_FETCH_MAX_ATTEMPTS
+    attempt_limit = max(1, attempt_limit)
+    metadata_snapshot = dict(metadata_store) if isinstance(metadata_store, dict) else {}
+
+    for attempt in range(1, attempt_limit + 1):
+        try:
+            raw_lines, cache_metadata, cache_status = fetch_fn(
+                url,
+                metadata_snapshot,
+                cache_dir=cache_dir,
+                timeout=timeout,
+            )
+            return raw_lines, cache_metadata, cache_status, attempt
+        except Exception:
+            if attempt >= attempt_limit:
+                raise
+            try:
+                delay = float(retry_delay)
+            except (TypeError, ValueError):
+                delay = 0
+            if delay > 0 and sleep_fn is not None:
+                sleep_fn(delay)
+
+    raise RuntimeError("source fetch retry loop exited unexpectedly")
 
 
 def _coerce_source_manifest_schema_version(value) -> int:
@@ -12792,7 +12848,7 @@ class HostsFileEditor:
         for bullet in (
             "Save Cleaned previews normalization and whitelist filtering before write.",
             "Save Raw preserves the editor exactly as shown.",
-            "Batch imports stay sequential so progress and failures are easier to trust.",
+            "Batch imports fetch several sources at once while keeping reviewed output in source order.",
             "Dry-run mode lets you validate changes without touching disk.",
         ):
             ttk.Label(hero, text=f"- {bullet}", style="SectionBody.TLabel", wraplength=520, justify="left").pack(anchor="w", pady=(6, 0))
@@ -17127,7 +17183,7 @@ class HostsFileEditor:
         self.stop_import_flag.clear()
         self._set_import_controls_enabled(False)
         self.stop_btn.configure(state="normal")
-        self._set_status_hint("Batch imports run sequentially. Stop waits for the current download step.")
+        self._set_status_hint("Batch imports fetch up to 4 sources at once. Stop waits for in-flight downloads.")
         
         # UI Prep
         self.progress_status_label.config(text=f"0 / {len(sources)} queued")
@@ -17172,55 +17228,96 @@ class HostsFileEditor:
         self.update_status("Warning: Stopping import after the current download step.", is_error=False)
 
     def _import_worker_thread(self, sources, mode):
-        accumulated_lines = []
         total = len(sources)
+        processed_by_index = [None] * total
         success_count = 0
+        completed_count = 0
         failure_messages = []
         metadata_snapshot = dict(getattr(self, "source_cache_metadata", {}))
         cache_dir = getattr(self, "source_cache_dir", get_source_cache_dir())
-        
-        for i, (name, url) in enumerate(sources):
-            if self.stop_import_flag.is_set():
-                self.import_queue.put(("cancelled",))
-                return
+        worker_count = resolve_import_fetch_worker_count(total)
 
-            self.import_queue.put(("progress", i, total, name))
-            
-            try:
-                raw_lines, cache_metadata, cache_status = fetch_source_with_cache(
-                    url,
-                    metadata_snapshot,
-                    cache_dir=cache_dir,
-                    timeout=15,
-                )
-                metadata_snapshot[url] = cache_metadata
-                if looks_like_html_document(raw_lines):
-                    raise ValueError("Received HTML instead of a hosts list.")
+        if worker_count == 0:
+            self.import_queue.put(("done", [], total, success_count, failure_messages))
+            return
+
+        def fetch_and_process(index, name, url, source_metadata_snapshot):
+            raw_lines, cache_metadata, cache_status, attempts = fetch_source_with_retries(
+                url,
+                source_metadata_snapshot,
+                cache_dir=cache_dir,
+                timeout=15,
+            )
+            if looks_like_html_document(raw_lines):
+                raise ValueError("Received HTML instead of a hosts list.")
+            processed = self._apply_import_mode_filter(name, raw_lines, mode)
+            return index, name, url, raw_lines, cache_metadata, cache_status, attempts, processed
+
+        if self.stop_import_flag.is_set():
+            self.import_queue.put(("cancelled",))
+            return
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+            future_to_source = {}
+            for index, (name, url) in enumerate(sources):
                 if self.stop_import_flag.is_set():
                     self.import_queue.put(("cancelled",))
                     return
+                future = executor.submit(fetch_and_process, index, name, url, dict(metadata_snapshot))
+                future_to_source[future] = (index, name, url)
 
-                # Record success metadata so the "Check Domain" tool can
-                # cross-reference without re-fetching, and tooltips can show
-                # freshness.
-                self.import_queue.put(("source_fetched", name, url, raw_lines, cache_metadata, cache_status))
-                if cache_status == "not_modified":
-                    self.import_queue.put(("log", f"{name}: upstream returned 304; reused cached source body.", False))
-                elif cache_status == "cache_fallback":
-                    self.import_queue.put(("log", f"{name}: network fetch failed; reused cached source body.", False))
-
-                processed = self._apply_import_mode_filter(name, raw_lines, mode)
+            for future in concurrent.futures.as_completed(future_to_source):
+                index, name, url = future_to_source[future]
                 if self.stop_import_flag.is_set():
+                    for pending in future_to_source:
+                        pending.cancel()
                     self.import_queue.put(("cancelled",))
                     return
+
+                try:
+                    (
+                        _index,
+                        _name,
+                        _url,
+                        raw_lines,
+                        cache_metadata,
+                        cache_status,
+                        attempts,
+                        processed,
+                    ) = future.result()
+                    metadata_snapshot[url] = cache_metadata
+                    if self.stop_import_flag.is_set():
+                        for pending in future_to_source:
+                            pending.cancel()
+                        self.import_queue.put(("cancelled",))
+                        return
+
+                    # Record success metadata so the "Check Domain" tool can
+                    # cross-reference without re-fetching, and tooltips can show
+                    # freshness.
+                    self.import_queue.put(("source_fetched", name, url, raw_lines, cache_metadata, cache_status))
+                    if attempts > 1:
+                        self.import_queue.put(("log", f"{name}: succeeded after {attempts} attempts.", False))
+                    if cache_status == "not_modified":
+                        self.import_queue.put(("log", f"{name}: upstream returned 304; reused cached source body.", False))
+                    elif cache_status == "cache_fallback":
+                        self.import_queue.put(("log", f"{name}: network fetch failed; reused cached source body.", False))
+
+                    processed_by_index[index] = processed
+                    success_count += 1
+
+                except Exception as e:
+                    failure_messages.append(f"{name}: {e}")
+                    self.import_queue.put(("log", f"Failed to import {name}: {e}", True))
+                    # Continue to next list even if one fails
+
+                completed_count += 1
+                self.import_queue.put(("progress", completed_count - 1, total, name))
+
+        accumulated_lines = []
+        for processed in processed_by_index:
+            if processed:
                 accumulated_lines.extend(processed)
-                success_count += 1
-                
-            except Exception as e:
-                failure_messages.append(f"{name}: {e}")
-                self.import_queue.put(("log", f"Failed to import {name}: {e}", True))
-                # Continue to next list even if one fails
-        
         self.import_queue.put(("done", accumulated_lines, total, success_count, failure_messages))
 
     def _check_import_queue(self):
@@ -17240,7 +17337,7 @@ class HostsFileEditor:
                     i, total, name = msg[1], msg[2], msg[3]
                     self.progress_bar['value'] = i + 1
                     self.progress_status_label.config(text=f"{i + 1} / {total}  {name}")
-                    self.update_status(f"Importing source {i+1} of {total}: {name}...")
+                    self.update_status(f"Fetched source {i+1} of {total}: {name}.")
 
                 elif msg_type == "source_fetched":
                     name, url, raw_lines = msg[1], msg[2], msg[3]

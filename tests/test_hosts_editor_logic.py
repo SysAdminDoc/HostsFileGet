@@ -123,6 +123,7 @@ from hosts_editor import (
     export_provenance_events,
     extract_blocking_domains_from_lines,
     fetch_source_with_cache,
+    fetch_source_with_retries,
     filter_provenance_events,
     find_keyword_match_line_indices,
     find_profile_snapshot,
@@ -202,6 +203,7 @@ from hosts_editor import (
     remove_false_positive_matches_from_lines,
     remove_lines_by_indices,
     remove_watch_expression,
+    resolve_import_fetch_worker_count,
     resolve_saved_state_hashes,
     rewrite_block_sink_ip,
     sanitize_config_snapshot,
@@ -1374,6 +1376,41 @@ class HostsEditorLogicTests(unittest.TestCase):
             self.assertEqual(lines, ["0.0.0.0 preserved.example"])
             self.assertEqual(refreshed_metadata["etag"], '"v1"')
             self.assertEqual(cached_after, cached_before)
+
+    def test_fetch_source_with_retries_retries_then_succeeds(self):
+        calls = []
+        sleeps = []
+
+        def fake_fetch(url, metadata_store, cache_dir=None, timeout=15):
+            calls.append((url, dict(metadata_store), cache_dir, timeout))
+            if len(calls) == 1:
+                raise hosts_editor.urllib.error.URLError("temporary")
+            return ["0.0.0.0 retry.example"], {"etag": '"v2"'}, "network"
+
+        lines, metadata, status, attempts = fetch_source_with_retries(
+            "https://example.com/retry.txt",
+            {"https://example.com/retry.txt": {"etag": '"v1"'}},
+            cache_dir="cache-dir",
+            timeout=7,
+            max_attempts=3,
+            retry_delay=0.01,
+            sleep_fn=sleeps.append,
+            fetch_fn=fake_fetch,
+        )
+
+        self.assertEqual(lines, ["0.0.0.0 retry.example"])
+        self.assertEqual(metadata["etag"], '"v2"')
+        self.assertEqual(status, "network")
+        self.assertEqual(attempts, 2)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(sleeps, [0.01])
+
+    def test_resolve_import_fetch_worker_count_clamps_to_sources_and_limit(self):
+        self.assertEqual(resolve_import_fetch_worker_count(0), 0)
+        self.assertEqual(resolve_import_fetch_worker_count(1), 1)
+        self.assertEqual(resolve_import_fetch_worker_count(99, max_workers=4), 4)
+        self.assertEqual(resolve_import_fetch_worker_count(2, max_workers=99), 2)
+        self.assertEqual(resolve_import_fetch_worker_count("bad"), 0)
 
     def test_find_sources_containing_domain_accepts_structured_cache_entries(self):
         source_cache = {
@@ -2869,6 +2906,56 @@ profile:
         self.assertEqual(len(failure_messages), 1)
         self.assertIn("size cap", failure_messages[0])
 
+    def test_import_worker_preserves_source_order_after_parallel_fetches(self):
+        class FakeEditor:
+            def __init__(self):
+                import tempfile
+
+                self.import_queue = queue.Queue()
+                self.stop_import_flag = threading.Event()
+                self.source_cache_metadata = {}
+                self._source_cache_tmpdir = tempfile.TemporaryDirectory()
+                self.source_cache_dir = self._source_cache_tmpdir.name
+
+            def _apply_import_mode_filter(self, source_name, lines, mode):
+                return [f"# {source_name}"] + lines
+
+        def fake_fetch(url, metadata_store, cache_dir=None, timeout=15):
+            if url.endswith("/first.txt"):
+                hosts_editor.time.sleep(0.02)
+                return ["0.0.0.0 first.example"], {"etag": '"first"'}, "network", 1
+            return ["0.0.0.0 second.example"], {"etag": '"second"'}, "network", 1
+
+        editor = FakeEditor()
+        try:
+            with mock.patch("hosts_editor.fetch_source_with_retries", side_effect=fake_fetch):
+                HostsFileEditor._import_worker_thread(
+                    editor,
+                    [
+                        ("First", "https://example.com/first.txt"),
+                        ("Second", "https://example.com/second.txt"),
+                    ],
+                    "Raw",
+                )
+        finally:
+            editor._source_cache_tmpdir.cleanup()
+
+        messages = []
+        while not editor.import_queue.empty():
+            messages.append(editor.import_queue.get_nowait())
+
+        done = [message for message in messages if message[0] == "done"][-1]
+        self.assertEqual(
+            done[1],
+            [
+                "# First",
+                "0.0.0.0 first.example",
+                "# Second",
+                "0.0.0.0 second.example",
+            ],
+        )
+        self.assertEqual(done[3], 2)
+
     def test_import_worker_cancels_if_stop_requested_during_final_download(self):
         class FakeEditor:
             def __init__(self):
@@ -2917,7 +3004,7 @@ profile:
         while not editor.import_queue.empty():
             messages.append(editor.import_queue.get_nowait()[0])
 
-        self.assertEqual(messages, ["progress", "cancelled"])
+        self.assertEqual(messages, ["cancelled"])
 
     def test_ipv4_regex_matches_high_octet_addresses(self):
         """Regression: IPV4_REGEX must match IPs with octets >= 200."""

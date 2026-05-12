@@ -196,6 +196,11 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added compact `source_metrics_history` snapshots after successful GUI imports and CLI `--update` fetches.
 - Added **Source Freshness & Growth...** for freshness buckets, retained domain-count deltas, and ASCII growth charts.
 
+**Parallel source imports**
+- Batch imports now fetch up to 4 sources concurrently with bounded retry attempts per source.
+- Completed imports keep the user's selected source order in the editor output while reporting per-source cache reuse, retry, and failure status through the existing import queue.
+- Documented concurrency, cancellation, and cache-fallback boundaries in `docs/parallel-imports.md`.
+
 **Virtualized large-list dialogs**
 - Reworked the **Remove Matches** review dialog to render paged checkbox rows instead of thousands of widgets at once.
 - Large match sets now keep per-line review and global select all/none behavior before the final preview.

@@ -95,6 +95,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F049 complete. Next roadmap item: F050 virtualized large-list views.
 - Completed F050: added a paged virtual-list helper and converted the Remove Matches review dialog to render bounded pages while preserving global selection state and preview behavior.
 - Updated `ROADMAP.md` to mark F050 complete. Next roadmap item: F051 parallel source fetcher with bounded retries.
+- Completed F051: added bounded parallel source imports, retry-wrapped fetches, source-order-preserving output merge, docs, and regression tests for retry behavior, worker clamping, and parallel completion order.
+- Updated `ROADMAP.md` to mark F051 complete. Next roadmap item: F045 source adapter plugin interface.
 
 ## Scope
 

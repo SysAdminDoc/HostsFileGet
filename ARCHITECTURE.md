@@ -61,6 +61,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `docs/source-health.md` | Source reachability checker and report format |
 | `docs/source-overlap.md` | Source overlap matrix behavior and limits |
 | `docs/source-metrics.md` | Source freshness and compact growth history behavior |
+| `docs/parallel-imports.md` | Concurrent source import behavior, retry limits, and cancellation boundary |
 | `docs/false-positive-triage.md` | Check Domain triage behavior, actions, and limits |
 | `docs/virtualized-lists.md` | Paged large-list dialog behavior and constraints |
 | `docs/entry-provenance.md` | Line-level provenance/blame report behavior and limits |
@@ -140,7 +141,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Config location and portable export: `get_primary_config_path`, `get_config_root_dir`, `build_config_location_report`, `write_portable_bundle_config`, `format_portable_bundle_export_summary`.
 - Source catalog loading: `sanitize_source_manifest`, `load_blocklist_sources_manifest`, `sanitize_source_bundle_catalog`, `load_source_bundle_catalog`, `format_source_bundle_catalog`, `format_source_bundle_report`.
 - i18n catalog loading: `normalize_locale_code`, `sanitize_i18n_catalog`, `load_i18n_catalog`, `translate_message`, `build_i18n_catalog_report`.
-- Source response caching: `fetch_source_with_cache`, `sanitize_source_cache_metadata`, `build_source_request_headers`.
+- Source response caching and import retries: `fetch_source_with_cache`, `fetch_source_with_retries`, `resolve_import_fetch_worker_count`, `sanitize_source_cache_metadata`, `build_source_request_headers`.
 - Source trust display: `build_source_trust_badges`, `source_trust_report_url`, `format_source_trust_details`.
 - Source health reporting: `check_source_health_record`, `build_source_health_report`, `summarize_source_health_results`.
 - False-positive triage: `build_false_positive_triage_report`, `format_false_positive_triage_report`, `add_domain_to_whitelist_text`, `remove_false_positive_matches_from_lines`.
