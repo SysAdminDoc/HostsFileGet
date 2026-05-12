@@ -25,6 +25,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F010 complete. Next roadmap item: F011 source overlap matrix.
 - Completed F011: added a fetched-source domain index, pairwise overlap report, Sources Report integration, docs, and regression tests for structured/legacy source corpus entries.
 - Updated `ROADMAP.md` to mark F011 complete. Next roadmap item: F012 entry provenance/blame panel.
+- Completed F012: added a line-level Entry Provenance report with import marker ownership, parsed entry details, fetched source matches, local provenance event correlation, menu/context-menu entry points, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F012 complete. Next roadmap item: F013 Windows DNS Client ETW import/live tail spike.
 
 ## Scope
 

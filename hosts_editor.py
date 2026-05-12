@@ -3778,6 +3778,176 @@ def remove_import_section(lines: list[str], section: dict) -> list[str]:
     return lines[:start] + lines[end + 1 :]
 
 
+def _provenance_event_domains(event: dict) -> set[str]:
+    domains: set[str] = set()
+    if not isinstance(event, dict):
+        return domains
+    value = event.get("domain")
+    if value:
+        domains.add(str(value).strip().lower().lstrip("."))
+    values = event.get("domains")
+    if isinstance(values, (list, tuple)):
+        for item in values:
+            clean = str(item).strip().lower().lstrip(".")
+            if clean:
+                domains.add(clean)
+    return {domain for domain in domains if domain}
+
+
+def _provenance_event_matches_domain(event: dict, domain: str) -> bool:
+    clean_domain = str(domain or "").strip().lower().lstrip(".")
+    if not clean_domain:
+        return False
+    for event_domain in _provenance_event_domains(event):
+        if (
+            clean_domain == event_domain
+            or clean_domain.endswith("." + event_domain)
+            or event_domain.endswith("." + clean_domain)
+        ):
+            return True
+    return False
+
+
+def build_entry_provenance_report(
+    lines: list[str],
+    line_no: int,
+    source_corpus: dict[str, object] | None = None,
+    provenance_events: list[dict] | None = None,
+) -> dict:
+    """Explain where one editor line appears to come from."""
+    line_count = len(lines or [])
+    report = {
+        "valid": False,
+        "error": "",
+        "line_no": line_no,
+        "line_count": line_count,
+        "raw_line": "",
+        "section": None,
+        "line_role": "outside_imports",
+        "entries": [],
+    }
+    if line_no < 1 or line_no > line_count:
+        report["error"] = f"Line {line_no} is outside the current editor range."
+        return report
+
+    idx = line_no - 1
+    raw_line = lines[idx]
+    parsed, transformed = parse_hosts_line_entries(raw_line)
+    sections = discover_import_sections(lines)
+    section_info = None
+    line_role = "outside_imports"
+    for section in sections:
+        start = int(section.get("start", -1))
+        end = int(section.get("end", -1))
+        if start <= idx <= end:
+            section_info = {
+                "name": section.get("name", ""),
+                "mode": section.get("mode", ""),
+                "start_line": start + 1,
+                "end_line": end + 1,
+            }
+            if idx == start:
+                line_role = "import_start_marker"
+            elif idx == end:
+                line_role = "import_end_marker"
+            else:
+                line_role = "inside_import"
+            break
+
+    events = provenance_events or []
+    entry_reports = []
+    for normalized, domain, is_block in parsed:
+        matching_events = [
+            event for event in events
+            if isinstance(event, dict) and _provenance_event_matches_domain(event, domain)
+        ]
+        entry_reports.append({
+            "normalized": normalized,
+            "domain": domain,
+            "is_block": is_block,
+            "source_matches": find_sources_containing_domain(domain, source_corpus or {}),
+            "provenance_events": matching_events[-10:],
+        })
+
+    report.update({
+        "valid": True,
+        "raw_line": raw_line,
+        "section": section_info,
+        "line_role": line_role,
+        "entries": entry_reports,
+        "transformed_by_parser": transformed,
+    })
+    return report
+
+
+def format_entry_provenance_report(report: dict) -> str:
+    """Render a line-level provenance report for a read-only dialog."""
+    if not report or not report.get("valid"):
+        return str((report or {}).get("error") or "No line selected.")
+
+    line_role_labels = {
+        "outside_imports": "outside import markers / manual or pre-existing content",
+        "inside_import": "inside imported source block",
+        "import_start_marker": "import section start marker",
+        "import_end_marker": "import section end marker",
+    }
+    lines = [
+        f"Line: {report.get('line_no')} of {report.get('line_count')}",
+        f"Role: {line_role_labels.get(report.get('line_role'), report.get('line_role'))}",
+        "",
+        "Raw line:",
+        str(report.get("raw_line", "")) or "(blank)",
+        "",
+    ]
+
+    section = report.get("section")
+    if section:
+        lines.extend([
+            "Import section:",
+            f"  Name: {section.get('name')}",
+            f"  Mode: {section.get('mode')}",
+            f"  Lines: {section.get('start_line')} to {section.get('end_line')}",
+            "",
+        ])
+    else:
+        lines.extend(["Import section:", "  (none detected)", ""])
+
+    entries = report.get("entries") or []
+    lines.append("Parsed entries:")
+    if not entries:
+        lines.append("  (no parseable hosts entries on this line)")
+    for entry in entries:
+        kind = "blocking" if entry.get("is_block") else "custom mapping"
+        lines.append(f"  - {entry.get('domain')} ({kind})")
+        lines.append(f"    Normalized: {entry.get('normalized')}")
+        source_matches = entry.get("source_matches") or []
+        if source_matches:
+            lines.append(f"    Fetched source matches: {', '.join(source_matches)}")
+        else:
+            lines.append("    Fetched source matches: none in current session")
+        event_rows = entry.get("provenance_events") or []
+        if event_rows:
+            lines.append("    Local provenance events:")
+            for event in event_rows:
+                ts = str(event.get("ts", ""))[:19] or "-"
+                kind_label = str(event.get("kind", ""))
+                source = str(event.get("source", "")) or "-"
+                domains_value = event.get("domains", [])
+                if isinstance(domains_value, (list, tuple)):
+                    domains_note = ",".join(str(item) for item in domains_value)
+                else:
+                    domains_note = str(domains_value or "")
+                note = event.get("note") or event.get("domain") or domains_note
+                lines.append(f"      {ts}  {kind_label:<16} source={source}  {note}")
+        else:
+            lines.append("    Local provenance events: none")
+    lines.extend([
+        "",
+        "Basis: current editor line, import-section markers, fetched source corpus, and local provenance JSONL.",
+    ])
+    return "\n".join(lines)
+
+
 def format_relative_time(iso_timestamp: str, now: float | None = None) -> str:
     """Render an ISO 8601 timestamp as a short relative string.
 
@@ -5301,6 +5471,7 @@ class HostsFileEditor:
         tools_menu.add_cascade(label="Targeted Cleanup", menu=cleanup_menu)
         tools_menu.add_separator()
         tools_menu.add_command(label="Check Domain...", command=self.show_check_domain)
+        tools_menu.add_command(label="Entry Provenance...", command=self.show_entry_provenance_panel)
         tools_menu.add_command(label="Hosts Health Scan...", command=self.show_health_scan)
         tools_menu.add_command(label="Sources Report...", command=self.show_sources_report)
         tools_menu.add_command(label="Goto Anything...", command=self.show_goto_anything)
@@ -7550,6 +7721,7 @@ class HostsFileEditor:
         menu.add_command(label="Ping domain", command=self._ctx_ping_domain)
         menu.add_separator()
         menu.add_command(label="Check this domain...", command=self._ctx_check_domain)
+        menu.add_command(label="Entry provenance...", command=self._ctx_entry_provenance)
         self._editor_context_menu = menu
 
     def _ctx_line_info(self):
@@ -7685,6 +7857,38 @@ class HostsFileEditor:
             f"Most recent {len(lines) - 2} audit events from {path}.",
             "\n".join(lines),
             tone="info",
+        )
+
+    def show_entry_provenance_panel(self, line_no: int | None = None):
+        """Show a line-level provenance/blame report for the editor."""
+        if line_no is None:
+            try:
+                line_no = int(self.text_area.index("insert").split('.')[0])
+            except (tk.TclError, ValueError):
+                line_no = 1
+        base_dir = os.path.dirname(self.config_path) or get_app_config_dir()
+        path = os.path.join(base_dir, PROVENANCE_FILENAME)
+        events = read_provenance_events(path, limit=500)
+        report = build_entry_provenance_report(
+            self.get_lines(),
+            int(line_no),
+            self._source_corpus_cache,
+            events,
+        )
+        if not report.get("valid"):
+            self._show_notice_dialog(
+                "Entry provenance unavailable",
+                report.get("error") or "No editor line is selected.",
+                tone="warning",
+            )
+            return
+        self._show_text_report_dialog(
+            "Entry provenance",
+            "Line-level blame from import markers, fetched source matches, and the local provenance log.",
+            format_entry_provenance_report(report),
+            tone="info",
+            width=860,
+            height=620,
         )
 
     def show_pinned_domains(self):
@@ -7868,6 +8072,13 @@ class HostsFileEditor:
     def _ctx_check_domain(self):
         _, _, domain = self._ctx_line_info()
         self.show_check_domain(initial_domain=domain)
+
+    def _ctx_entry_provenance(self):
+        line_no, _, _ = self._ctx_line_info()
+        if line_no is None:
+            self.update_status("No editor line detected at cursor.", is_error=True)
+            return
+        self.show_entry_provenance_panel(line_no=line_no)
 
     def toggle_selection_comment(self, _event=None):
         try:

@@ -31,7 +31,7 @@ Non-negotiables:
 - [x] F009 - Source trust badges (`docs/source-trust.md`, deterministic badges, source picker/preview display)
 - [x] F010 - False-positive triage flow (`docs/false-positive-triage.md`, Check Domain actions, triage helpers/tests)
 - [x] F011 - Source overlap matrix (`docs/source-overlap.md`, fetched-source domain index, Sources Report matrix)
-- [ ] F012 - Entry provenance/blame panel
+- [x] F012 - Entry provenance/blame panel (`docs/entry-provenance.md`, Tools/context report, import/source/audit correlation)
 - [ ] F013 - Windows DNS Client ETW import/live tail spike
 - [ ] F014 - DoH/DoT/DoQ bypass diagnostics
 - [ ] F015 - Named profile data model groundwork
@@ -267,7 +267,7 @@ Legend:
 1. Completed - Documentation and architecture baseline: F001, F024.
 2. Completed - CI and release hygiene: F002, F003, F004.
 3. Completed - Config and source-data foundations: F005-F009.
-4. Next - Explainability and diagnostics: F012, F013, F014.
+4. Next - Explainability and diagnostics: F013, F014.
 5. Profile groundwork and migrations: F015, F022, F023.
 6. Quality gates: F016, F017, F018, F019.
 7. Accessibility and i18n foundations: F020, F021.

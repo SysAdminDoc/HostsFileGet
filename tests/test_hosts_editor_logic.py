@@ -26,6 +26,7 @@ from hosts_editor import (
     append_provenance_event,
     add_domain_to_whitelist_text,
     build_false_positive_triage_report,
+    build_entry_provenance_report,
     build_pinned_export_payload,
     build_source_domain_index,
     build_source_health_report,
@@ -63,6 +64,7 @@ from hosts_editor import (
     find_keyword_match_line_indices,
     find_sources_containing_domain,
     format_relative_time,
+    format_entry_provenance_report,
     format_false_positive_triage_report,
     format_source_trust_badges,
     format_source_overlap_report,
@@ -1787,6 +1789,53 @@ class HostsEditorLogicTests(unittest.TestCase):
         sections = discover_import_sections(lines)
         trimmed = remove_import_section(lines, sections[0])
         self.assertEqual(trimmed, ["0.0.0.0 before.example", "0.0.0.0 after.example"])
+
+    def test_entry_provenance_report_blames_import_source_and_events(self):
+        lines = [
+            "0.0.0.0 manual.example",
+            "# --- Normalized Import Start: BigSource ---",
+            "0.0.0.0 ads.example",
+            "# --- Normalized Import End: BigSource ---",
+        ]
+        report = build_entry_provenance_report(
+            lines,
+            3,
+            source_corpus={
+                "big": {"name": "BigSource", "text": "0.0.0.0 ads.example\n"},
+            },
+            provenance_events=[
+                {"ts": "2026-05-12T10:00:00", "kind": "pin", "domain": "other.example", "source": "test"},
+                {"ts": "2026-05-12T10:01:00", "kind": "whitelist_add", "domain": "ads.example", "source": "triage"},
+            ],
+        )
+
+        self.assertTrue(report["valid"])
+        self.assertEqual(report["line_role"], "inside_import")
+        self.assertEqual(report["section"]["name"], "BigSource")
+        self.assertEqual(report["entries"][0]["domain"], "ads.example")
+        self.assertEqual(report["entries"][0]["source_matches"], ["BigSource"])
+        self.assertEqual(len(report["entries"][0]["provenance_events"]), 1)
+        formatted = format_entry_provenance_report(report)
+        self.assertIn("Import section:", formatted)
+        self.assertIn("BigSource", formatted)
+        self.assertIn("whitelist_add", formatted)
+
+    def test_entry_provenance_report_handles_marker_and_out_of_range(self):
+        lines = [
+            "# --- Raw Import Start: Foo ---",
+            "0.0.0.0 a.example",
+            "# --- Raw Import End: Foo ---",
+        ]
+
+        marker_report = build_entry_provenance_report(lines, 1)
+        self.assertTrue(marker_report["valid"])
+        self.assertEqual(marker_report["line_role"], "import_start_marker")
+        self.assertEqual(marker_report["entries"], [])
+        self.assertIn("no parseable hosts entries", format_entry_provenance_report(marker_report))
+
+        bad_report = build_entry_provenance_report(lines, 99)
+        self.assertFalse(bad_report["valid"])
+        self.assertIn("outside the current editor range", format_entry_provenance_report(bad_report))
 
     def test_stock_microsoft_hosts_contains_localhost(self):
         self.assertIn("127.0.0.1", STOCK_MICROSOFT_HOSTS)
