@@ -74,8 +74,11 @@ from hosts_editor import (
     parse_pihole_ftl_blocked_domains,
     parse_switchhosts_export_text,
     parse_windows_dns_client_events_xml,
+    sanitize_git_history_ref,
     summarize_source_contributions,
     build_export_domain_records,
+    build_git_history_metadata,
+    build_git_history_status_report,
     export_lines_as_format,
     export_lines_as_bytes,
     extract_blocking_domains_from_lines,
@@ -89,6 +92,7 @@ from hosts_editor import (
     format_i18n_catalog_report,
     format_declarative_config_payload,
     format_declarative_profile_summary,
+    format_git_history_status_report,
     format_source_trust_badges,
     format_source_overlap_report,
     format_dns_bypass_diagnostics,
@@ -98,6 +102,7 @@ from hosts_editor import (
     looks_like_html_document,
     load_blocklist_sources_manifest,
     load_i18n_catalog,
+    list_git_history_snapshots,
     migrate_config_snapshot,
     normalize_locale_code,
     normalize_scheduler_start_time,
@@ -105,6 +110,7 @@ from hosts_editor import (
     normalize_custom_source_url,
     normalize_false_positive_domain,
     read_http_body_limited,
+    read_git_history_snapshot,
     read_text_file_lines,
     remove_import_section,
     remove_false_positive_matches_from_lines,
@@ -127,6 +133,7 @@ from hosts_editor import (
     summarize_source_health_results,
     translate_message,
     update_active_profile_snapshot,
+    write_git_history_snapshot,
     write_text_file_atomic,
     write_bytes_file_atomic,
 )
@@ -1566,6 +1573,72 @@ profile:
 
             self.assertEqual(result, 1)
             urlopen_mock.assert_not_called()
+
+    def test_git_history_ref_sanitizer_rejects_unsafe_refs(self):
+        self.assertEqual(sanitize_git_history_ref("abc123"), "abc123")
+        self.assertEqual(sanitize_git_history_ref("main/snapshot-1"), "main/snapshot-1")
+        for ref in ("", "../main", "abc..def", "HEAD@{1}", "-bad", r"bad\ref"):
+            with self.assertRaises(ValueError):
+                sanitize_git_history_ref(ref)
+
+    def test_git_history_metadata_tracks_content_shape(self):
+        metadata = build_git_history_metadata(
+            "0.0.0.0 ads.example\n\n# comment\n",
+            source_description="  Test\tSnapshot  ",
+        )
+
+        self.assertEqual(metadata["schema"], "hostsfileget.git-history.v1")
+        self.assertEqual(metadata["source"], "Test Snapshot")
+        self.assertEqual(metadata["line_count"], 3)
+        self.assertEqual(metadata["nonempty_line_count"], 2)
+        self.assertEqual(len(metadata["sha256"]), 64)
+
+    def test_git_history_status_report_handles_missing_git(self):
+        with mock.patch.object(hosts_editor.shutil, "which", return_value=None):
+            report = build_git_history_status_report("C:/tmp/history")
+        formatted = format_git_history_status_report(report)
+
+        self.assertFalse(report["available"])
+        self.assertIn("unavailable", formatted)
+
+    def test_git_history_snapshot_roundtrips_when_git_is_available(self):
+        import tempfile
+        from pathlib import Path
+
+        git = hosts_editor.resolve_git_executable()
+        if not git:
+            self.skipTest("git executable not available")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_dir = str(Path(tmpdir) / "history")
+            content = "0.0.0.0 ads.example\n# comment\n"
+
+            result = write_git_history_snapshot(repo_dir, content, "unit test", git_executable=git)
+            snapshots = list_git_history_snapshots(repo_dir, git_executable=git)
+            restored = read_git_history_snapshot(repo_dir, result["commit"], git_executable=git)
+            unchanged = write_git_history_snapshot(repo_dir, content, "unit test", git_executable=git)
+
+        self.assertEqual(result["status"], "committed")
+        self.assertEqual(unchanged["status"], "unchanged")
+        self.assertEqual(len(snapshots), 1)
+        self.assertEqual(restored.splitlines(), content.splitlines())
+
+    def test_cli_history_restore_refuses_when_hosts_file_is_disabled(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            hosts_path = Path(tmpdir) / "hosts"
+            disabled_path = Path(tmpdir) / "hosts.disabled"
+            hosts_path.write_text("127.0.0.1 localhost\n", encoding="utf-8")
+            disabled_path.write_text("0.0.0.0 preserved.example\n", encoding="utf-8")
+
+            with mock.patch.object(hosts_editor, "_cli_is_admin", return_value=True):
+                with mock.patch.object(hosts_editor, "read_git_history_snapshot") as read_mock:
+                    result = hosts_editor._cli_history_restore(str(hosts_path), "abc123")
+
+            self.assertEqual(result, 1)
+            read_mock.assert_not_called()
 
     def test_summarize_clean_changes_formats_consistent_status_text(self):
         self.assertEqual(

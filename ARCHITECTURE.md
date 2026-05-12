@@ -52,6 +52,7 @@ It is not a DNS server, browser ad blocker, cloud filtering service, or endpoint
 | `docs/migration-imports.md` | SwitchHosts, Gas Mask, and HostsFileEditor archive import behavior and limits |
 | `docs/export-formats.md` | Cleaned-output export adapters for hosts, DNS, proxy, and compressed formats |
 | `docs/declarative-config.md` | YAML/TOML/JSON profile source-of-truth CLI behavior |
+| `docs/git-history.md` | Optional local Git-backed hosts snapshot and restore behavior |
 | `docs/accessibility.md` | Contrast audit, font assumptions, and manual Windows accessibility release checks |
 | `docs/i18n.md` | String catalog schema, fallback behavior, and localization guardrails |
 | `CLAUDE.md` | Compact architecture and gotchas snapshot for agents |
@@ -97,6 +98,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Domain/IP parsing: `looks_like_domain`, `_looks_like_ip_token`, `_extract_domain_from_token`.
 - Hosts parsing and normalization: `parse_hosts_line_entries`, `normalize_line_to_hosts_entries`, `_get_canonical_cleaned_output_and_stats`, `compute_clean_impact_stats`.
 - File IO helpers: `decode_text_bytes`, `read_text_file_lines`, `write_text_file_atomic`.
+- Optional Git history helpers: `write_git_history_snapshot`, `list_git_history_snapshots`, `read_git_history_snapshot`, `build_git_history_status_report`.
 - Transactional hosts enable/disable helpers: `disable_hosts_file_transactionally`, `enable_hosts_file_transactionally`.
 - Download guards: `read_http_body_limited`, `decode_downloaded_lines`, `looks_like_html_document`.
 - Config sanitation and declarative profiles: `sanitize_custom_sources`, `sanitize_config_snapshot`, `sanitize_profile_snapshot`, `sanitize_profiles_snapshot`, `update_active_profile_snapshot`, `parse_declarative_config_text`, `format_declarative_config_payload`, `apply_declarative_profile_to_config`, `resolve_saved_state_hashes`.
@@ -159,6 +161,9 @@ The CLI functions live near the bottom of `hosts_editor.py` and intentionally sh
 - `_cli_config_plan`
 - `_cli_config_apply`
 - `_cli_config_export`
+- `_cli_history_status`
+- `_cli_history_snapshot`
+- `_cli_history_restore`
 - `_cli_source_health`
 - `_handle_cli_args`
 

@@ -62,6 +62,11 @@ SOURCE_HEALTH_SAMPLE_BYTES = 256 * 1024
 SOURCE_HEALTH_TIMEOUT_SECONDS = 15
 SOURCE_HEALTH_DEFAULT_WORKERS = 8
 SOURCE_CACHE_DIRNAME = "source_cache"
+GIT_HISTORY_DIRNAME = "hosts_history_git"
+GIT_HISTORY_HOSTS_FILENAME = "hosts"
+GIT_HISTORY_METADATA_FILENAME = "hostsfileget-history.json"
+GIT_HISTORY_DEFAULT_LIMIT = 25
+GIT_HISTORY_REF_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/\-]{0,127}$")
 
 DEFAULT_I18N_MESSAGES = {
     "app.name": APP_NAME,
@@ -1726,6 +1731,282 @@ def source_cache_key(url: str) -> str:
 
 def get_source_cache_body_path(url: str, cache_dir: str | None = None) -> str:
     return os.path.join(cache_dir or get_source_cache_dir(), f"{source_cache_key(url)}.bin")
+
+
+def get_git_history_dir(base_dir: str | None = None) -> str:
+    root = base_dir or get_app_config_dir()
+    return os.path.join(root, GIT_HISTORY_DIRNAME)
+
+
+def resolve_git_executable(git_executable: str | None = None) -> str | None:
+    if git_executable:
+        return git_executable
+    return shutil.which("git")
+
+
+def sanitize_git_history_ref(ref: str) -> str:
+    candidate = str(ref or "").strip()
+    if (
+        not GIT_HISTORY_REF_PATTERN.match(candidate)
+        or ".." in candidate
+        or "@{" in candidate
+        or "\\" in candidate
+        or candidate.startswith("-")
+    ):
+        raise ValueError("invalid Git history reference")
+    return candidate
+
+
+def _run_git_command(
+    repo_dir: str,
+    args: list[str],
+    git_executable: str | None = None,
+    runner=None,
+    timeout: int = 15,
+    strip_output: bool = True,
+) -> str:
+    git = resolve_git_executable(git_executable)
+    if not git:
+        raise OSError("git executable not found")
+    run = runner or subprocess.run
+    try:
+        result = run(
+            [git, *args],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise OSError("git executable not found") from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise OSError(f"git {' '.join(args)} failed: {detail}")
+    output = result.stdout or ""
+    return output.strip() if strip_output else output
+
+
+def ensure_git_history_repo(
+    repo_dir: str,
+    git_executable: str | None = None,
+    runner=None,
+) -> str:
+    os.makedirs(repo_dir, exist_ok=True)
+    git = resolve_git_executable(git_executable)
+    if not git:
+        raise OSError("git executable not found")
+    if not os.path.isdir(os.path.join(repo_dir, ".git")):
+        _run_git_command(repo_dir, ["init"], git_executable=git, runner=runner)
+    _run_git_command(repo_dir, ["config", "user.name", "HostsFileGet"], git_executable=git, runner=runner)
+    _run_git_command(
+        repo_dir,
+        ["config", "user.email", "hostsfileget@localhost"],
+        git_executable=git,
+        runner=runner,
+    )
+    return repo_dir
+
+
+def build_git_history_metadata(hosts_content: str, source_description: str = "manual snapshot") -> dict:
+    lines = hosts_content.splitlines()
+    return {
+        "schema": "hostsfileget.git-history.v1",
+        "app_version": APP_VERSION,
+        "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "source": re.sub(r"\s+", " ", str(source_description or "manual snapshot")).strip()[:120],
+        "line_count": len(lines),
+        "nonempty_line_count": sum(1 for line in lines if line.strip()),
+        "sha256": hashlib.sha256(hosts_content.encode("utf-8")).hexdigest(),
+    }
+
+
+def _git_history_commit_message(source_description: str) -> str:
+    source = re.sub(r"[\r\n\t]+", " ", str(source_description or "manual snapshot")).strip()
+    source = source[:72] or "manual snapshot"
+    return f"hosts snapshot: {source}"
+
+
+def write_git_history_snapshot(
+    repo_dir: str,
+    hosts_content: str,
+    source_description: str = "manual snapshot",
+    git_executable: str | None = None,
+    runner=None,
+) -> dict:
+    ensure_git_history_repo(repo_dir, git_executable=git_executable, runner=runner)
+    hosts_path = os.path.join(repo_dir, GIT_HISTORY_HOSTS_FILENAME)
+    metadata_path = os.path.join(repo_dir, GIT_HISTORY_METADATA_FILENAME)
+    if os.path.isfile(hosts_path):
+        try:
+            if read_text_file_content(hosts_path).splitlines() == hosts_content.splitlines():
+                commit = _run_git_command(
+                    repo_dir,
+                    ["rev-parse", "--short=12", "HEAD"],
+                    git_executable=git_executable,
+                    runner=runner,
+                )
+                return {
+                    "status": "unchanged",
+                    "commit": commit,
+                    "repo_dir": repo_dir,
+                    "hosts_path": hosts_path,
+                }
+        except OSError:
+            pass
+
+    write_text_file_atomic(hosts_path, hosts_content)
+    write_text_file_atomic(
+        metadata_path,
+        json.dumps(build_git_history_metadata(hosts_content, source_description), indent=2),
+    )
+
+    _run_git_command(
+        repo_dir,
+        ["add", "--", GIT_HISTORY_HOSTS_FILENAME, GIT_HISTORY_METADATA_FILENAME],
+        git_executable=git_executable,
+        runner=runner,
+    )
+    status = _run_git_command(
+        repo_dir,
+        ["status", "--porcelain", "--", GIT_HISTORY_HOSTS_FILENAME, GIT_HISTORY_METADATA_FILENAME],
+        git_executable=git_executable,
+        runner=runner,
+    )
+    if not status:
+        commit = _run_git_command(repo_dir, ["rev-parse", "--short=12", "HEAD"], git_executable=git_executable, runner=runner)
+        return {
+            "status": "unchanged",
+            "commit": commit,
+            "repo_dir": repo_dir,
+            "hosts_path": hosts_path,
+        }
+
+    _run_git_command(
+        repo_dir,
+        ["commit", "-m", _git_history_commit_message(source_description)],
+        git_executable=git_executable,
+        runner=runner,
+    )
+    commit = _run_git_command(repo_dir, ["rev-parse", "--short=12", "HEAD"], git_executable=git_executable, runner=runner)
+    return {
+        "status": "committed",
+        "commit": commit,
+        "repo_dir": repo_dir,
+        "hosts_path": hosts_path,
+    }
+
+
+def list_git_history_snapshots(
+    repo_dir: str,
+    limit: int = GIT_HISTORY_DEFAULT_LIMIT,
+    git_executable: str | None = None,
+    runner=None,
+) -> list[dict]:
+    if not os.path.isdir(os.path.join(repo_dir, ".git")):
+        return []
+    limit = max(1, min(int(limit or GIT_HISTORY_DEFAULT_LIMIT), 200))
+    output = _run_git_command(
+        repo_dir,
+        [f"--no-pager", "log", f"--max-count={limit}", "--format=%H%x09%cI%x09%s", "--", GIT_HISTORY_HOSTS_FILENAME],
+        git_executable=git_executable,
+        runner=runner,
+    )
+    snapshots: list[dict] = []
+    for line in output.splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) != 3:
+            continue
+        commit, committed_at, subject = parts
+        snapshots.append({
+            "commit": commit,
+            "short_commit": commit[:12],
+            "committed_at": committed_at,
+            "subject": subject,
+        })
+    return snapshots
+
+
+def read_git_history_snapshot(
+    repo_dir: str,
+    ref: str,
+    git_executable: str | None = None,
+    runner=None,
+) -> str:
+    safe_ref = sanitize_git_history_ref(ref)
+    if not os.path.isdir(os.path.join(repo_dir, ".git")):
+        raise OSError("Git history repository has not been initialized")
+    return _run_git_command(
+        repo_dir,
+        ["show", f"{safe_ref}:{GIT_HISTORY_HOSTS_FILENAME}"],
+        git_executable=git_executable,
+        runner=runner,
+        strip_output=False,
+    )
+
+
+def build_git_history_status_report(
+    repo_dir: str,
+    git_executable: str | None = None,
+    limit: int = GIT_HISTORY_DEFAULT_LIMIT,
+) -> dict:
+    git = resolve_git_executable(git_executable)
+    if not git:
+        return {
+            "available": False,
+            "repo_dir": repo_dir,
+            "diagnostic": "git executable not found",
+            "snapshots": [],
+        }
+    if not os.path.isdir(os.path.join(repo_dir, ".git")):
+        return {
+            "available": True,
+            "initialized": False,
+            "repo_dir": repo_dir,
+            "diagnostic": "history repository has not been initialized",
+            "snapshots": [],
+        }
+    try:
+        snapshots = list_git_history_snapshots(repo_dir, limit=limit, git_executable=git)
+    except OSError as exc:
+        return {
+            "available": True,
+            "initialized": True,
+            "repo_dir": repo_dir,
+            "diagnostic": str(exc),
+            "snapshots": [],
+        }
+    return {
+        "available": True,
+        "initialized": True,
+        "repo_dir": repo_dir,
+        "diagnostic": "ok",
+        "snapshots": snapshots,
+    }
+
+
+def format_git_history_status_report(report: dict) -> str:
+    lines = [
+        "Git History",
+        f"Repository: {report.get('repo_dir') or '-'}",
+    ]
+    if not report.get("available"):
+        lines.append(f"Status: unavailable ({report.get('diagnostic')})")
+        return "\n".join(lines)
+    if not report.get("initialized"):
+        lines.append(f"Status: not initialized ({report.get('diagnostic')})")
+        return "\n".join(lines)
+    lines.append(f"Status: {report.get('diagnostic')}")
+    snapshots = report.get("snapshots") or []
+    if not snapshots:
+        lines.append("Snapshots: none")
+        return "\n".join(lines)
+    lines.append("Snapshots:")
+    for snapshot in snapshots:
+        lines.append(
+            f"- {snapshot.get('short_commit')}  {snapshot.get('committed_at')}  {snapshot.get('subject')}"
+        )
+    return "\n".join(lines)
 
 
 def _parse_valid_http_source_url(url: str):
@@ -11989,6 +12270,58 @@ def _cli_source_health(output_path: str | None, timeout: float, workers: int, fa
     return 0
 
 
+def _cli_history_status() -> int:
+    report = build_git_history_status_report(get_git_history_dir())
+    _cli_print(format_git_history_status_report(report))
+    return 0
+
+
+def _cli_history_snapshot(hosts_path: str) -> int:
+    if not os.path.isfile(hosts_path):
+        _cli_print(f"hosts file not found: {hosts_path}")
+        return 2
+    try:
+        content = read_text_file_content(hosts_path)
+        result = write_git_history_snapshot(
+            get_git_history_dir(),
+            content,
+            source_description="CLI snapshot",
+        )
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Git history snapshot failed: {exc}")
+        return 2
+    if result["status"] == "unchanged":
+        _cli_print(f"Git history unchanged at {result['commit']}")
+    else:
+        _cli_print(f"Git history snapshot committed: {result['commit']}")
+    _cli_print(f"History repository: {result['repo_dir']}")
+    return 0
+
+
+def _cli_history_restore(hosts_path: str, ref: str) -> int:
+    if not _cli_is_admin():
+        _cli_print("Administrator privileges required.")
+        return 1
+    if os.path.exists(hosts_path + ".disabled"):
+        _cli_print("hosts file is currently disabled; re-enable it before restoring a Git history snapshot.")
+        return 1
+    try:
+        content = read_git_history_snapshot(get_git_history_dir(), ref)
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Git history restore failed: {exc}")
+        return 2
+    backup_result = _cli_backup(hosts_path)
+    if backup_result not in (0, 2):
+        return backup_result
+    try:
+        write_text_file_atomic(hosts_path, content)
+    except OSError as exc:
+        _cli_print(f"Git history restore write failed: {exc}")
+        return 1
+    _cli_print(f"Restored hosts file from Git history ref {ref}.")
+    return 0
+
+
 def _read_cli_config_payload(config_path: str) -> dict:
     if not os.path.isfile(config_path):
         return {}
@@ -12076,6 +12409,9 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--config-plan",
         "--config-apply",
         "--config-export",
+        "--history-status",
+        "--history-snapshot",
+        "--history-restore",
         "--source-health",
         "--source-health-output",
         "--source-health-timeout",
@@ -12090,6 +12426,7 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--config-plan=",
         "--config-apply=",
         "--config-export=",
+        "--history-restore=",
         "--source-health-output=",
         "--source-health-timeout=",
         "--source-health-workers=",
@@ -12110,6 +12447,9 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--config-plan", metavar="PATH", help="Validate a declarative YAML/TOML/JSON profile file and summarize the config change without writing.")
     parser.add_argument("--config-apply", metavar="PATH", help="Apply a declarative YAML/TOML/JSON profile file to the app config without writing the hosts file.")
     parser.add_argument("--config-export", metavar="PATH", help="Export the active app config profile as declarative YAML/TOML/JSON.")
+    parser.add_argument("--history-status", action="store_true", help="Show optional local Git history status and recent snapshots.")
+    parser.add_argument("--history-snapshot", action="store_true", help="Commit the current hosts file into the optional local Git history repository.")
+    parser.add_argument("--history-restore", metavar="REF", help="Restore the hosts file from an optional local Git history commit ref after creating a normal backup.")
     parser.add_argument("--source-health", action="store_true", help="Check curated source reachability and print a summary without launching the GUI.")
     parser.add_argument("--source-health-output", metavar="PATH", help="Write detailed source-health JSON to PATH.")
     parser.add_argument("--source-health-timeout", type=float, default=SOURCE_HEALTH_TIMEOUT_SECONDS, help="Per-source network timeout in seconds.")
@@ -12146,6 +12486,12 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         return _cli_config_apply(args.config_apply)
     if args.config_export:
         return _cli_config_export(args.config_export)
+    if args.history_status:
+        return _cli_history_status()
+    if args.history_snapshot:
+        return _cli_history_snapshot(hosts_path)
+    if args.history_restore:
+        return _cli_history_restore(hosts_path, args.history_restore)
     if args.source_health:
         return _cli_source_health(
             args.source_health_output,

@@ -51,6 +51,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F023 complete. Next roadmap item: F025 declarative YAML/TOML source of truth.
 - Completed F025: added dependency-free declarative YAML/TOML/JSON profile parsing, config merge/export helpers, `--config-plan`, `--config-apply`, `--config-export`, docs, and regression tests.
 - Updated `ROADMAP.md` to mark F025 complete. Next roadmap item: F026 Git-backed history and rollback.
+- Completed F026: added optional local Git-backed hosts snapshots, status reporting, admin-gated restore with normal backups, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F026 complete. Next roadmap item: F027 CLI profile apply/export/import.
 
 ## Scope
 
