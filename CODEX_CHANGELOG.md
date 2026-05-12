@@ -81,6 +81,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F039 complete. Next roadmap item: F040 time-bound profile activation.
 - Completed F040: bumped config schema to 4, added sanitized time-bound profile activation windows with weekday/overnight matching and fallback handling, GUI schedule reporting, config-only CLI add/list/apply commands, docs, and regression tests.
 - Updated `ROADMAP.md` to mark F040 complete. Next roadmap item: F041 tray quick switch.
+- Completed F041: added GUI profile quick switching, optional dynamically loaded tray quick switching with `pystray`/Pillow dependency diagnostics, opt-in PyInstaller tray-module bundling, config-only switch helpers, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F041 complete. Next roadmap item: F042 variant/bundle selector.
 
 ## Scope
 

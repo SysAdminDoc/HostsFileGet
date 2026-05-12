@@ -167,6 +167,13 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added `--profile-schedule-list`, `--profile-schedule-add`, `--profile-schedule-apply`, and `--profile-schedule-at` for config-only automation that never writes the system hosts file.
 - Documented the schedule schema, matching rules, and non-enforcement boundaries in `docs/profile-activation-schedule.md`.
 
+**Profile quick switch**
+- Added **Tools > Profile Quick Switch...** for activating saved profiles in app config without writing the system hosts file.
+- Added optional **Tools > Start Tray Quick Switch...** support that dynamically loads `pystray` and Pillow only when available.
+- Updated `HostsFileGet.spec` to bundle optional tray modules only when `HOSTSFILEGET_BUNDLE_TRAY=1` is set in the build environment.
+- Added quick-switch report/apply helpers, optional tray dependency diagnostics, and regression tests.
+- Documented tray dependency, unsaved-change blocking, and config-only boundaries in `docs/profile-quick-switch.md`.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

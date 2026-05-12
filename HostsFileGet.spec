@@ -1,10 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import importlib.util
+import os
 from pathlib import Path
+
+from PyInstaller.utils.hooks import collect_submodules
 
 
 project_root = Path(SPECPATH).resolve()
 datas = []
+hiddenimports = []
 if (project_root / "icon.png").exists():
     datas.append(("icon.png", "."))
 if (project_root / "icon.ico").exists():
@@ -21,13 +26,19 @@ icon_args = []
 if (project_root / "icon.ico").exists():
     icon_args = ["icon.ico"]
 
+bundle_tray = os.environ.get("HOSTSFILEGET_BUNDLE_TRAY", "").lower() in {"1", "true", "yes"}
+if bundle_tray and importlib.util.find_spec("pystray") is not None:
+    hiddenimports.extend(collect_submodules("pystray"))
+if bundle_tray and importlib.util.find_spec("PIL") is not None:
+    hiddenimports.extend(["PIL.Image", "PIL.ImageDraw"])
+
 
 a = Analysis(
     ['hosts_editor.py'],
     pathex=[],
     binaries=[],
     datas=datas,
-    hiddenimports=[],
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

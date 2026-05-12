@@ -18,6 +18,8 @@ SafeSearch and restricted-mode templates follow the same boundary. HostsFileGet 
 
 Time-bound profile activation is config-only. HostsFileGet can evaluate local-time windows and switch the active app config profile, but it does not write the system hosts file, run as a daemon, or enforce parental-control policy by itself.
 
+Profile quick switching follows the same config-only boundary. HostsFileGet can switch saved app-config profiles from the GUI or optional tray menu, but the switch never writes the system hosts file and tray support stays an optional runtime dependency.
+
 ## Runtime Targets
 
 - Primary OS: Windows.
@@ -63,6 +65,7 @@ Time-bound profile activation is config-only. HostsFileGet can evaluate local-ti
 | `docs/export-formats.md` | Cleaned-output export adapters for hosts, DNS, proxy, and compressed formats |
 | `docs/declarative-config.md` | YAML/TOML/JSON profile source-of-truth CLI behavior |
 | `docs/cli-profiles.md` | CLI profile list/import/apply/export behavior |
+| `docs/profile-quick-switch.md` | GUI and optional tray profile quick-switch behavior |
 | `docs/profile-activation-schedule.md` | Time-bound profile activation schedule behavior and config-only CLI |
 | `docs/git-history.md` | Optional local Git-backed hosts snapshot and restore behavior |
 | `docs/scheduler-activity.md` | Scheduled-update silent logging and activity report behavior |
@@ -77,7 +80,6 @@ Time-bound profile activation is config-only. HostsFileGet can evaluate local-ti
 | `docs/encrypted-dns-bypass.md` | Encrypted-DNS bypass source packs and router/firewall handoff guidance |
 | `docs/dns-rebinding.md` | Static DNS rebinding-sensitive hosts mapping report behavior and limits |
 | `docs/safesearch-restricted-mode.md` | SafeSearch and YouTube Restricted Mode template behavior and provider limits |
-| `docs/profile-activation-schedule.md` | Time-bound profile activation schedule behavior and config-only CLI |
 | `docs/accessibility.md` | Contrast audit, font assumptions, and manual Windows accessibility release checks |
 | `docs/i18n.md` | String catalog schema, fallback behavior, and localization guardrails |
 | `CLAUDE.md` | Compact architecture and gotchas snapshot for agents |
@@ -127,7 +129,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Scheduler activity helpers: `build_scheduler_update_command`, `query_scheduled_task_status`, `append_cli_activity_event`, `build_scheduler_activity_report`, `format_scheduler_activity_report`.
 - Transactional hosts enable/disable helpers: `disable_hosts_file_transactionally`, `enable_hosts_file_transactionally`.
 - Download guards: `read_http_body_limited`, `decode_downloaded_lines`, `looks_like_html_document`.
-- Config sanitation and declarative profiles: `sanitize_custom_sources`, `sanitize_config_snapshot`, `sanitize_profile_snapshot`, `sanitize_profiles_snapshot`, `update_active_profile_snapshot`, `parse_declarative_config_text`, `format_declarative_config_payload`, `upsert_profile_in_config`, `set_active_profile_in_config`, `apply_declarative_profile_to_config`, `resolve_saved_state_hashes`.
+- Config sanitation and declarative profiles: `sanitize_custom_sources`, `sanitize_config_snapshot`, `sanitize_profile_snapshot`, `sanitize_profiles_snapshot`, `update_active_profile_snapshot`, `parse_declarative_config_text`, `format_declarative_config_payload`, `upsert_profile_in_config`, `set_active_profile_in_config`, `apply_declarative_profile_to_config`, `build_profile_quick_switch_report`, `apply_profile_quick_switch`, `build_profile_tray_availability_report`, `resolve_saved_state_hashes`.
 - Profile schedule helpers: `normalize_profile_activation_days`, `sanitize_profile_activation_schedule`, `evaluate_profile_activation_schedule`, `apply_profile_activation_schedule`, `format_profile_activation_schedule_report`.
 - Config location and portable export: `get_primary_config_path`, `get_config_root_dir`, `build_config_location_report`, `write_portable_bundle_config`, `format_portable_bundle_export_summary`.
 - Source catalog loading: `sanitize_source_manifest`, `load_blocklist_sources_manifest`.
@@ -169,7 +171,7 @@ Primary responsibilities:
 - Backups, restore, compare, panic restore, hosts disable/enable.
 - Import UI, source catalog, custom sources, manual imports, DNS log imports, whitelist import.
 - Search, removal, find/replace, adblock quarantine, context menu commands.
-- Source reports, provenance log view, entry provenance, health scan, adblock syntax lint, rule tier report, IDN/homograph report, NRD/DGA threat feed packs, CNAME cloaking workflow, encrypted-DNS bypass packs, DNS rebinding protection check, SafeSearch/restricted-mode templates, profile activation schedule report, false-positive triage, preferences, scheduler wizard.
+- Source reports, provenance log view, entry provenance, health scan, adblock syntax lint, rule tier report, IDN/homograph report, NRD/DGA threat feed packs, CNAME cloaking workflow, encrypted-DNS bypass packs, DNS rebinding protection check, SafeSearch/restricted-mode templates, profile activation schedule report, profile quick switch and optional tray menu, false-positive triage, preferences, scheduler wizard.
 - Worker thread queue handling and safe Tk callback scheduling with `_safe_after`.
 
 `HostsFileEditor` is large enough that future refactors should split by behavior after tests are in place:
