@@ -29,6 +29,7 @@ Configs without `config_version` are treated as legacy schema `0`, migrated in m
 | `last_open_dir` | string | Existing local directory path |
 | `source_last_fetched` | object | Source URL to ISO timestamp |
 | `source_cache_metadata` | object | Source URL to validated ETag/Last-Modified/body-cache metadata |
+| `source_metrics_history` | object | Compact per-source freshness/growth snapshots |
 | `filter_query_history` | array | Recent local Filter Builder queries, newest first |
 | `watch_expressions` | array | Saved local Filter Builder queries for watch reports |
 | `preferred_block_sink` | string | One of `0.0.0.0`, `127.0.0.1`, `::`, `::1` |
@@ -143,6 +144,21 @@ Per-source metadata shape:
 | `content_encoding` | string | Optional HTTP content encoding used for decode |
 | `fetched_at` | string | ISO timestamp of the last network body fetch |
 | `validated_at` | string | ISO timestamp of the last network validation, including `304 Not Modified` |
+
+## Source Metrics History
+
+`source_metrics_history` stores compact local metrics for **Tools > Source Freshness & Growth...**. It is keyed by source URL and capped to the 200 most recent sources with 30 points per source.
+
+Each point stores:
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `ts` | string | ISO timestamp for the successful fetch/update |
+| `name` | string | Display name at the time of fetch |
+| `domain_count` | integer | Unique normalized blocking domains in that fetched payload |
+| `line_count` | integer | Raw decoded line count |
+| `bytes` | integer | Decoded text size estimate capped by the download limit |
+| `cache_status` | string | Fetch/cache path such as fetched, not_modified, or cache_fallback |
 
 ## Filter Query History
 

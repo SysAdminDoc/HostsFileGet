@@ -178,6 +178,9 @@ SOURCE_PREVIEW_MAX_LINES = 80
 SOURCE_CORPUS_CACHE_MAX_ENTRY_BYTES = 2 * 1024 * 1024
 SOURCE_CORPUS_CACHE_MAX_TOTAL_BYTES = 16 * 1024 * 1024
 SOURCE_CORPUS_CACHE_MAX_ENTRIES = 24
+SOURCE_METRICS_HISTORY_MAX_SOURCES = 200
+SOURCE_METRICS_HISTORY_MAX_POINTS = 30
+SOURCE_METRICS_REPORT_MAX_SOURCES = 30
 FILTER_QUERY_HISTORY_MAX_ITEMS = 25
 FILTER_QUERY_MAX_LENGTH = 240
 FILTER_BUILDER_MATCH_LIMIT = 50
@@ -5415,6 +5418,7 @@ def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
 
     custom_sources = sanitize_custom_sources(config.get("custom_sources", []))
     source_cache_metadata = sanitize_source_cache_metadata(config.get("source_cache_metadata", {}))
+    source_metrics_history = sanitize_source_metrics_history(config.get("source_metrics_history", {}))
     filter_query_history = sanitize_filter_query_history(config.get("filter_query_history", []))
     watch_expressions = sanitize_watch_expressions(config.get("watch_expressions", []))
 
@@ -5461,6 +5465,7 @@ def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
         "last_open_dir": last_open_dir,
         "source_last_fetched": source_last_fetched,
         "source_cache_metadata": source_cache_metadata,
+        "source_metrics_history": source_metrics_history,
         "filter_query_history": filter_query_history,
         "watch_expressions": watch_expressions,
         "preferred_block_sink": preferred_sink,
@@ -8609,6 +8614,305 @@ def format_source_overlap_report(
     return "\n".join(lines)
 
 
+def _sanitize_source_metric_text(value, max_length: int = 160) -> str:
+    return " ".join(str(value or "").replace("\r", " ").replace("\n", " ").replace("\t", " ").split())[:max_length]
+
+
+def _source_metric_epoch(value) -> float | None:
+    text = _sanitize_source_metric_text(value, 80)
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.datetime.fromisoformat(text)
+        return parsed.timestamp()
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
+def _source_metric_int(value, default: int = 0, upper: int = 100_000_000) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(0, min(upper, number))
+
+
+def sanitize_source_metrics_history(
+    history,
+    *,
+    max_sources: int = SOURCE_METRICS_HISTORY_MAX_SOURCES,
+    max_points: int = SOURCE_METRICS_HISTORY_MAX_POINTS,
+) -> dict[str, list[dict]]:
+    """Sanitize compact per-source freshness/growth history."""
+    try:
+        source_limit = max(0, min(int(max_sources), SOURCE_METRICS_HISTORY_MAX_SOURCES))
+    except (TypeError, ValueError):
+        source_limit = SOURCE_METRICS_HISTORY_MAX_SOURCES
+    try:
+        point_limit = max(0, min(int(max_points), SOURCE_METRICS_HISTORY_MAX_POINTS))
+    except (TypeError, ValueError):
+        point_limit = SOURCE_METRICS_HISTORY_MAX_POINTS
+    if source_limit == 0 or point_limit == 0 or not isinstance(history, dict):
+        return {}
+
+    sanitized_rows: list[tuple[float, str, list[dict]]] = []
+    for raw_url, points in history.items():
+        if not isinstance(raw_url, str):
+            continue
+        url = normalize_custom_source_url(raw_url) or raw_url.strip()
+        if _parse_valid_http_source_url(url) is None or not isinstance(points, (list, tuple)):
+            continue
+        clean_points = []
+        for point in points:
+            if not isinstance(point, dict):
+                continue
+            ts = _sanitize_source_metric_text(point.get("ts"), 80)
+            epoch = _source_metric_epoch(ts)
+            if epoch is None:
+                continue
+            clean_points.append({
+                "ts": ts,
+                "name": _sanitize_source_metric_text(point.get("name"), 120),
+                "domain_count": _source_metric_int(point.get("domain_count")),
+                "line_count": _source_metric_int(point.get("line_count")),
+                "bytes": _source_metric_int(point.get("bytes"), upper=MAX_DOWNLOAD_BYTES),
+                "cache_status": _sanitize_source_metric_text(point.get("cache_status"), 40),
+            })
+        if not clean_points:
+            continue
+        clean_points.sort(key=lambda row: _source_metric_epoch(row.get("ts")) or 0.0)
+        clean_points = clean_points[-point_limit:]
+        sanitized_rows.append((_source_metric_epoch(clean_points[-1].get("ts")) or 0.0, url, clean_points))
+
+    sanitized_rows.sort(key=lambda row: (-row[0], row[1]))
+    return {url: points for _epoch, url, points in sanitized_rows[:source_limit]}
+
+
+def record_source_metrics_snapshot(
+    history,
+    name: str,
+    url: str,
+    raw_lines: list[str] | tuple[str, ...] | None,
+    *,
+    cache_status: str = "",
+    fetched_at: str | None = None,
+) -> dict[str, list[dict]]:
+    """Append one compact source metrics point after a successful fetch."""
+    normalized_url = normalize_custom_source_url(url) or str(url or "").strip()
+    if _parse_valid_http_source_url(normalized_url) is None:
+        return sanitize_source_metrics_history(history)
+    lines = [str(line) for line in (raw_lines or [])]
+    text = "\n".join(lines)
+    timestamp = fetched_at or datetime.datetime.now().isoformat(timespec="seconds")
+    domains = extract_blocking_domains_from_lines(lines)
+    snapshot = sanitize_source_metrics_history(history)
+    points = list(snapshot.get(normalized_url, []))
+    points.append({
+        "ts": _sanitize_source_metric_text(timestamp, 80),
+        "name": _sanitize_source_metric_text(name, 120),
+        "domain_count": len(domains),
+        "line_count": len(lines),
+        "bytes": min(MAX_DOWNLOAD_BYTES, len(text.encode("utf-8", errors="replace"))),
+        "cache_status": _sanitize_source_metric_text(cache_status, 40),
+    })
+    snapshot[normalized_url] = points
+    return sanitize_source_metrics_history(snapshot)
+
+
+def format_source_growth_sparkline(values: list[int] | tuple[int, ...], width: int = 12) -> str:
+    """Return a compact ASCII chart for source domain-count history."""
+    numbers = [_source_metric_int(value) for value in (values or [])]
+    if not numbers:
+        return "-"
+    try:
+        chart_width = max(1, int(width))
+    except (TypeError, ValueError):
+        chart_width = 12
+    if len(numbers) > chart_width:
+        step = len(numbers) / chart_width
+        numbers = [numbers[min(len(numbers) - 1, int(idx * step))] for idx in range(chart_width)]
+    lo = min(numbers)
+    hi = max(numbers)
+    alphabet = "._:-=+*#%@"
+    if hi == lo:
+        return alphabet[0] * len(numbers)
+    return "".join(alphabet[round((value - lo) * (len(alphabet) - 1) / (hi - lo))] for value in numbers)
+
+
+def _source_name_lookup(blocklist_sources, source_corpus: dict[str, object] | None = None) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    if isinstance(blocklist_sources, dict):
+        for _category, sources in blocklist_sources.items():
+            if not isinstance(sources, (list, tuple)):
+                continue
+            for source in sources:
+                if isinstance(source, (list, tuple)) and len(source) >= 2:
+                    url = normalize_custom_source_url(source[1]) or str(source[1])
+                    lookup[url] = str(source[0])
+    for cache_key, payload in (source_corpus or {}).items():
+        if not isinstance(payload, dict):
+            continue
+        url = normalize_custom_source_url(payload.get("url", "")) or str(payload.get("url", ""))
+        if _parse_valid_http_source_url(url) is None:
+            continue
+        lookup[url] = str(payload.get("name") or cache_key)
+    return lookup
+
+
+def build_source_metrics_report(
+    source_last_fetched: dict | None = None,
+    source_cache_metadata: dict | None = None,
+    source_metrics_history: dict | None = None,
+    source_corpus: dict[str, object] | None = None,
+    blocklist_sources=None,
+    *,
+    now: float | None = None,
+    max_sources: int = SOURCE_METRICS_REPORT_MAX_SOURCES,
+) -> dict:
+    """Build a local freshness and growth report from compact source history."""
+    last_fetched = source_last_fetched if isinstance(source_last_fetched, dict) else {}
+    cache_metadata = source_cache_metadata if isinstance(source_cache_metadata, dict) else {}
+    history = sanitize_source_metrics_history(source_metrics_history or {})
+    name_lookup = _source_name_lookup(blocklist_sources, source_corpus)
+    normalized_last_fetched = {
+        normalize_custom_source_url(url) or str(url): stamp
+        for url, stamp in last_fetched.items()
+        if isinstance(url, str) and _parse_valid_http_source_url(normalize_custom_source_url(url) or url) is not None
+    }
+    normalized_cache_metadata = {
+        normalize_custom_source_url(url) or str(url): entry
+        for url, entry in cache_metadata.items()
+        if isinstance(url, str) and _parse_valid_http_source_url(normalize_custom_source_url(url) or url) is not None
+    }
+    urls = set(history) | set(normalized_last_fetched) | set(normalized_cache_metadata)
+
+    rows = []
+    freshness_counts = {"fresh": 0, "warm": 0, "stale": 0, "never": 0}
+    for url in sorted(urls):
+        points = history.get(url, [])
+        latest = points[-1] if points else {}
+        first = points[0] if points else {}
+        previous = points[-2] if len(points) >= 2 else {}
+        last_stamp = str(normalized_last_fetched.get(url) or latest.get("ts") or "")
+        freshness = classify_source_freshness(last_stamp, now=now)
+        freshness_counts[freshness] = freshness_counts.get(freshness, 0) + 1
+        values = [int(point.get("domain_count") or 0) for point in points]
+        latest_domains = int(latest.get("domain_count") or 0) if latest else None
+        previous_domains = int(previous.get("domain_count") or 0) if previous else None
+        first_domains = int(first.get("domain_count") or 0) if first else None
+        metadata = normalized_cache_metadata.get(url, {}) if isinstance(normalized_cache_metadata.get(url, {}), dict) else {}
+        name = (
+            str(latest.get("name") or "")
+            or name_lookup.get(url, "")
+            or urllib.parse.urlparse(url).netloc
+            or url
+        )
+        rows.append({
+            "url": url,
+            "name": name,
+            "freshness": freshness,
+            "last_fetched": last_stamp,
+            "history_points": len(points),
+            "latest_domain_count": latest_domains,
+            "latest_line_count": int(latest.get("line_count") or 0) if latest else None,
+            "latest_bytes": int(latest.get("bytes") or 0) if latest else None,
+            "delta_previous": (
+                latest_domains - previous_domains
+                if latest_domains is not None and previous_domains is not None
+                else None
+            ),
+            "delta_first": (
+                latest_domains - first_domains
+                if latest_domains is not None and first_domains is not None
+                else None
+            ),
+            "sparkline": format_source_growth_sparkline(values),
+            "cache_status": str(latest.get("cache_status") or metadata.get("cache_status") or ""),
+            "validated_at": str(metadata.get("validated_at") or ""),
+        })
+
+    freshness_order = {"stale": 0, "never": 1, "warm": 2, "fresh": 3}
+    rows.sort(key=lambda row: (freshness_order.get(row["freshness"], 4), row["name"].lower()))
+    try:
+        limit = max(1, int(max_sources))
+    except (TypeError, ValueError):
+        limit = SOURCE_METRICS_REPORT_MAX_SOURCES
+    displayed_rows = rows[:limit]
+    return {
+        "schema": "hostsfileget.source-metrics.v1",
+        "source_count": len(rows),
+        "displayed_count": len(displayed_rows),
+        "freshness_counts": freshness_counts,
+        "history_point_count": sum(row["history_points"] for row in rows),
+        "history_retention_points": SOURCE_METRICS_HISTORY_MAX_POINTS,
+        "rows": displayed_rows,
+        "truncated_count": max(0, len(rows) - len(displayed_rows)),
+        "references": ["C4", "O6"],
+    }
+
+
+def format_source_metrics_report(report: dict) -> str:
+    """Render source freshness and growth as a local text dashboard."""
+    if not report:
+        return "Source Freshness & Growth\n(no report)"
+    counts = report.get("freshness_counts") or {}
+    lines = [
+        "Source Freshness & Growth",
+        f"Sources tracked: {int(report.get('source_count') or 0):,}",
+        f"Displayed: {int(report.get('displayed_count') or 0):,}",
+        (
+            "Freshness: "
+            f"fresh={int(counts.get('fresh') or 0):,}, "
+            f"warm={int(counts.get('warm') or 0):,}, "
+            f"stale={int(counts.get('stale') or 0):,}, "
+            f"never={int(counts.get('never') or 0):,}"
+        ),
+        f"History points: {int(report.get('history_point_count') or 0):,}",
+        f"Retention: last {int(report.get('history_retention_points') or 0):,} points per source",
+        "",
+    ]
+    rows = report.get("rows") or []
+    if not rows:
+        lines.extend([
+            "No source freshness or growth history is available yet.",
+            "Import or update a source to record the first local metrics point.",
+        ])
+    else:
+        lines.append(
+            f"{'Source':<30} {'Fresh':<6} {'Last fetched':<19} {'Domains':>9} {'dPrev':>7} {'dFirst':>7} {'Pts':>4}  Chart"
+        )
+        lines.append("-" * 104)
+        for row in rows:
+            latest_domains = row.get("latest_domain_count")
+            domains_text = "-" if latest_domains is None else f"{int(latest_domains):,}"
+            delta_previous = row.get("delta_previous")
+            delta_first = row.get("delta_first")
+            prev_text = "-" if delta_previous is None else f"{int(delta_previous):+}"
+            first_text = "-" if delta_first is None else f"{int(delta_first):+}"
+            lines.append(
+                f"{str(row.get('name') or '-')[:29]:<30} "
+                f"{str(row.get('freshness') or '-'):<6} "
+                f"{str(row.get('last_fetched') or '-')[:19]:<19} "
+                f"{domains_text:>9} "
+                f"{prev_text:>7} "
+                f"{first_text:>7} "
+                f"{int(row.get('history_points') or 0):>4}  "
+                f"{row.get('sparkline') or '-'}"
+            )
+        if report.get("truncated_count"):
+            lines.append(f"...and {int(report.get('truncated_count') or 0):,} more tracked source(s)")
+    references = report.get("references") or []
+    if references:
+        lines.extend(["", "Roadmap source IDs:", "- " + ", ".join(references)])
+    lines.extend([
+        "",
+        "Boundary: local metrics only. No telemetry is uploaded; charts are derived from successful imports and CLI updates.",
+    ])
+    return "\n".join(lines)
+
+
 def _normalize_filter_query_text(value: str) -> str:
     candidate = str(value or "").replace("\r", " ").replace("\n", " ").replace("\t", " ")
     candidate = " ".join(candidate.split())
@@ -10753,6 +11057,7 @@ class HostsFileEditor:
         # fetch. Lets source tooltips surface how stale a feed is.
         self.source_last_fetched: dict[str, str] = {}
         self.source_cache_metadata: dict[str, dict] = {}
+        self.source_metrics_history: dict[str, list[dict]] = {}
         self.filter_query_history: list[str] = []
         self.watch_expressions: list[dict] = []
         self.source_cache_dir = get_source_cache_dir()
@@ -12239,6 +12544,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="Filter Builder...", command=self.show_filter_builder)
         tools_menu.add_command(label="Watch Expressions...", command=self.show_watch_expressions)
         tools_menu.add_command(label="Sources Report...", command=self.show_sources_report)
+        tools_menu.add_command(label="Source Freshness & Growth...", command=self.show_source_metrics_report)
         tools_menu.add_command(label="Goto Anything...", command=self.show_goto_anything)
         tools_menu.add_command(label="Find and Replace...", command=self.show_find_replace_dialog)
         tools_menu.add_command(label="Pinned Domains...", command=self.show_pinned_domains)
@@ -12697,6 +13003,7 @@ class HostsFileEditor:
         self.last_open_dir = sanitized_config["last_open_dir"]
         self.source_last_fetched = sanitized_config.get("source_last_fetched", {})
         self.source_cache_metadata = sanitized_config.get("source_cache_metadata", {})
+        self.source_metrics_history = sanitized_config.get("source_metrics_history", {})
         self.filter_query_history = sanitized_config.get("filter_query_history", [])
         self.watch_expressions = sanitized_config.get("watch_expressions", [])
         self._preferred_block_sink = sanitized_config.get("preferred_block_sink", "0.0.0.0")
@@ -12770,6 +13077,7 @@ class HostsFileEditor:
             "last_open_dir": self.last_open_dir,
             "source_last_fetched": self.source_last_fetched,
             "source_cache_metadata": self.source_cache_metadata,
+            "source_metrics_history": getattr(self, "source_metrics_history", {}),
             "filter_query_history": getattr(self, "filter_query_history", []),
             "watch_expressions": getattr(self, "watch_expressions", []),
             "preferred_block_sink": self._preferred_block_sink,
@@ -12802,6 +13110,7 @@ class HostsFileEditor:
             self.profile_activation_schedule_version = config["profile_activation_schedule_version"]
             self.profile_activation_fallback_id = config["profile_activation_fallback_id"]
             self.profile_activation_schedule = config["profile_activation_schedule"]
+            self.source_metrics_history = config["source_metrics_history"]
             self.filter_query_history = config["filter_query_history"]
             self.watch_expressions = config["watch_expressions"]
             self._source_metadata_dirty = False
@@ -13351,6 +13660,7 @@ class HostsFileEditor:
             "last_open_dir": getattr(self, "last_open_dir", os.path.expanduser("~")),
             "source_last_fetched": getattr(self, "source_last_fetched", {}),
             "source_cache_metadata": getattr(self, "source_cache_metadata", {}),
+            "source_metrics_history": getattr(self, "source_metrics_history", {}),
             "filter_query_history": getattr(self, "filter_query_history", []),
             "watch_expressions": getattr(self, "watch_expressions", []),
             "preferred_block_sink": getattr(self, "_preferred_block_sink", "0.0.0.0"),
@@ -13384,6 +13694,7 @@ class HostsFileEditor:
         self.last_open_dir = sanitized_config["last_open_dir"]
         self.source_last_fetched = sanitized_config.get("source_last_fetched", {})
         self.source_cache_metadata = sanitized_config.get("source_cache_metadata", {})
+        self.source_metrics_history = sanitized_config.get("source_metrics_history", {})
         self.filter_query_history = sanitized_config.get("filter_query_history", [])
         self.watch_expressions = sanitized_config.get("watch_expressions", [])
         self._preferred_block_sink = sanitized_config.get("preferred_block_sink", "0.0.0.0")
@@ -15171,6 +15482,23 @@ class HostsFileEditor:
         ttk.Button(btn_row, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
         dialog.grab_set()
 
+    def show_source_metrics_report(self):
+        report = build_source_metrics_report(
+            getattr(self, "source_last_fetched", {}),
+            getattr(self, "source_cache_metadata", {}),
+            getattr(self, "source_metrics_history", {}),
+            getattr(self, "_source_corpus_cache", {}),
+            self.BLOCKLIST_SOURCES,
+        )
+        self._show_text_report_dialog(
+            "Source Freshness & Growth",
+            "Local source freshness buckets and compact growth charts from successful imports and CLI updates.",
+            format_source_metrics_report(report),
+            tone="info",
+            width=940,
+            height=660,
+        )
+
     # ----------------------------- First-Run Wizard --------------------------
     FIRST_RUN_BUNDLES = [
         ("Ads & tracking", True, [
@@ -16842,10 +17170,20 @@ class HostsFileEditor:
                 elif msg_type == "source_fetched":
                     name, url, raw_lines = msg[1], msg[2], msg[3]
                     cache_metadata = msg[4] if len(msg) > 4 else None
+                    cache_status = msg[5] if len(msg) > 5 else ""
                     self._cache_source_corpus(name, url, raw_lines)
-                    self.source_last_fetched[url] = datetime.datetime.now().isoformat(timespec='seconds')
+                    fetched_at = datetime.datetime.now().isoformat(timespec='seconds')
+                    self.source_last_fetched[url] = fetched_at
                     if isinstance(cache_metadata, dict):
                         self.source_cache_metadata[url] = cache_metadata
+                    self.source_metrics_history = record_source_metrics_snapshot(
+                        getattr(self, "source_metrics_history", {}),
+                        name,
+                        url,
+                        raw_lines,
+                        cache_status=cache_status,
+                        fetched_at=fetched_at,
+                    )
                     self._source_metadata_dirty = True
 
                 elif msg_type == "log":
@@ -18416,6 +18754,9 @@ def _cli_update(hosts_path: str) -> int:
     collected: list[str] = []
     updated_stamps: dict[str, str] = dict(last_fetched)
     updated_cache_metadata: dict[str, dict] = dict(sanitized.get("source_cache_metadata", {}))
+    updated_source_metrics_history: dict[str, list[dict]] = sanitize_source_metrics_history(
+        sanitized.get("source_metrics_history", {})
+    )
     cache_dir = get_source_cache_dir()
     now_iso = datetime.datetime.now().isoformat(timespec='seconds')
     successes, failures = 0, []
@@ -18443,6 +18784,14 @@ def _cli_update(hosts_path: str) -> int:
             collected.append("")
             updated_stamps[url] = now_iso
             updated_cache_metadata[url] = cache_metadata
+            updated_source_metrics_history = record_source_metrics_snapshot(
+                updated_source_metrics_history,
+                name,
+                url,
+                raw_lines,
+                cache_status=cache_status,
+                fetched_at=now_iso,
+            )
             successes += 1
             status_label = "OK"
             if cache_status == "not_modified":
@@ -18497,6 +18846,7 @@ def _cli_update(hosts_path: str) -> int:
         snapshot = dict(sanitized)
         snapshot["source_last_fetched"] = updated_stamps
         snapshot["source_cache_metadata"] = updated_cache_metadata
+        snapshot["source_metrics_history"] = updated_source_metrics_history
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
         write_text_file_atomic(config_path, json.dumps(snapshot, indent=2))
     except OSError:

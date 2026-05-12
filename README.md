@@ -43,6 +43,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - source overlap matrix for fetched feeds
   - local Filter Builder with recent query history across editor lines, fetched sources, and curated source metadata
   - saved Watch Expressions that rerun Filter Builder queries against the current editor and fetched-source index
+  - source freshness and growth report with local compact history and ASCII charts
   - batch import with filtering and progress
   - custom persistent sources
   - pfSense DNSBL log import
@@ -347,6 +348,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Source health checks: `docs/source-health.md`
 - Source trust badges: `docs/source-trust.md`
 - Source overlap matrix: `docs/source-overlap.md`
+- Source freshness and growth: `docs/source-metrics.md`
 - Filter Builder: `docs/filter-builder.md`
 - Watch expressions: `docs/watch-expressions.md`
 - False-positive triage: `docs/false-positive-triage.md`
