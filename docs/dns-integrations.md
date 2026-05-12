@@ -4,6 +4,8 @@ HostsFileGet's DNS interoperability pack is file-first. It converts reviewed cle
 
 Use this for handoff, source control, or a local web/static-file host that your DNS blocker already trusts.
 
+For plan-only NextDNS and Control D API replay artifacts plus their CSV log importers, see `docs/cloud-dns-adapters.md`.
+
 ## Presets
 
 | Preset | Output shape | Primary use |

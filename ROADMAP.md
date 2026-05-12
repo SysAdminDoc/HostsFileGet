@@ -50,6 +50,7 @@ Non-negotiables:
 - [x] F028 - Scheduler hardening and activity report (`docs/scheduler-activity.md`, silent task command, activity JSONL/report CLI)
 - [x] F029 - Managed portable bundle config (`docs/portable-config.md`, config-location report, portable config export)
 - [x] F030 - Pi-hole/AdGuard/Technitium/blocky interoperability pack (`docs/dns-integrations.md`, DNS export presets, integration CLI)
+- [x] F031 - NextDNS and Control D import/export adapters (`docs/cloud-dns-adapters.md`, plan-only cloud adapter CLI, CSV log importers)
 
 ## State Of The Repo
 
@@ -58,8 +59,8 @@ Non-negotiables:
 - Language and runtime: Python 3.x, Tkinter desktop UI, Windows-first assumptions, PowerShell launcher.
 - Entry points: `hosts_editor.py` for GUI and CLI, `PythonLauncher.ps1` for elevated launch/bootstrap, `HostsFileGet.spec` for PyInstaller.
 - Packaging: PyInstaller one-file Windows EXE with `uac_admin=True`; build artifacts exist locally under `build/` and `dist/` but are not tracked.
-- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 200 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation, migration importer fixtures, export-format fixtures, DNS integration fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, and find/replace.
-- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `LICENSE`, and this roadmap.
+- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 206 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation, migration importer fixtures, export-format fixtures, DNS integration fixtures, cloud DNS adapter fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, NextDNS/Control D CSV logs, and find/replace.
+- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/cloud-dns-adapters.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `LICENSE`, and this roadmap.
 - License: MIT.
 
 ### Product Reality
@@ -67,13 +68,14 @@ Non-negotiables:
 HostsFileGet already provides:
 
 - Raw and cleaned save paths with preview, backups, dry-run mode, admin detection, read-only lock support, and panic restore.
-- Curated and custom source import, manual paste import, pfSense, NextDNS CSV, Pi-hole FTL, and AdGuard Home query log importers.
+- Curated and custom source import, manual paste import, pfSense, NextDNS CSV, Control D CSV, Pi-hole FTL, and AdGuard Home query log importers.
 - Source freshness dots, update-on-launch, scheduled update, `--update`, `--apply`, `--backup`, `--disable`, `--enable`, `--silent`, and provenance JSONL logging.
 - Declarative profile plan/apply/export commands for YAML, TOML, and JSON source-of-truth files that update app config without writing the system hosts file.
 - Explicit CLI profile list/import/apply/export commands for staging and switching saved profiles without touching the system hosts file.
 - Scheduled updates use `--update --silent`, bounded activity JSONL, and `--activity-report` for local scheduler observability.
 - `--config-location` and `--portable-export` make local-user versus portable bundle config paths explicit.
 - `--integration-list` and `--integration-export` provide file-only Pi-hole, AdGuard Home/DNS, Technitium, and blocky DNS export handoffs.
+- `--cloud-adapter-list`, `--cloud-adapter-plan`, and `--cloud-log-import` provide plan-only NextDNS/Control D adapter artifacts and local CSV log extraction without storing credentials or performing remote writes.
 - Optional local Git-backed history commands for snapshot, status, and admin-gated rollback with normal `.bak` backup creation.
 - Live stats, category hints, source report, health scan, DNS flush, domain check, find/replace, cleanup commands, import-section removal, backup diff, pinned domains, and export formats.
 
@@ -211,7 +213,7 @@ Legend:
 | F028 | Scheduler hardening and activity report | Automation, observability | common | Yes | 4 | 3 | Builds on existing schtasks support and silent logs. | Next | O9, L2, K8 |
 | F029 | Managed portable bundle config | Distribution, migration | common | Yes | 3 | 3 | Must keep local-user and portable paths unambiguous. | Next | O1, O3, L5 |
 | F030 | Pi-hole/AdGuard/Technitium/blocky interoperability pack | Integrations | table-stakes | Yes | 5 | 4 | Prefer export/import files and APIs before remote writes. | Next | O6, O7, O8, O15 |
-| F031 | NextDNS and Control D import/export adapters | Integrations | common | Guarded | 4 | 4 | API keys, privacy, and quotas; never default. | Next | C1, C2, C3, C4 |
+| F031 | NextDNS and Control D import/export adapters | Integrations | common | Guarded | 4 | 4 | API keys, privacy, and quotas; never default. | Next | C1, C2, C3, C4, C8, C9, C10, C11 |
 | F032 | Adblock syntax linter and cosmetic-rule quarantine | Data, UX | common | Yes | 4 | 4 | Must distinguish DNS-compatible rules from browser-only syntax. | Next | O7, O17, K4 |
 | F033 | Regex/exact/wildcard rule tiers with hosts warnings | UX, data | common | Yes | 5 | 4 | Must warn hosts cannot natively express wildcards. | Next | C3, K9, S12 |
 | F034 | IDN/punycode and homograph warnings | Security, i18n | common | Yes | 4 | 3 | Use deterministic checks; do not over-block. | Next | C1, S1 |
@@ -290,12 +292,13 @@ Legend:
 12. Completed - Migration/export interoperability: F023.
 13. Completed - Declarative profile/history/scheduler/portable automation: F025-F029.
 14. Completed - DNS resolver interoperability pack: F030.
+15. Completed - Guarded cloud DNS adapters: F031.
 
 Rationale: these items reduce maintenance risk, make the current product more trustworthy, and create the internal contracts needed for the larger profile/integration work.
 
 ### Next
 
-1. DNS ecosystem interoperability: F031, F032, F033, F034.
+1. DNS ecosystem interoperability: F032, F033, F034.
 2. Security packs and rule intelligence: F035, F036, F037, F038, F039, F040.
 3. Faster large-scale operations: F041, F042, F043, F047, F048, F049, F050, F051.
 4. Packaging, plugin, collaboration growth: F045, F046, F052, F053, F054, F055.
@@ -403,6 +406,10 @@ A hostile reviewer would likely object to four things:
 | C5 | https://adguard-dns.io/en/welcome.html | Ad blocking, parental controls, per-device stats, customized filtering, encrypted protocols |
 | C6 | https://www.dnsfilter.com/ | Business DNS filtering, reporting, roaming clients, SSO, integrations |
 | C7 | https://apidocs.dnsfilter.com/ | API-first management precedent |
+| C8 | https://nextdns.github.io/api/ | NextDNS profile child endpoints, X-Api-Key authentication, logs download |
+| C9 | https://docs.controld.com/reference/post_profiles-profile-id-rules | Control D custom-rule create endpoint, block action, hostnames[] form field, bearer auth |
+| C10 | https://docs.controld.com/docs/how-to-export-logs-to-csv | Control D dashboard/API CSV activity-log export shape |
+| C11 | https://docs.controld.com/docs/log-field-reference | Control D activity query field and blocked action code |
 
 ### Community And Issue Signals
 

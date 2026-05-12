@@ -44,6 +44,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - custom persistent sources
   - pfSense DNSBL log import
   - NextDNS CSV import
+  - Control D activity-log CSV import
   - Windows DNS Client Operational snapshot import
   - SwitchHosts, Gas Mask, and HostsFileEditor migration imports
   - manual pasted list import
@@ -55,6 +56,7 @@ It is designed for people who work with large blocklists, external feed imports,
 - Export adapters:
   - cleaned hosts, plain domains, Adblock, dnsmasq, and Pi-hole formats
   - Pi-hole, AdGuard Home/DNS, Technitium DNS Server, and blocky interoperability presets
+  - plan-only NextDNS and Control D cloud DNS adapter plans that never store API keys or execute remote writes
   - RPZ, Unbound, Privoxy, gzip-compressed hosts, and bzip2-compressed hosts
 - Operational utilities:
   - DNS cache flush
@@ -213,6 +215,15 @@ python hosts_editor.py --integration-list
 python hosts_editor.py --integration-export adguard-home .\cleaned-hosts.txt .\adguard-dns-filter.txt
 ```
 
+Generate guarded cloud-DNS replay plans or extract blocked domains from cloud DNS CSV log exports:
+
+```powershell
+python hosts_editor.py --cloud-adapter-list
+python hosts_editor.py --cloud-adapter-plan nextdns .\cleaned-hosts.txt .\nextdns-plan.json --cloud-profile-id abc123
+python hosts_editor.py --cloud-adapter-plan controld .\cleaned-hosts.txt .\controld-plan.json --cloud-profile-id profile_id
+python hosts_editor.py --cloud-log-import controld .\activity-log.csv .\blocked-domains.txt
+```
+
 Run the deterministic large-file benchmark with:
 
 ```powershell
@@ -237,6 +248,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Scheduler activity report: `docs/scheduler-activity.md`
 - Portable bundle config: `docs/portable-config.md`
 - DNS interoperability pack: `docs/dns-integrations.md`
+- Cloud DNS adapters: `docs/cloud-dns-adapters.md`
 - Troubleshooting and hosts-file limits: `TROUBLESHOOTING.md`
 - Config schema: `docs/config-schema.md`
 - Curated source manifest: `docs/source-manifest.md`
