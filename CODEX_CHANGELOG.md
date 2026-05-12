@@ -33,6 +33,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F014 complete. Next roadmap item: F015 named profile data model groundwork.
 - Completed F015: bumped config schema to 3, added versioned profile payload sanitation, mirrored the current single-editor state into the active profile on save, documented the profile schema, and added regression tests for IDs, mapping/list inputs, dedupe, and active-profile refresh.
 - Updated `ROADMAP.md` to mark F015 complete. Next roadmap item: F016 golden-file cleaned-output tests.
+- Completed F016: added manifest-driven golden cleaned-output fixtures for mixed normalization, custom mappings, and pinned whitelist overrides, with exact output and stats assertions.
+- Updated `ROADMAP.md` to mark F016 complete. Next roadmap item: F017 property-based parser/fuzzer tests.
 
 ## Scope
 

@@ -35,7 +35,7 @@ Non-negotiables:
 - [x] F013 - Windows DNS Client ETW import/live tail spike (`docs/windows-dns-client.md`, guarded Operational-log snapshot import)
 - [x] F014 - DoH/DoT/DoQ bypass diagnostics (`docs/dns-bypass-diagnostics.md`, policy/proxy diagnostic report)
 - [x] F015 - Named profile data model groundwork (`profile_schema_version`, `active_profile_id`, sanitized profile payloads)
-- [ ] F016 - Golden-file cleaned-output tests
+- [x] F016 - Golden-file cleaned-output tests (`tests/golden_cleaned/`, exact output/stat fixtures)
 - [ ] F017 - Property-based parser/fuzzer tests
 - [ ] F018 - GUI smoke tests
 - [ ] F019 - Large-file benchmark suite
@@ -52,7 +52,7 @@ Non-negotiables:
 - Language and runtime: Python 3.x, Tkinter desktop UI, Windows-first assumptions, PowerShell launcher.
 - Entry points: `hosts_editor.py` for GUI and CLI, `PythonLauncher.ps1` for elevated launch/bootstrap, `HostsFileGet.spec` for PyInstaller.
 - Packaging: PyInstaller one-file Windows EXE with `uac_admin=True`; build artifacts exist locally under `build/` and `dist/` but are not tracked.
-- Tests: `tests/test_hosts_editor_logic.py` contains 154 pure-function unit tests covering parsing, normalization, config/profile sanitation, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, and find/replace.
+- Tests: `tests/test_hosts_editor_logic.py` contains 155 pure-function unit tests plus manifest-driven golden cleaned-output fixtures covering parsing, normalization, config/profile sanitation, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, and find/replace.
 - Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `LICENSE`, and this roadmap.
 - License: MIT.
 
@@ -269,9 +269,10 @@ Legend:
 3. Completed - Config and source-data foundations: F005-F009.
 4. Completed - Explainability and diagnostics: F010-F014.
 5. Completed - Profile data model groundwork: F015.
-6. Next - Quality gates: F016, F017, F018, F019.
-7. Migration/export interoperability: F022, F023.
-8. Accessibility and i18n foundations: F020, F021.
+6. Completed - Golden cleaned-output fixtures: F016.
+7. Next - Parser, GUI, and benchmark quality gates: F017, F018, F019.
+8. Migration/export interoperability: F022, F023.
+9. Accessibility and i18n foundations: F020, F021.
 
 Rationale: these items reduce maintenance risk, make the current product more trustworthy, and create the internal contracts needed for the larger profile/integration work.
 
