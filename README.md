@@ -38,6 +38,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - curated web blocklists from a versioned JSON source manifest
   - source health reporting for curated feed reachability
   - ETag / Last-Modified refresh cache with cached-body fallback
+  - source trust badges for transport, upstream report path, local freshness, cache integrity, and catalog/license caveats
   - batch import with filtering and progress
   - custom persistent sources
   - pfSense DNSBL log import

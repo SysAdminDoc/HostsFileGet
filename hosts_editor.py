@@ -70,6 +70,18 @@ SOURCE_PREVIEW_MAX_LINES = 80
 SOURCE_CORPUS_CACHE_MAX_ENTRY_BYTES = 2 * 1024 * 1024
 SOURCE_CORPUS_CACHE_MAX_TOTAL_BYTES = 16 * 1024 * 1024
 SOURCE_CORPUS_CACHE_MAX_ENTRIES = 24
+SOURCE_TRUST_DOC_PATH = "docs/source-trust.md"
+SOURCE_TRUST_RISK_WORDS = (
+    "aggressive",
+    "maximum",
+    "broad",
+    "huge",
+    "mega",
+    "extended",
+    "adult",
+    "porn",
+    "requires processing",
+)
 
 # Loopback / block-style IPs that the "change block target" tool treats as
 # equivalent and will rewrite to the user's chosen sink. :: is the IPv6 null
@@ -741,12 +753,12 @@ class BulkSelectionDialog(tk.Toplevel):
 
         query = self.filter_var.get().strip().lower()
         self._visible_source_keys.clear()
-        grouped: dict[str, list[tuple[str, str, str]]] = {}
+        grouped: dict[str, list[tuple[str, str, str, str]]] = {}
         for category, name, url, tooltip in self._all_sources:
             haystack = f"{category} {name} {url} {tooltip}".lower()
             if query and query not in haystack:
                 continue
-            grouped.setdefault(category, []).append((name, url, tooltip))
+            grouped.setdefault(category, []).append((category, name, url, tooltip))
 
         if not grouped:
             self.empty_state_label = ttk.Label(
@@ -762,8 +774,8 @@ class BulkSelectionDialog(tk.Toplevel):
 
         for category, sources in grouped.items():
             self._add_category_header(category, len(sources))
-            for name, url, tooltip in sources:
-                self._add_checkbox(name, url, tooltip)
+            for source_category, name, url, tooltip in sources:
+                self._add_checkbox(source_category, name, url, tooltip)
         self._update_selection_summary()
 
     def _add_category_header(self, text, count):
@@ -781,7 +793,7 @@ class BulkSelectionDialog(tk.Toplevel):
         ttk.Label(inner, text=text, style="SectionTitle.TLabel").pack(side="left")
         ttk.Label(inner, text=f"{count} shown", style="SectionBody.TLabel").pack(side="right")
 
-    def _add_checkbox(self, name, url, tooltip):
+    def _add_checkbox(self, category, name, url, tooltip):
         key = (name, url)
         var = tk.BooleanVar(value=self._selection_state.get(key, True))
         shell = tk.Frame(
@@ -807,6 +819,25 @@ class BulkSelectionDialog(tk.Toplevel):
         cb.pack(side="left", fill="x", expand=True)
         source_host = urllib.parse.urlparse(url).netloc or url
         ttk.Label(row, text=source_host, foreground=PALETTE["subtext"]).pack(side="right", padx=(8, 0))
+        source_kind = "saved" if category == "Custom Sources" else "curated"
+        last_stamp = self.editor.source_last_fetched.get(url, "") if hasattr(self.editor, "source_last_fetched") else ""
+        cache_metadata = self.editor.source_cache_metadata.get(url, {}) if hasattr(self.editor, "source_cache_metadata") else {}
+        trust_badges = build_source_trust_badges(
+            name,
+            url,
+            tooltip,
+            category=category,
+            source_kind=source_kind,
+            last_fetched=last_stamp,
+            cache_metadata=cache_metadata,
+        )
+        ttk.Label(
+            frame,
+            text=format_source_trust_badges(trust_badges),
+            style="SectionBody.TLabel",
+            wraplength=600,
+            justify="left",
+        ).pack(anchor="w", pady=(5, 0))
         ttk.Label(
             frame,
             text=tooltip,
@@ -816,7 +847,8 @@ class BulkSelectionDialog(tk.Toplevel):
         ).pack(anchor="w", pady=(6, 0))
 
         url_short = (url[:72] + "..") if len(url) > 72 else url
-        ToolTip(cb, f"{tooltip}\nURL: {url_short}")
+        trust_details = format_source_trust_details(trust_badges)
+        ToolTip(cb, f"{tooltip}\nURL: {url_short}\n\nTrust badges:\n{trust_details}")
 
         self._visible_source_keys.append(key)
 
@@ -1604,6 +1636,218 @@ def sanitize_custom_sources(custom_sources) -> list[dict[str, str]]:
         sanitized_sources.append({"name": name, "url": url})
 
     return sanitized_sources
+
+
+def _source_badge(label: str, tone: str, detail: str, url: str = "") -> dict[str, str]:
+    return {"label": label, "tone": tone, "detail": detail, "url": url}
+
+
+def _github_repo_from_source_url(parsed) -> tuple[str, str] | None:
+    host = parsed.netloc.lower()
+    parts = [part for part in parsed.path.strip("/").split("/") if part]
+    if host == "raw.githubusercontent.com" and len(parts) >= 2:
+        return parts[0], parts[1]
+    if host in {"github.com", "www.github.com"} and len(parts) >= 2:
+        return parts[0], parts[1]
+    if host == "cdn.jsdelivr.net" and len(parts) >= 3 and parts[0] == "gh":
+        owner = parts[1]
+        repo = parts[2].split("@", 1)[0]
+        if owner and repo:
+            return owner, repo
+    return None
+
+
+def _gitlab_repo_from_source_url(parsed) -> tuple[str, str] | None:
+    host = parsed.netloc.lower()
+    if host not in {"gitlab.com", "www.gitlab.com"}:
+        return None
+    parts = [part for part in parsed.path.strip("/").split("/") if part]
+    if "-/raw" in parsed.path and "-" in parts:
+        dash_index = parts.index("-")
+        repo_parts = parts[:dash_index]
+    elif "raw" in parts:
+        raw_index = parts.index("raw")
+        repo_parts = parts[:raw_index]
+    else:
+        repo_parts = parts
+    if len(repo_parts) >= 2:
+        namespace = "/".join(repo_parts[:-1])
+        return namespace, repo_parts[-1]
+    return None
+
+
+def source_trust_report_url(url: str) -> str:
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return ""
+    github_repo = _github_repo_from_source_url(parsed)
+    if github_repo:
+        owner, repo = github_repo
+        return f"https://github.com/{owner}/{repo}/issues"
+    gitlab_repo = _gitlab_repo_from_source_url(parsed)
+    if gitlab_repo:
+        namespace, repo = gitlab_repo
+        return f"https://gitlab.com/{namespace}/{repo}/-/issues"
+    return ""
+
+
+def _source_origin_badge(url: str) -> dict[str, str]:
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return _source_badge("Unknown origin", "warning", "The source URL could not be parsed.")
+    host = parsed.netloc.lower()
+    if _github_repo_from_source_url(parsed):
+        if host == "cdn.jsdelivr.net":
+            return _source_badge(
+                "CDN mirror",
+                "info",
+                "Served through jsDelivr, backed by a GitHub repository path.",
+                source_trust_report_url(url),
+            )
+        return _source_badge(
+            "GitHub-backed",
+            "info",
+            "The feed path maps to a GitHub repository; use the issue path for upstream complaints.",
+            source_trust_report_url(url),
+        )
+    if _gitlab_repo_from_source_url(parsed):
+        return _source_badge(
+            "GitLab-backed",
+            "info",
+            "The feed path maps to a GitLab repository; use the issue path for upstream complaints.",
+            source_trust_report_url(url),
+        )
+    if host:
+        return _source_badge("Direct host", "neutral", f"Feed is served directly from {host}.")
+    return _source_badge("Unknown origin", "warning", "The source URL has no host.")
+
+
+def build_source_trust_badges(
+    name: str,
+    url: str,
+    description: str = "",
+    category: str = "",
+    source_kind: str = "curated",
+    last_fetched: str = "",
+    cache_metadata: dict | None = None,
+    license_id: str = "",
+) -> list[dict[str, str]]:
+    """Return transparent trust badges for display near source import controls."""
+    badges: list[dict[str, str]] = []
+    kind = str(source_kind or "").strip().lower()
+    if kind == "curated":
+        badges.append(
+            _source_badge(
+                "Curated",
+                "info",
+                "This feed is listed in the bundled catalog. This is not an endorsement of upstream content.",
+            )
+        )
+    elif kind == "saved":
+        badges.append(
+            _source_badge(
+                "Saved",
+                "neutral",
+                "This is a user-saved feed. Review its upstream project before relying on it.",
+            )
+        )
+    else:
+        badges.append(_source_badge("External", "neutral", "This feed is outside the bundled catalog."))
+
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        parsed = urllib.parse.urlparse("")
+    if parsed.scheme.lower() == "https":
+        badges.append(_source_badge("HTTPS", "success", "Transport uses HTTPS. Content can still change upstream."))
+    elif parsed.scheme.lower() == "http":
+        badges.append(
+            _source_badge(
+                "HTTP",
+                "warning",
+                "Transport is not encrypted. Prefer HTTPS or verify content before importing.",
+            )
+        )
+    else:
+        badges.append(_source_badge("Bad URL", "danger", "The source URL does not use HTTP or HTTPS."))
+
+    badges.append(_source_origin_badge(url))
+
+    clean_license = str(license_id or "").strip()
+    if clean_license:
+        badges.append(_source_badge(f"License {clean_license[:24]}", "success", "License metadata is recorded in the source catalog."))
+    else:
+        badges.append(
+            _source_badge(
+                "License untracked",
+                "warning",
+                "The catalog does not yet record an upstream license for this feed.",
+            )
+        )
+
+    report_url = source_trust_report_url(url)
+    if report_url:
+        badges.append(_source_badge("Issue path", "success", f"Upstream complaint path: {report_url}", report_url))
+    else:
+        host = parsed.netloc or str(url).strip()
+        badges.append(
+            _source_badge(
+                "Report manually",
+                "neutral",
+                f"No repository issue path could be derived; report problems through {host or 'the source owner'}.",
+            )
+        )
+
+    risk_haystack = f"{name} {description} {category}".lower()
+    if any(word in risk_haystack for word in SOURCE_TRUST_RISK_WORDS):
+        badges.append(
+            _source_badge(
+                "Review scope",
+                "warning",
+                "Name, category, or description suggests a broad/aggressive/special-format feed.",
+            )
+        )
+
+    if last_fetched:
+        freshness = classify_source_freshness(last_fetched)
+        relative = format_relative_time(last_fetched)
+        tone = "success" if freshness in {"fresh", "warm"} else "warning"
+        badges.append(_source_badge("Fetched", tone, f"Last fetched: {relative or last_fetched}."))
+    else:
+        badges.append(_source_badge("Not fetched", "neutral", "This install has not fetched the source yet."))
+
+    if isinstance(cache_metadata, dict) and _normalize_sha256(cache_metadata.get("content_sha256")):
+        badges.append(
+            _source_badge(
+                "Cache verified",
+                "success",
+                "A cached source body exists and is guarded by a SHA-256 content hash.",
+            )
+        )
+
+    return badges
+
+
+def format_source_trust_badges(badges: list[dict[str, str]], max_badges: int = 8) -> str:
+    labels = [str(badge.get("label", "")).strip() for badge in badges if isinstance(badge, dict)]
+    labels = [label for label in labels if label]
+    if len(labels) > max_badges:
+        labels = labels[:max_badges] + [f"+{len(labels) - max_badges}"]
+    return " | ".join(labels)
+
+
+def format_source_trust_details(badges: list[dict[str, str]]) -> str:
+    lines = []
+    for badge in badges:
+        if not isinstance(badge, dict):
+            continue
+        label = str(badge.get("label", "")).strip()
+        detail = str(badge.get("detail", "")).strip()
+        if label and detail:
+            lines.append(f"{label}: {detail}")
+    return "\n".join(lines)
 
 
 def _valid_iso_timestamp(value: str) -> bool:
@@ -4320,7 +4564,22 @@ class HostsFileEditor:
                 stamp_hint = format_relative_time(last_stamp)
                 source_host = urllib.parse.urlparse(url).netloc or url
                 freshness = f"Fetched {stamp_hint}" if stamp_hint else "Not fetched yet"
-                tooltip_full = f"{tooltip}\n\nLast fetched: {stamp_hint}" if stamp_hint else tooltip
+                cache_metadata = self.source_cache_metadata.get(url, {}) if hasattr(self, "source_cache_metadata") else {}
+                trust_badges = build_source_trust_badges(
+                    name,
+                    url,
+                    tooltip,
+                    category=category,
+                    source_kind="curated",
+                    last_fetched=last_stamp,
+                    cache_metadata=cache_metadata,
+                )
+                trust_text = format_source_trust_badges(trust_badges)
+                trust_details = format_source_trust_details(trust_badges)
+                tooltip_full = (
+                    f"{tooltip}\n\nLast fetched: {stamp_hint or 'Not fetched yet'}"
+                    f"\n\nTrust badges:\n{trust_details}"
+                )
 
                 title_row = ttk.Frame(copy, style="Inset.TFrame")
                 title_row.pack(anchor="w", fill="x")
@@ -4333,6 +4592,7 @@ class HostsFileEditor:
                 ToolTip(dot, dot_tip)
                 ttk.Label(title_row, text=name, style="InsetTitle.TLabel").pack(side="left")
                 ttk.Label(copy, text=f"{source_host}  |  {freshness}", style="InsetBody.TLabel", wraplength=260, justify="left").pack(anchor="w", pady=(3, 0))
+                ttk.Label(copy, text=trust_text, style="InsetBody.TLabel", wraplength=270, justify="left").pack(anchor="w", pady=(3, 0))
                 ttk.Label(copy, text=tooltip, style="InsetBody.TLabel", wraplength=250, justify="left").pack(anchor="w", pady=(3, 0))
 
                 action_row = ttk.Frame(row, style="Inset.TFrame")
@@ -7042,6 +7302,37 @@ class HostsFileEditor:
     def preview_blocklist_source(self, name: str, url: str):
         if not url:
             return
+        source_category = ""
+        source_kind = "external"
+        description = ""
+        for category, sources in self.BLOCKLIST_SOURCES.items():
+            for source_name, source_url, source_description in sources:
+                if source_name == name and source_url == url:
+                    source_category = category
+                    source_kind = "curated"
+                    description = source_description
+                    break
+            if source_category:
+                break
+        if not source_category:
+            for source in getattr(self, "custom_sources", []):
+                if source.get("name") == name and source.get("url") == url:
+                    source_category = "Saved Sources"
+                    source_kind = "saved"
+                    description = f"Use '{name}' as a saved custom feed."
+                    break
+        last_stamp = self.source_last_fetched.get(url, "") if hasattr(self, "source_last_fetched") else ""
+        cache_metadata = self.source_cache_metadata.get(url, {}) if hasattr(self, "source_cache_metadata") else {}
+        trust_badges = build_source_trust_badges(
+            name,
+            url,
+            description,
+            category=source_category,
+            source_kind=source_kind,
+            last_fetched=last_stamp,
+            cache_metadata=cache_metadata,
+        )
+        trust_details = format_source_trust_details(trust_badges)
         dialog = tk.Toplevel(self.root)
         self._configure_modal_window(
             dialog,
@@ -7063,6 +7354,14 @@ class HostsFileEditor:
             justify="left",
             style="SectionBody.TLabel",
         ).pack(anchor='w')
+        ttk.Label(
+            intro,
+            text=f"Trust badges: {format_source_trust_badges(trust_badges)}",
+            wraplength=720,
+            justify="left",
+            style="SectionBody.TLabel",
+        ).pack(anchor='w', pady=(8, 0))
+        ToolTip(intro, f"Source trust criteria are documented in {SOURCE_TRUST_DOC_PATH}.\n\n{trust_details}")
 
         status_label = ttk.Label(dialog, text="Fetching preview...", style="StatusMeta.TLabel")
         status_label.pack(anchor="w", padx=20, pady=(8, 0))
@@ -8133,10 +8432,26 @@ class HostsFileEditor:
         stamp_hint = format_relative_time(last_stamp)
         source_host = urllib.parse.urlparse(url).netloc or url
         freshness = f"Fetched {stamp_hint}" if stamp_hint else "Not fetched yet"
-        tooltip_full = f"{tooltip}\n\nLast fetched: {stamp_hint}" if stamp_hint else tooltip
+        cache_metadata = self.source_cache_metadata.get(url, {}) if hasattr(self, "source_cache_metadata") else {}
+        trust_badges = build_source_trust_badges(
+            name,
+            url,
+            tooltip,
+            category="Saved Sources",
+            source_kind="saved",
+            last_fetched=last_stamp,
+            cache_metadata=cache_metadata,
+        )
+        trust_text = format_source_trust_badges(trust_badges)
+        trust_details = format_source_trust_details(trust_badges)
+        tooltip_full = (
+            f"{tooltip}\n\nLast fetched: {stamp_hint or 'Not fetched yet'}"
+            f"\n\nTrust badges:\n{trust_details}"
+        )
 
         ttk.Label(copy, text=name, style="InsetTitle.TLabel").pack(anchor="w")
         ttk.Label(copy, text=f"{source_host}  |  {freshness}", style="InsetBody.TLabel", wraplength=260, justify="left").pack(anchor="w", pady=(3, 0))
+        ttk.Label(copy, text=trust_text, style="InsetBody.TLabel", wraplength=270, justify="left").pack(anchor="w", pady=(3, 0))
 
         action_row = ttk.Frame(top, style="Inset.TFrame")
         action_row.pack(side="right", padx=(12, 0))
