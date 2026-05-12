@@ -68,6 +68,21 @@ class HostsEditorGuiSmokeTests(unittest.TestCase):
         self.assertIn("Preferences", titles)
         self._destroy_toplevels(root)
 
+    def test_accessibility_and_translation_report_dialogs_open(self):
+        root, editor = self._build_smoke_editor()
+
+        editor.show_accessibility_audit()
+        root.update_idletasks()
+        titles = [child.title() for child in root.winfo_children() if isinstance(child, tk.Toplevel)]
+        self.assertIn("Accessibility Audit", titles)
+        self._destroy_toplevels(root)
+
+        editor.show_i18n_catalog_report()
+        root.update_idletasks()
+        titles = [child.title() for child in root.winfo_children() if isinstance(child, tk.Toplevel)]
+        self.assertIn("Translation Catalog", titles)
+        self._destroy_toplevels(root)
+
 
 if __name__ == "__main__":
     unittest.main()

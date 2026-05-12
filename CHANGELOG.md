@@ -65,6 +65,11 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added pure WCAG-style contrast helpers plus regression coverage so tracked palette pairs fail in the normal test suite when contrast regresses.
 - Documented the manual Windows high-contrast, screen-reader, keyboard-only, and font-scaling checks in `docs/accessibility.md`.
 
+**i18n catalog foundation**
+- Added `data/i18n/en-US.json` with schema validation, locale normalization, key validation, formatting-safe lookup, and built-in English fallback.
+- Added **Tools > Translation Catalog...** so maintainers can inspect active catalog source, fallback coverage, and key rules.
+- Updated the launcher and PyInstaller spec so the English catalog is cached/bundled when available without breaking cached-script launches if it is missing.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

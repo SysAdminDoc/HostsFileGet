@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "locale": "en-US",
+  "messages": {
+    "app.name": "Hosts File Get",
+    "common.close": "Close",
+    "common.details": "Details",
+    "status.default_hint": "Ctrl+S Cleaned Save   Ctrl+Shift+S Raw Save   F5 Reload",
+    "status.loading": "Loading...",
+    "button.stop_import": "Stop Import",
+    "menu.tools.accessibility_audit": "Accessibility Audit...",
+    "menu.tools.translation_catalog": "Translation Catalog...",
+    "dialog.accessibility.title": "Accessibility Audit",
+    "dialog.accessibility.intro": "Checks contrast ratios, font assumptions, and the manual screen-reader pass list for the current Tk theme.",
+    "dialog.i18n.title": "Translation Catalog",
+    "dialog.i18n.intro": "Reports the active string catalog, fallback coverage, and key naming rules for future localization work."
+  }
+}

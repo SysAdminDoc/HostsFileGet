@@ -40,7 +40,7 @@ Non-negotiables:
 - [x] F018 - GUI smoke tests (`tests/test_gui_smoke.py`, patched startup/modal coverage)
 - [x] F019 - Large-file benchmark suite (`benchmarks/large_file_benchmark.py`, docs, smoke coverage)
 - [x] F020 - High-contrast, screen-reader, and font audit (`docs/accessibility.md`, Tools audit report, contrast regression coverage)
-- [ ] F021 - i18n string catalog foundation
+- [x] F021 - i18n string catalog foundation (`data/i18n/en-US.json`, fallback translator, Tools catalog report)
 - [ ] F022 - Importers for SwitchHosts, Gas Mask, HostsFileEditor archives
 - [ ] F023 - RPZ, Unbound, Privoxy, compressed-hosts exports
 - [x] F024 - Limitations and troubleshooting guide (`TROUBLESHOOTING.md`)
@@ -52,8 +52,8 @@ Non-negotiables:
 - Language and runtime: Python 3.x, Tkinter desktop UI, Windows-first assumptions, PowerShell launcher.
 - Entry points: `hosts_editor.py` for GUI and CLI, `PythonLauncher.ps1` for elevated launch/bootstrap, `HostsFileGet.spec` for PyInstaller.
 - Packaging: PyInstaller one-file Windows EXE with `uac_admin=True`; build artifacts exist locally under `build/` and `dist/` but are not tracked.
-- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 162 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, and find/replace.
-- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `LICENSE`, and this roadmap.
+- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 168 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, and find/replace.
+- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `docs/accessibility.md`, `docs/i18n.md`, `LICENSE`, and this roadmap.
 - License: MIT.
 
 ### Product Reality

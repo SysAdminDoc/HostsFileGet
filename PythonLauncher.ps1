@@ -14,11 +14,14 @@ $AppName = "Hosts File Get"
 $AppSlug = "HostsFileGet"
 $EditorUrl = "https://raw.githubusercontent.com/SysAdminDoc/HostsFileGet/refs/heads/main/hosts_editor.py"
 $SourceManifestUrl = "https://raw.githubusercontent.com/SysAdminDoc/HostsFileGet/refs/heads/main/data/blocklist_sources.json"
+$I18nCatalogUrl = "https://raw.githubusercontent.com/SysAdminDoc/HostsFileGet/refs/heads/main/data/i18n/en-US.json"
 $EditorCacheBase = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
 $EditorCacheRoot = Join-Path $EditorCacheBase $AppSlug
 $EditorPath = Join-Path $EditorCacheRoot "hosts_editor.py"
 $SourceManifestDir = Join-Path $EditorCacheRoot "data"
 $SourceManifestPath = Join-Path $SourceManifestDir "blocklist_sources.json"
+$I18nCatalogDir = Join-Path $SourceManifestDir "i18n"
+$I18nCatalogPath = Join-Path $I18nCatalogDir "en-US.json"
 $LogPath = Join-Path $EditorCacheRoot "launcher.log"
 
 # Persist a transcript so unattended launches (scheduled tasks, helpdesk
@@ -429,6 +432,54 @@ function Test-ValidSourceManifestFile {
     }
 }
 
+function Test-ValidI18nCatalogFile {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+
+    try {
+        $item = Get-Item -LiteralPath $Path -ErrorAction Stop
+        if ($item.Length -lt 100) {
+            return $false
+        }
+        if ($item.Length -gt 256KB) {
+            return $false
+        }
+
+        $content = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+        if ($content -match "<html" -or $content -match "<!DOCTYPE html") {
+            return $false
+        }
+
+        $payload = $content | ConvertFrom-Json -ErrorAction Stop
+        if ($payload.schema_version -ne 1) {
+            return $false
+        }
+        if ([string]::IsNullOrWhiteSpace($payload.locale)) {
+            return $false
+        }
+        if (-not $payload.messages) {
+            return $false
+        }
+
+        $messageNames = @($payload.messages.PSObject.Properties.Name)
+        if ($messageNames.Count -lt 5) {
+            return $false
+        }
+        foreach ($requiredKey in @("common.close", "common.details", "dialog.i18n.title")) {
+            if ($messageNames -notcontains $requiredKey) {
+                return $false
+            }
+        }
+
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 # ==========================================================
 # 4. DOWNLOAD AND RUN EDITOR
 # ==========================================================
@@ -440,8 +491,10 @@ function Invoke-EditorBootstrap {
     try {
         Initialize-CacheDirectory -Path $EditorCacheRoot
         Initialize-CacheDirectory -Path $SourceManifestDir
+        Initialize-CacheDirectory -Path $I18nCatalogDir
         $temporaryDownloadPath = Join-Path $EditorCacheRoot "hosts_editor.download.py"
         $temporaryManifestDownloadPath = Join-Path $SourceManifestDir "blocklist_sources.download.json"
+        $temporaryI18nCatalogDownloadPath = Join-Path $I18nCatalogDir "en-US.download.json"
         $editorPathToLaunch = $EditorPath
 
         if (Test-Path -LiteralPath $temporaryDownloadPath) {
@@ -449,6 +502,9 @@ function Invoke-EditorBootstrap {
         }
         if (Test-Path -LiteralPath $temporaryManifestDownloadPath) {
             Remove-Item -LiteralPath $temporaryManifestDownloadPath -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path -LiteralPath $temporaryI18nCatalogDownloadPath) {
+            Remove-Item -LiteralPath $temporaryI18nCatalogDownloadPath -Force -ErrorAction SilentlyContinue
         }
 
         if (Invoke-FileDownload -Uri $EditorUrl -OutFile $temporaryDownloadPath) {
@@ -479,6 +535,19 @@ function Invoke-EditorBootstrap {
         } else {
             throw "Source manifest download failed and no valid cached manifest is available."
         }
+
+        Write-LauncherStatus "Preparing i18n catalog..."
+        if (Invoke-FileDownload -Uri $I18nCatalogUrl -OutFile $temporaryI18nCatalogDownloadPath) {
+            if (-not (Test-ValidI18nCatalogFile -Path $temporaryI18nCatalogDownloadPath)) {
+                throw "Downloaded i18n catalog failed validation."
+            }
+            Move-Item -LiteralPath $temporaryI18nCatalogDownloadPath -Destination $I18nCatalogPath -Force
+            Write-LauncherStatus "i18n catalog ready."
+        } elseif (Test-ValidI18nCatalogFile -Path $I18nCatalogPath) {
+            Write-LauncherStatus "i18n catalog download failed. Using cached catalog."
+        } else {
+            Write-LauncherStatus "i18n catalog unavailable. Using built-in English strings."
+        }
     }
     catch {
         Write-LauncherStatus "ERROR: Failed to prepare editor"
@@ -491,6 +560,9 @@ function Invoke-EditorBootstrap {
         }
         if ($temporaryManifestDownloadPath -and (Test-Path -LiteralPath $temporaryManifestDownloadPath)) {
             Remove-Item -LiteralPath $temporaryManifestDownloadPath -Force -ErrorAction SilentlyContinue
+        }
+        if ($temporaryI18nCatalogDownloadPath -and (Test-Path -LiteralPath $temporaryI18nCatalogDownloadPath)) {
+            Remove-Item -LiteralPath $temporaryI18nCatalogDownloadPath -Force -ErrorAction SilentlyContinue
         }
     }
 
