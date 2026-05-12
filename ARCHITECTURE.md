@@ -40,6 +40,7 @@ It is not a DNS server, browser ad blocker, cloud filtering service, or endpoint
 | `data/blocklist_sources.json` | Versioned curated blocklist catalog loaded at startup |
 | `docs/source-manifest.md` | Curated source manifest schema and maintenance rules |
 | `docs/source-health.md` | Source reachability checker and report format |
+| `docs/false-positive-triage.md` | Check Domain triage behavior, actions, and limits |
 | `CLAUDE.md` | Compact architecture and gotchas snapshot for agents |
 | `default.txt` | Sample/default hosts content |
 | `icon.png` | App branding asset |
@@ -90,6 +91,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Source response caching: `fetch_source_with_cache`, `sanitize_source_cache_metadata`, `build_source_request_headers`.
 - Source trust display: `build_source_trust_badges`, `source_trust_report_url`, `format_source_trust_details`.
 - Source health reporting: `check_source_health_record`, `build_source_health_report`, `summarize_source_health_results`.
+- False-positive triage: `build_false_positive_triage_report`, `format_false_positive_triage_report`, `add_domain_to_whitelist_text`, `remove_false_positive_matches_from_lines`.
 - Cleanup/export/search helpers: `remove_lines_by_indices`, `rewrite_block_sink_ip`, `scan_suspicious_redirects`, `export_lines_as_format`, `strip_lines_by_category`.
 - Source analytics: `find_sources_containing_domain`, `summarize_source_contributions`, `categorize_entries_by_domain_hint`, `classify_source_freshness`.
 - Provenance and pinned-domain helpers: `append_provenance_event`, `read_provenance_events`, `build_pinned_export_payload`, `parse_pinned_import_payload`, `sanitize_pinned_domains`.
@@ -111,7 +113,7 @@ Primary responsibilities:
 - Backups, restore, compare, panic restore, hosts disable/enable.
 - Import UI, source catalog, custom sources, manual imports, whitelist import.
 - Search, removal, find/replace, context menu commands.
-- Source reports, provenance log view, health scan, domain check, preferences, scheduler wizard.
+- Source reports, provenance log view, health scan, false-positive triage, preferences, scheduler wizard.
 - Worker thread queue handling and safe Tk callback scheduling with `_safe_after`.
 
 `HostsFileEditor` is large enough that future refactors should split by behavior after tests are in place:

@@ -20,6 +20,10 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added deterministic trust badges to curated, saved, batch-select, and preview source surfaces.
 - Documented badge criteria for transport, repository/report-path derivation, local freshness, cache integrity, scope risk, and license caveats.
 
+**False-positive triage**
+- Expanded **Check Domain...** into a triage flow that explains current-editor blocks, whitelist coverage, pinned-domain overrides, fetched source matches, and upstream issue paths.
+- Added actions to add a checked domain to the whitelist, preview-remove matching editor lines, pin/unpin the domain, copy a report, and open the first derived report path.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

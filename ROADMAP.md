@@ -29,7 +29,7 @@ Non-negotiables:
 - [x] F007 - Source health checker (`--source-health`, JSON report, scheduled workflow artifact)
 - [x] F008 - ETag/Last-Modified cache (`source_cache_metadata`, conditional requests, cached-body fallback)
 - [x] F009 - Source trust badges (`docs/source-trust.md`, deterministic badges, source picker/preview display)
-- [ ] F010 - False-positive triage flow
+- [x] F010 - False-positive triage flow (`docs/false-positive-triage.md`, Check Domain actions, triage helpers/tests)
 - [ ] F011 - Source overlap matrix
 - [ ] F012 - Entry provenance/blame panel
 - [ ] F013 - Windows DNS Client ETW import/live tail spike
@@ -267,7 +267,7 @@ Legend:
 1. Completed - Documentation and architecture baseline: F001, F024.
 2. Completed - CI and release hygiene: F002, F003, F004.
 3. Completed - Config and source-data foundations: F005-F009.
-4. Next - Explainability and diagnostics: F010, F011, F012, F013, F014.
+4. Next - Explainability and diagnostics: F011, F012, F013, F014.
 5. Profile groundwork and migrations: F015, F022, F023.
 6. Quality gates: F016, F017, F018, F019.
 7. Accessibility and i18n foundations: F020, F021.

@@ -70,6 +70,7 @@ SOURCE_PREVIEW_MAX_LINES = 80
 SOURCE_CORPUS_CACHE_MAX_ENTRY_BYTES = 2 * 1024 * 1024
 SOURCE_CORPUS_CACHE_MAX_TOTAL_BYTES = 16 * 1024 * 1024
 SOURCE_CORPUS_CACHE_MAX_ENTRIES = 24
+FALSE_POSITIVE_REPORT_MATCH_LIMIT = 30
 SOURCE_TRUST_DOC_PATH = "docs/source-trust.md"
 SOURCE_TRUST_RISK_WORDS = (
     "aggressive",
@@ -2638,6 +2639,236 @@ def find_sources_containing_domain(domain: str, source_corpus: dict[str, object]
             seen_names.add(name)
             matches.append(name)
     return matches
+
+
+def normalize_whitelist_domain(candidate: str, allow_single_label: bool = False) -> tuple[str, str]:
+    """Return a normalized whitelist domain, or an error string."""
+    raw = str(candidate or "").strip()
+    if not raw:
+        return "", "Enter a domain to check."
+    domain, _ = _extract_domain_from_token(raw, allow_single_label=allow_single_label)
+    if not domain:
+        cleaned = raw.lower().lstrip(".")
+        label = "domain" if allow_single_label else "multi-label domain"
+        return "", f"'{cleaned}' does not look like a valid {label}."
+    return domain.lstrip("."), ""
+
+
+def normalize_false_positive_domain(candidate: str) -> tuple[str, str]:
+    """Return a normalized multi-label domain, or an error string."""
+    return normalize_whitelist_domain(candidate, allow_single_label=False)
+
+
+def _triage_domain_matches(query_domain: str, entry_domain: str) -> bool:
+    """Return true when a hosts entry blocks the queried domain or child."""
+    return entry_domain == query_domain or entry_domain.endswith("." + query_domain)
+
+
+def _whitelist_covers_domain(domain: str, whitelist_set: set[str]) -> bool:
+    return domain in whitelist_set or any(domain.endswith("." + item) for item in whitelist_set)
+
+
+def build_false_positive_triage_report(
+    domain: str,
+    editor_lines: list[str],
+    whitelist_set: set | None = None,
+    pinned_domains: set | None = None,
+    source_corpus: dict[str, object] | None = None,
+) -> dict:
+    """Build a deterministic false-positive report for one candidate domain."""
+    normalized, error = normalize_false_positive_domain(domain)
+    report = {
+        "domain": normalized,
+        "valid": not error,
+        "error": error,
+        "blocked_on_lines": [],
+        "on_whitelist": False,
+        "is_pinned": False,
+        "source_matches": [],
+        "recommended_actions": [],
+    }
+    if error:
+        return report
+
+    blocked_on_lines = []
+    for idx, line in enumerate(editor_lines or []):
+        parsed, _ = parse_hosts_line_entries(line)
+        for _, entry_domain, is_block in parsed:
+            if is_block and _triage_domain_matches(normalized, entry_domain):
+                blocked_on_lines.append({
+                    "line_no": idx + 1,
+                    "matched_domain": entry_domain,
+                    "line": str(line).strip(),
+                })
+
+    whitelist = {str(item).strip().lower().lstrip(".") for item in (whitelist_set or set()) if str(item).strip()}
+    pinned = {str(item).strip().lower().lstrip(".") for item in (pinned_domains or set()) if str(item).strip()}
+    source_matches = find_sources_containing_domain(normalized, source_corpus or {})
+
+    actions = []
+    if blocked_on_lines:
+        actions.append({
+            "id": "remove_matching_lines",
+            "label": "Preview-remove matching editor lines",
+            "reason": "The current editor contains blocking entries for this domain.",
+        })
+    if _whitelist_covers_domain(normalized, whitelist):
+        actions.append({
+            "id": "review_whitelist",
+            "label": "Review whitelist coverage",
+            "reason": "The domain is already covered by the whitelist; cleaned saves should omit it unless pinned.",
+        })
+    else:
+        actions.append({
+            "id": "add_to_whitelist",
+            "label": "Add to whitelist",
+            "reason": "A whitelist entry keeps cleaned saves from reintroducing this block.",
+        })
+    if normalized in pinned:
+        actions.append({
+            "id": "unpin_domain",
+            "label": "Unpin domain if this should be allowed",
+            "reason": "Pinned domains are preserved even when whitelist filtering would remove them.",
+        })
+    else:
+        actions.append({
+            "id": "pin_domain",
+            "label": "Pin only if this block is intentional",
+            "reason": "Pinning overrides whitelist cleanup for the exact domain.",
+        })
+    if source_matches:
+        actions.append({
+            "id": "report_upstream",
+            "label": "Report upstream source match",
+            "reason": "One or more fetched sources contain this domain.",
+        })
+
+    report.update({
+        "blocked_on_lines": blocked_on_lines,
+        "on_whitelist": _whitelist_covers_domain(normalized, whitelist),
+        "is_pinned": normalized in pinned,
+        "source_matches": source_matches,
+        "recommended_actions": actions,
+    })
+    return report
+
+
+def format_false_positive_triage_report(
+    report: dict,
+    not_yet_fetched_count: int = 0,
+    source_issue_urls: dict[str, str] | None = None,
+) -> str:
+    """Render a false-positive report for the Check Domain dialog."""
+    if not report or not report.get("valid"):
+        return str((report or {}).get("error") or "Enter a domain to check.")
+
+    source_issue_urls = source_issue_urls or {}
+    domain = report["domain"]
+    blocked_on_lines = report.get("blocked_on_lines", [])
+    source_matches = report.get("source_matches", [])
+
+    lines = [f"Domain: {domain}", ""]
+    if blocked_on_lines:
+        lines.append(f"BLOCKED in current editor on {len(blocked_on_lines)} line(s):")
+        for item in blocked_on_lines[:FALSE_POSITIVE_REPORT_MATCH_LIMIT]:
+            lines.append(
+                f"  line {item['line_no']}: {item['line']}  ({item['matched_domain']})"
+            )
+        remaining = len(blocked_on_lines) - FALSE_POSITIVE_REPORT_MATCH_LIMIT
+        if remaining > 0:
+            lines.append(f"  ...and {remaining} more")
+    else:
+        lines.append("NOT blocked in current editor.")
+
+    lines.extend([
+        "",
+        f"Whitelist: {'YES' if report.get('on_whitelist') else 'no'}",
+        f"Pinned: {'YES - preserved across cleaned saves' if report.get('is_pinned') else 'no'}",
+        "",
+    ])
+
+    if source_matches:
+        lines.append(f"Found in {len(source_matches)} previously-fetched source(s):")
+        for name in source_matches:
+            issue_url = source_issue_urls.get(name, "")
+            suffix = f" - report: {issue_url}" if issue_url else ""
+            lines.append(f"  - {name}{suffix}")
+    else:
+        lines.append("Not present in any previously-fetched source.")
+    if not_yet_fetched_count:
+        lines.extend([
+            "",
+            f"({not_yet_fetched_count} source(s) not yet fetched this session - import them to include in this lookup.)",
+        ])
+
+    lines.extend(["", "Recommended actions:"])
+    for action in report.get("recommended_actions", []):
+        lines.append(f"  - {action['label']}: {action['reason']}")
+    lines.extend([
+        "",
+        "Copy Report creates a concise note suitable for an upstream false-positive issue.",
+    ])
+    return "\n".join(lines)
+
+
+def add_domain_to_whitelist_text(
+    whitelist_text: str,
+    domain: str,
+    allow_single_label: bool = False,
+) -> tuple[str, bool]:
+    """Append a domain to whitelist text, preserving existing content."""
+    normalized, error = normalize_whitelist_domain(domain, allow_single_label=allow_single_label)
+    if error:
+        raise ValueError(error)
+
+    current = str(whitelist_text or "").rstrip()
+    existing = set()
+    for line in current.splitlines():
+        stripped = line.strip()
+        if not stripped or _is_comment_line(stripped):
+            continue
+        _, domains, _ = normalize_line_to_hosts_entries(line)
+        if domains:
+            existing.update(item.lstrip(".") for item in domains)
+            continue
+        parsed_domain, _ = _extract_domain_from_token(stripped, allow_single_label=True)
+        if parsed_domain:
+            existing.add(parsed_domain.lstrip("."))
+
+    if _whitelist_covers_domain(normalized, existing):
+        return (current + "\n") if current else "", False
+    if not current:
+        return normalized + "\n", True
+    return current + "\n" + normalized + "\n", True
+
+
+def remove_false_positive_matches_from_lines(
+    editor_lines: list[str],
+    domain: str,
+) -> tuple[list[str], list[dict]]:
+    """Remove whole editor lines that currently block the queried domain."""
+    normalized, error = normalize_false_positive_domain(domain)
+    if error:
+        raise ValueError(error)
+
+    new_lines = []
+    removed = []
+    for idx, line in enumerate(editor_lines or []):
+        parsed, _ = parse_hosts_line_entries(line)
+        matched = [
+            entry_domain
+            for _, entry_domain, is_block in parsed
+            if is_block and _triage_domain_matches(normalized, entry_domain)
+        ]
+        if matched:
+            removed.append({
+                "line_no": idx + 1,
+                "matched_domains": sorted(set(matched)),
+                "line": line,
+            })
+        else:
+            new_lines.append(line)
+    return new_lines, removed
 
 
 SCHEDULE_WEEKDAYS = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
@@ -5808,14 +6039,14 @@ class HostsFileEditor:
         self._configure_modal_window(
             dialog,
             title="Check Domain",
-            size="780x620",
-            min_size=(700, 540),
+            size="860x700",
+            min_size=(760, 600),
         )
 
         intro, _ = self._create_sidebar_card(
             dialog,
             "Check a domain",
-            "See whether a domain is blocked by the current editor, covered by your whitelist, or present in sources already fetched this session.",
+            "See whether a domain is blocked, whitelisted, pinned, or present in sources already fetched this session.",
             accent=PALETTE["blue"],
         )
         ttk.Label(
@@ -5839,76 +6070,246 @@ class HostsFileEditor:
         output.pack(expand=True, fill='both', padx=20, pady=12)
         output.configure(state="disabled")
 
+        triage_state = {
+            "report": None,
+            "not_yet_fetched_count": 0,
+            "source_issue_urls": {},
+        }
+        action_buttons = {}
+
         def write_output(text):
             output.configure(state="normal")
             output.delete('1.0', tk.END)
             output.insert(tk.END, text)
             output.configure(state="disabled")
 
+        def set_button_state(name, enabled):
+            button = action_buttons.get(name)
+            if not button:
+                return
+            button.state(["!disabled"] if enabled else ["disabled"])
+
+        def update_action_states():
+            report = triage_state.get("report") or {}
+            valid = bool(report.get("valid"))
+            issue_urls = triage_state.get("source_issue_urls") or {}
+            set_button_state("allow", valid and not report.get("on_whitelist"))
+            set_button_state("remove", valid and bool(report.get("blocked_on_lines")))
+            set_button_state("pin", valid and not report.get("is_pinned"))
+            set_button_state("unpin", valid and bool(report.get("is_pinned")))
+            set_button_state("copy", valid)
+            set_button_state("open_issue", valid and bool(issue_urls))
+
+        def source_issue_urls_for_matches(source_matches):
+            remaining = set(source_matches or [])
+            urls = {}
+            for payload in self._source_corpus_cache.values():
+                if not isinstance(payload, dict):
+                    continue
+                name = str(payload.get("name") or "")
+                if name not in remaining or name in urls:
+                    continue
+                issue_url = source_trust_report_url(str(payload.get("url") or ""))
+                if issue_url:
+                    urls[name] = issue_url
+            for source in self._iter_known_sources():
+                name = source.get("name", "")
+                if name not in remaining or name in urls:
+                    continue
+                issue_url = source_trust_report_url(source.get("url", ""))
+                if issue_url:
+                    urls[name] = issue_url
+            return urls
+
         def run_check(_event=None):
-            domain = query_var.get().strip().lower().lstrip('.')
-            if not domain:
-                write_output("Enter a domain to check.")
-                return
-            if not looks_like_domain(domain, allow_single_label=False):
-                write_output(f"'{domain}' does not look like a valid multi-label domain.")
-                return
-
-            lines = self.get_lines()
-            blocked_on_lines = []
-            for idx, line in enumerate(lines):
-                parsed, _ = parse_hosts_line_entries(line)
-                for _, entry_domain, is_block in parsed:
-                    if is_block and (entry_domain == domain or entry_domain.endswith('.' + domain)):
-                        blocked_on_lines.append((idx + 1, entry_domain, line.strip()))
-
-            whitelist = self._get_whitelist_set()
-            on_whitelist = domain in whitelist or any(
-                domain.endswith('.' + w) for w in whitelist
+            report = build_false_positive_triage_report(
+                query_var.get(),
+                self.get_lines(),
+                self._get_whitelist_set(),
+                self.pinned_domains,
+                self._source_corpus_cache,
             )
+            triage_state["report"] = report
+            triage_state["not_yet_fetched_count"] = 0
+            triage_state["source_issue_urls"] = {}
+            if not report.get("valid"):
+                write_output(format_false_positive_triage_report(report))
+                update_action_states()
+                return
 
-            source_matches = find_sources_containing_domain(domain, self._source_corpus_cache)
+            source_matches = report.get("source_matches", [])
+            triage_state["source_issue_urls"] = source_issue_urls_for_matches(source_matches)
             cached_urls = {
                 normalize_custom_source_url(entry.get("url", "")) or entry.get("url", "")
                 for entry in self._source_corpus_cache.values()
+                if isinstance(entry, dict)
             }
             not_yet_fetched = [
                 source["name"]
                 for source in self._iter_known_sources()
                 if (normalize_custom_source_url(source["url"]) or source["url"]) not in cached_urls
             ]
+            triage_state["not_yet_fetched_count"] = len(not_yet_fetched)
+            write_output(format_false_positive_triage_report(
+                report,
+                not_yet_fetched_count=len(not_yet_fetched),
+                source_issue_urls=triage_state["source_issue_urls"],
+            ))
+            update_action_states()
 
-            buf = [f"Domain: {domain}", ""]
-            if blocked_on_lines:
-                buf.append(f"BLOCKED in current editor on {len(blocked_on_lines)} line(s):")
-                for line_no, matched, raw in blocked_on_lines[:30]:
-                    buf.append(f"  line {line_no}: {raw}  ({matched})")
-                if len(blocked_on_lines) > 30:
-                    buf.append(f"  ...and {len(blocked_on_lines) - 30} more")
-            else:
-                buf.append("NOT blocked in current editor.")
-            buf.append("")
-            buf.append(f"Whitelist: {'YES' if on_whitelist else 'no'}")
-            buf.append("")
-            if source_matches:
-                buf.append(f"Found in {len(source_matches)} previously-fetched source(s):")
-                for name in source_matches:
-                    buf.append(f"  - {name}")
-            else:
-                buf.append("Not present in any previously-fetched source.")
-            if not_yet_fetched:
-                buf.append("")
-                buf.append(f"({len(not_yet_fetched)} source(s) not yet fetched this session - import them to include in this lookup.)")
-            write_output('\n'.join(buf))
+        def add_to_whitelist_action():
+            report = triage_state.get("report") or {}
+            if not report.get("valid"):
+                return
+            if self._add_domain_to_whitelist(report["domain"], source="false-positive-triage"):
+                run_check()
+
+        def remove_matching_lines_action():
+            report = triage_state.get("report") or {}
+            if not report.get("valid"):
+                return
+            original = self.get_lines()
+            try:
+                new_lines, removed = remove_false_positive_matches_from_lines(original, report["domain"])
+            except ValueError as exc:
+                self.update_status(str(exc), is_error=True)
+                return
+            if not removed:
+                self.update_status(f"No matching editor lines found for '{report['domain']}'.")
+                run_check()
+                return
+
+            def apply_to_editor(approved_lines):
+                self.set_text(approved_lines)
+                self.update_status(
+                    f"Removed {len(removed)} line(s) matching '{report['domain']}' from the editor."
+                )
+                self._safe_after(50, run_check)
+
+            PreviewWindow(
+                self,
+                original,
+                new_lines,
+                title=f"Preview: remove {report['domain']} matches",
+                on_apply_callback=apply_to_editor,
+                apply_label=f"Remove {len(removed)} Line(s)",
+            )
+
+        def pin_action():
+            report = triage_state.get("report") or {}
+            if not report.get("valid"):
+                return
+            domain = report["domain"]
+            if domain in self.pinned_domains:
+                self.update_status(f"'{domain}' is already pinned.")
+                run_check()
+                return
+            self.pinned_domains.add(domain)
+            self.save_config()
+            self._trigger_ui_update()
+            self._log_provenance_event({
+                "kind": "pin",
+                "domain": domain,
+                "source": "false-positive-triage",
+            })
+            self.update_status(f"Pinned '{domain}'.")
+            run_check()
+
+        def unpin_action():
+            report = triage_state.get("report") or {}
+            if not report.get("valid"):
+                return
+            domain = report["domain"]
+            if domain not in self.pinned_domains:
+                self.update_status(f"'{domain}' is not pinned.")
+                run_check()
+                return
+            self.pinned_domains.discard(domain)
+            self.save_config()
+            self._trigger_ui_update()
+            self._log_provenance_event({
+                "kind": "unpin",
+                "domain": domain,
+                "source": "false-positive-triage",
+            })
+            self.update_status(f"Unpinned '{domain}'.")
+            run_check()
+
+        def copy_report_action():
+            report = triage_state.get("report") or {}
+            if not report.get("valid"):
+                return
+            text = format_false_positive_triage_report(
+                report,
+                not_yet_fetched_count=triage_state.get("not_yet_fetched_count", 0),
+                source_issue_urls=triage_state.get("source_issue_urls") or {},
+            )
+            try:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(text)
+                self.update_status(f"Copied false-positive report for '{report['domain']}'.")
+            except tk.TclError as exc:
+                self.update_status(f"Could not copy report: {exc}", is_error=True)
+
+        def open_first_issue_path():
+            issue_urls = triage_state.get("source_issue_urls") or {}
+            if not issue_urls:
+                return
+            first_url = next(iter(issue_urls.values()))
+            webbrowser.open(first_url)
+
+        btn_row = ttk.Frame(dialog)
+        btn_row.pack(fill="x", padx=20, pady=(0, 20))
+        action_buttons["allow"] = ttk.Button(
+            btn_row,
+            text="Add to Whitelist",
+            command=add_to_whitelist_action,
+            style="Action.TButton",
+        )
+        action_buttons["allow"].pack(side="left", padx=(0, 8))
+        action_buttons["remove"] = ttk.Button(
+            btn_row,
+            text="Remove Lines...",
+            command=remove_matching_lines_action,
+            style="Danger.TButton",
+        )
+        action_buttons["remove"].pack(side="left", padx=(0, 8))
+        action_buttons["pin"] = ttk.Button(
+            btn_row,
+            text="Pin Block",
+            command=pin_action,
+            style="Secondary.TButton",
+        )
+        action_buttons["pin"].pack(side="left", padx=(0, 8))
+        action_buttons["unpin"] = ttk.Button(
+            btn_row,
+            text="Unpin",
+            command=unpin_action,
+            style="Secondary.TButton",
+        )
+        action_buttons["unpin"].pack(side="left", padx=(0, 8))
+        ttk.Button(btn_row, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
+        action_buttons["copy"] = ttk.Button(
+            btn_row,
+            text="Copy Report",
+            command=copy_report_action,
+            style="Secondary.TButton",
+        )
+        action_buttons["copy"].pack(side="right", padx=(0, 8))
+        action_buttons["open_issue"] = ttk.Button(
+            btn_row,
+            text="Open Report Path",
+            command=open_first_issue_path,
+            style="Secondary.TButton",
+        )
+        action_buttons["open_issue"].pack(side="right", padx=(0, 8))
+        update_action_states()
 
         entry.bind("<Return>", run_check)
         if initial_domain:
             query_var.set(initial_domain)
             self._safe_after(50, run_check)
 
-        btn_row = ttk.Frame(dialog)
-        btn_row.pack(fill="x", padx=20, pady=(0, 20))
-        ttk.Button(btn_row, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
         dialog.grab_set()
 
     # ----------------------------- Export ------------------------------------
@@ -6967,27 +7368,50 @@ class HostsFileEditor:
         domain = parsed[0][1] if parsed else None
         return line_no, line, domain
 
+    def _add_domain_to_whitelist(
+        self,
+        domain: str,
+        source: str = "ui",
+        allow_single_label: bool = False,
+    ) -> bool:
+        try:
+            new_text, added = add_domain_to_whitelist_text(
+                self.whitelist_text_area.get('1.0', tk.END),
+                domain,
+                allow_single_label=allow_single_label,
+            )
+        except ValueError as exc:
+            self.update_status(str(exc), is_error=True)
+            return False
+
+        normalized, _ = normalize_whitelist_domain(domain, allow_single_label=allow_single_label)
+        if not added:
+            self.update_status(f"'{normalized or domain}' is already covered by the whitelist.")
+            return False
+
+        self.whitelist_text_area.delete('1.0', tk.END)
+        self.whitelist_text_area.insert('1.0', new_text)
+        self.whitelist_text_area.edit_modified(False)
+        self._cached_whitelist_text = None
+        saved = self.save_config()
+        self._trigger_ui_update()
+        self._log_provenance_event({
+            "kind": "whitelist_add",
+            "domain": normalized,
+            "source": source,
+        })
+        if saved:
+            self.update_status(f"Added '{normalized}' to whitelist.")
+        else:
+            self.update_status(f"Added '{normalized}' to whitelist, but config save failed.", is_error=True)
+        return True
+
     def _ctx_whitelist_domain(self):
         _, _, domain = self._ctx_line_info()
         if not domain:
             self.update_status("No domain detected at cursor.", is_error=True)
             return
-        current = self.whitelist_text_area.get('1.0', tk.END).strip()
-        entries = set(line.strip().lower() for line in current.splitlines() if line.strip())
-        if domain in entries:
-            self.update_status(f"'{domain}' is already in the whitelist.")
-            return
-        new_text = (current + '\n' + domain).strip() if current else domain
-        self.whitelist_text_area.delete('1.0', tk.END)
-        self.whitelist_text_area.insert('1.0', new_text + '\n')
-        self._cached_whitelist_text = None  # invalidate
-        self._trigger_ui_update()
-        self._log_provenance_event({
-            "kind": "whitelist_add",
-            "domain": domain,
-            "source": "context-menu",
-        })
-        self.update_status(f"Added '{domain}' to whitelist.")
+        self._add_domain_to_whitelist(domain, source="context-menu", allow_single_label=True)
 
     def _ctx_pin_domain(self):
         _, _, domain = self._ctx_line_info()
