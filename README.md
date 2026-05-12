@@ -45,6 +45,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - pfSense DNSBL log import
   - NextDNS CSV import
   - Windows DNS Client Operational snapshot import
+  - SwitchHosts, Gas Mask, and HostsFileEditor migration imports
   - manual pasted list import
 - Search and cleanup:
   - find / next / previous navigation
@@ -184,6 +185,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Entry provenance: `docs/entry-provenance.md`
 - Windows DNS Client snapshot: `docs/windows-dns-client.md`
 - DNS bypass diagnostics: `docs/dns-bypass-diagnostics.md`
+- Migration imports: `docs/migration-imports.md`
 - Accessibility audit: `docs/accessibility.md`
 - i18n string catalog: `docs/i18n.md`
 - Sourced implementation plan: `ROADMAP.md`

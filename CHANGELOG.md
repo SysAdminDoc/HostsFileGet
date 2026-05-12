@@ -70,6 +70,11 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added **Tools > Translation Catalog...** so maintainers can inspect active catalog source, fallback coverage, and key rules.
 - Updated the launcher and PyInstaller spec so the English catalog is cached/bundled when available without breaking cached-script launches if it is missing.
 
+**Migration imports**
+- Added append-only importers for SwitchHosts JSON exports, Gas Mask Local/Remote/Combined folders, and HostsFileEditor archive folders.
+- Wired migration imports into the sidebar and **Tools > Migration Imports** while reusing the existing Raw/Normalized import mode behavior.
+- Documented upstream archive/source format evidence and bounded migration import limits in `docs/migration-imports.md`.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

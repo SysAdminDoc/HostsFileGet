@@ -45,6 +45,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F020 complete. Next roadmap item: F021 i18n string catalog foundation.
 - Completed F021: added a versioned English i18n catalog, validation/translation/report helpers, Tools catalog report, launcher/PyInstaller packaging, docs, and regression tests.
 - Updated `ROADMAP.md` to mark F021 complete. Next roadmap item: F022 importers for SwitchHosts, Gas Mask, and HostsFileEditor archives.
+- Completed F022: added bounded append-only migration importers for SwitchHosts v3/v4 JSON exports, Gas Mask Local/Remote/Combined folders, and HostsFileEditor archive folders; wired them into the sidebar and Tools menu; added format docs and regression tests.
+- Updated `ROADMAP.md` to mark F022 complete. Next roadmap item: F023 RPZ, Unbound, Privoxy, and compressed-hosts exports.
 
 ## Scope
 
