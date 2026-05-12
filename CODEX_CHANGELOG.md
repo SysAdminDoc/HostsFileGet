@@ -79,6 +79,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F038 complete. Next roadmap item: F039 SafeSearch and restricted-mode templates.
 - Completed F039: added guarded SafeSearch and restricted-mode template planning for Google, Bing, DuckDuckGo, and YouTube with hosts-vs-DNS handoff separation, GUI and CLI catalog/plan surfaces, JSON output, docs, and regression tests.
 - Updated `ROADMAP.md` to mark F039 complete. Next roadmap item: F040 time-bound profile activation.
+- Completed F040: bumped config schema to 4, added sanitized time-bound profile activation windows with weekday/overnight matching and fallback handling, GUI schedule reporting, config-only CLI add/list/apply commands, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F040 complete. Next roadmap item: F041 tray quick switch.
 
 ## Scope
 

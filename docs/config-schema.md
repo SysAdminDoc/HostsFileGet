@@ -4,24 +4,24 @@ HostsFileGet stores user settings in JSON. The primary path is `%LOCALAPPDATA%\H
 
 ## Version
 
-Current schema version: `3`
+Current schema version: `4`
 
 Every saved config now includes:
 
 ```json
 {
-  "config_version": 3,
+  "config_version": 4,
   "profile_schema_version": 1
 }
 ```
 
-Configs without `config_version` are treated as legacy schema `0`, migrated in memory, sanitized, and written back as schema `3` on the next save or legacy-path migration.
+Configs without `config_version` are treated as legacy schema `0`, migrated in memory, sanitized, and written back as schema `4` on the next save or legacy-path migration.
 
 ## Keys
 
 | Key | Type | Notes |
 | --- | --- | --- |
-| `config_version` | integer | Current value is `3` |
+| `config_version` | integer | Current value is `4` |
 | `whitelist` | string | Newline-separated whitelist text |
 | `custom_sources` | array | Objects with `name` and `url` |
 | `last_applied_raw_hash` | string or null | SHA-256 hex digest for saved raw state |
@@ -38,6 +38,9 @@ Configs without `config_version` are treated as legacy schema `0`, migrated in m
 | `profile_schema_version` | integer | Current value is `1` |
 | `active_profile_id` | string | Safe profile slug for the mirrored active editor profile |
 | `profiles` | array | Versioned named profile payloads; see below |
+| `profile_activation_schedule_version` | integer | Current value is `1` |
+| `profile_activation_fallback_id` | string | Existing profile ID used when no schedule window matches |
+| `profile_activation_schedule` | array | Sanitized time-bound profile activation windows; see below |
 
 Unknown keys are ignored by the sanitizer. They are not preserved when the app writes a fresh config.
 
@@ -54,7 +57,7 @@ Schema `0` includes all configs without a valid `config_version`. The migrator r
 
 If both the current key and legacy alias are present, the current key wins.
 
-Invalid, negative, future, or boolean `config_version` values are treated as legacy schema `0`. The known fields are still sanitized and emitted as current schema `3`.
+Invalid, negative, future, or boolean `config_version` values are treated as legacy schema `0`. The known fields are still sanitized and emitted as current schema `4`.
 
 ## Profile Payloads
 
@@ -95,6 +98,32 @@ python hosts_editor.py --config-export .\profile.yaml
 ```
 
 Declarative files use schema `hostsfileget.declarative.v1` and contain one profile. Applying one creates or replaces that named profile, makes it active, and mirrors the profile's runtime fields to the top-level config. It preserves operational metadata such as source freshness, cache metadata, backup settings, and saved-state hashes.
+
+## Profile Activation Schedule
+
+Schema `4` adds time-bound profile activation fields. These update the app config profile only and never write the system hosts file.
+
+```json
+{
+  "profile_activation_schedule_version": 1,
+  "profile_activation_fallback_id": "default",
+  "profile_activation_schedule": [
+    {
+      "id": "kids-mon-tue-wed-thu-fri-1600-2000",
+      "name": "Kids block hours",
+      "profile_id": "kids",
+      "days": ["mon", "tue", "wed", "thu", "fri"],
+      "start_time": "16:00",
+      "end_time": "20:00",
+      "enabled": true
+    }
+  ]
+}
+```
+
+Schedule windows require an existing `profile_id`, canonical weekday values, and local 24-hour `HH:MM` times. The sanitizer drops malformed windows, clamps the schedule to 64 entries, and falls back to the current active profile if the configured fallback ID is missing.
+
+See `docs/profile-activation-schedule.md` for CLI commands and matching rules.
 
 ## Source Cache Metadata
 
