@@ -54,6 +54,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - adblock syntax linting plus cosmetic/path-rule quarantine for hosts-safe reviews
   - rule tier reporting for exact, subdomain, wildcard, regex, path, exception, and browser-only rules
   - IDN/Punycode and homograph-risk reporting before trusting mixed internationalized lists
+  - NRD/DGA/TIF threat feed pack planning with freshness and false-positive controls
   - false-positive triage for whitelist, pin, source-match, and upstream report decisions
   - entry provenance view for import-section ownership, source matches, and local audit events
 - Export adapters:
@@ -248,6 +249,13 @@ Review IDN/Punycode and mixed-script homograph candidates with:
 python hosts_editor.py --idn-report .\filters.txt --idn-output .\idn-report.json
 ```
 
+List guarded NRD/DGA/TIF threat feed packs or write a local review plan:
+
+```powershell
+python hosts_editor.py --threat-feed-list
+python hosts_editor.py --threat-feed-plan nrd-review .\nrd-plan.json
+```
+
 Run the deterministic large-file benchmark with:
 
 ```powershell
@@ -276,6 +284,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Adblock syntax lint: `docs/adblock-lint.md`
 - Rule tier report: `docs/rule-tiers.md`
 - IDN and homograph report: `docs/idn-homograph.md`
+- NRD/DGA threat feed packs: `docs/threat-feed-packs.md`
 - Troubleshooting and hosts-file limits: `TROUBLESHOOTING.md`
 - Config schema: `docs/config-schema.md`
 - Curated source manifest: `docs/source-manifest.md`

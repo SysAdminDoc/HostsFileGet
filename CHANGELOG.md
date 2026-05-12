@@ -133,6 +133,12 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added **Tools > IDN / Homograph Report...** plus `--idn-report` and `--idn-output` for read-only review.
 - Documented the advisory workflow, limitations, and IDNA/NRPT sources in `docs/idn-homograph.md`.
 
+**NRD/DGA threat feed packs**
+- Added guarded HaGeZi TIF, DGA, and NRD feed pack planning with explicit freshness and false-positive controls.
+- Added **Tools > NRD / DGA Threat Feed Packs...**, `--threat-feed-list`, and `--threat-feed-plan PACK OUTPUT` for local review JSON without fetching or applying feeds.
+- Added a curated **Threat Intelligence / NRD / DGA** source-manifest category so feed imports stay source-isolated and removable.
+- Documented the pack workflow, risk boundaries, and source basis in `docs/threat-feed-packs.md`.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

@@ -32,7 +32,7 @@
         {
           "name": "HaGezi TIF",
           "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/tif.txt",
-          "description": "Threat Intelligence Feeds only."
+          "description": "Threat Intelligence Feeds only. Import separately and review source freshness before scheduled use."
         },
         {
           "name": "1Hosts Lite",
@@ -753,6 +753,36 @@
           "name": "RPiList Fake Science",
           "url": "https://raw.githubusercontent.com/RPiList/specials/master/Blocklisten/Fake-Science.txt",
           "description": "Predatory journals / junk-science publishers."
+        }
+      ]
+    },
+    {
+      "name": "Threat Intelligence / NRD / DGA",
+      "sources": [
+        {
+          "name": "HaGeZi TIF Mini",
+          "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/tif.mini.txt",
+          "description": "Threat-intelligence mini feed. Medium risk; run adblock lint and source health before hosts conversion."
+        },
+        {
+          "name": "HaGeZi DGA 7-day",
+          "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/domains/dga7.txt",
+          "description": "Short-window DGA domain feed. Review freshness and keep as a separate import."
+        },
+        {
+          "name": "HaGeZi DGA 14-day",
+          "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/domains/dga14.txt",
+          "description": "Longer-window DGA domain feed. Pair with source overlap and false-positive triage."
+        },
+        {
+          "name": "HaGeZi NRD 7-day",
+          "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/domains/nrd7.txt",
+          "description": "High-churn newly registered domain feed. Manual review recommended before saving cleaned output."
+        },
+        {
+          "name": "HaGeZi NRD 14-day",
+          "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/domains/nrd14.txt",
+          "description": "High-churn newly registered domain feed. Higher breakage risk; avoid unattended scheduling without review."
         }
       ]
     },

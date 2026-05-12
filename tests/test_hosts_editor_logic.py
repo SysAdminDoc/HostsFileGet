@@ -97,6 +97,7 @@ from hosts_editor import (
     build_portable_bundle_readme,
     build_scheduler_activity_report,
     build_scheduler_update_command,
+    build_threat_feed_pack_plan,
     export_lines_as_format,
     export_lines_as_bytes,
     extract_blocking_domains_from_lines,
@@ -126,12 +127,16 @@ from hosts_editor import (
     format_source_trust_badges,
     format_source_overlap_report,
     format_dns_bypass_diagnostics,
+    format_threat_feed_pack_catalog,
+    format_threat_feed_pack_plan,
     build_schtasks_create_command,
     get_source_cache_body_path,
     get_config_root_dir,
     get_git_history_dir,
     list_cloud_dns_adapters,
     list_dns_integration_packs,
+    list_threat_feed_packs,
+    list_threat_feed_sources,
     looks_like_domain,
     looks_like_html_document,
     load_blocklist_sources_manifest,
@@ -1855,6 +1860,23 @@ profile:
             self.assertEqual(report["warning_count"], 1)
             self.assertEqual(report["counts"]["homograph-risk"], 1)
 
+    def test_cli_threat_feed_plan_writes_review_file(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plan_path = Path(tmpdir) / "threat-feed-plan.json"
+
+            with mock.patch.object(hosts_editor, "_cli_print"):
+                self.assertEqual(hosts_editor._cli_threat_feed_plan("nrd", str(plan_path)), 0)
+
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            self.assertEqual(plan["schema"], "hostsfileget.threat-feed-pack-plan.v1")
+            self.assertEqual(plan["pack_id"], "nrd-review")
+            self.assertEqual(plan["source_count"], 2)
+            self.assertEqual(plan["freshness"]["stale_after_hours"], 6)
+            self.assertIn("A1", plan["references"])
+
     def test_handle_cli_args_routes_integration_flags(self):
         with mock.patch.object(hosts_editor, "_cli_integration_list", return_value=0) as mocked_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--integration-list"]), 0)
@@ -1888,6 +1910,18 @@ profile:
                 0,
             )
             mocked_import.assert_called_once_with("controld", "log.csv", "domains.txt")
+
+    def test_handle_cli_args_routes_threat_feed_flags(self):
+        with mock.patch.object(hosts_editor, "_cli_threat_feed_list", return_value=0) as mocked_list:
+            self.assertEqual(hosts_editor._handle_cli_args(["--threat-feed-list"]), 0)
+            mocked_list.assert_called_once_with()
+
+        with mock.patch.object(hosts_editor, "_cli_threat_feed_plan", return_value=0) as mocked_plan:
+            self.assertEqual(
+                hosts_editor._handle_cli_args(["--threat-feed-plan", "dga-watch", "plan.json"]),
+                0,
+            )
+            mocked_plan.assert_called_once_with("dga-watch", "plan.json")
 
     def test_handle_cli_args_routes_adblock_lint_flags(self):
         with mock.patch.object(hosts_editor, "_cli_adblock_lint", return_value=1) as mocked_lint:
@@ -2764,6 +2798,40 @@ profile:
 
         with self.assertRaises(ValueError):
             build_cloud_dns_adapter_plan(lines, "unknown-cloud")
+
+    def test_threat_feed_catalog_lists_guarded_packs_and_sources(self):
+        pack_ids = {pack["id"] for pack in list_threat_feed_packs()}
+        source_ids = {source["id"] for source in list_threat_feed_sources()}
+
+        self.assertEqual(pack_ids, {"security-starter", "dga-watch", "nrd-review", "threat-full-review"})
+        self.assertIn("hagezi-dga-7", source_ids)
+        self.assertIn("hagezi-nrd-14", source_ids)
+
+        catalog = format_threat_feed_pack_catalog()
+        self.assertIn("NRD/DGA threat feed packs", catalog)
+        self.assertIn("Plan-only", catalog)
+        self.assertIn("does not fetch", catalog)
+        self.assertIn("hagezi-tif-mini", catalog)
+
+    def test_build_threat_feed_pack_plan_includes_freshness_and_false_positive_controls(self):
+        nrd_plan = build_threat_feed_pack_plan("nrd")
+        rendered = format_threat_feed_pack_plan(nrd_plan)
+
+        self.assertEqual(nrd_plan["pack_id"], "nrd-review")
+        self.assertEqual(nrd_plan["risk"], "high")
+        self.assertEqual(nrd_plan["source_ids"], ["hagezi-nrd-7", "hagezi-nrd-14"])
+        self.assertEqual(nrd_plan["freshness"]["stale_after_hours"], 6)
+        self.assertTrue(any("false-positive triage" in control for control in nrd_plan["false_positive_controls"]))
+        self.assertTrue(all("api" not in json.dumps(source).lower() for source in nrd_plan["sources"]))
+        self.assertIn("nrd7.txt", rendered)
+        self.assertIn("A2", rendered)
+
+        dga_plan = build_threat_feed_pack_plan("dga-pack")
+        self.assertEqual(dga_plan["pack_id"], "dga-watch")
+        self.assertIn("S15", dga_plan["references"])
+
+        with self.assertRaises(ValueError):
+            build_threat_feed_pack_plan("unknown-threat-pack")
 
     def test_export_lines_as_bytes_supports_compressed_hosts(self):
         lines = ["0.0.0.0 ads.example", "# comment", "0.0.0.0 tracker.example"]
