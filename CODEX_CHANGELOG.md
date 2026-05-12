@@ -35,6 +35,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F015 complete. Next roadmap item: F016 golden-file cleaned-output tests.
 - Completed F016: added manifest-driven golden cleaned-output fixtures for mixed normalization, custom mappings, and pinned whitelist overrides, with exact output and stats assertions.
 - Updated `ROADMAP.md` to mark F016 complete. Next roadmap item: F017 property-based parser/fuzzer tests.
+- Completed F017: added deterministic stdlib fuzz tests for parser output invariants plus cleaned-output idempotence across random batches, avoiding a Hypothesis dependency for now.
+- Updated `ROADMAP.md` to mark F017 complete. Next roadmap item: F018 GUI smoke tests.
 
 ## Scope
 
