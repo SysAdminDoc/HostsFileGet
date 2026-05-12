@@ -99,6 +99,7 @@ from hosts_editor import (
     build_scheduler_update_command,
     build_cname_cloaking_plan,
     build_encrypted_dns_bypass_pack_plan,
+    build_dns_rebinding_report,
     build_threat_feed_pack_plan,
     export_lines_as_format,
     export_lines_as_bytes,
@@ -126,6 +127,7 @@ from hosts_editor import (
     format_dns_integration_pack_report,
     format_cname_cloaking_catalog,
     format_cname_cloaking_plan,
+    format_dns_rebinding_report,
     format_encrypted_dns_bypass_catalog,
     format_encrypted_dns_bypass_pack_plan,
     format_portable_bundle_export_summary,
@@ -1870,6 +1872,31 @@ profile:
             self.assertEqual(report["warning_count"], 1)
             self.assertEqual(report["counts"]["homograph-risk"], 1)
 
+    def test_cli_dns_rebinding_report_writes_review_file(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "hosts.txt"
+            report_path = Path(tmpdir) / "dns-rebinding-report.json"
+            input_path.write_text(
+                "10.0.0.5 app.example.com\n"
+                "192.168.1.20 router.lan\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(hosts_editor, "_cli_print"):
+                self.assertEqual(
+                    hosts_editor._cli_dns_rebinding_report(str(input_path), str(report_path), ["lab.example"]),
+                    0,
+                )
+
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["schema"], "hostsfileget.dns-rebinding-report.v1")
+            self.assertEqual(report["summary"]["rebinding_candidates"], 1)
+            self.assertEqual(report["summary"]["trusted_local_mappings"], 1)
+            self.assertIn(".lab.example", report["trusted_suffixes"])
+
     def test_cli_threat_feed_plan_writes_review_file(self):
         import tempfile
         from pathlib import Path
@@ -1990,6 +2017,18 @@ profile:
                 0,
             )
             mocked_plan.assert_called_once_with("doh", "plan.json")
+
+    def test_handle_cli_args_routes_dns_rebinding_flags(self):
+        with mock.patch.object(hosts_editor, "_cli_dns_rebinding_report", return_value=0) as mocked_report:
+            self.assertEqual(
+                hosts_editor._handle_cli_args([
+                    "--dns-rebinding-report", "hosts.txt",
+                    "--dns-rebinding-output", "rebinding.json",
+                    "--dns-rebinding-trusted-suffix", "lab.example",
+                ]),
+                0,
+            )
+            mocked_report.assert_called_once_with("hosts.txt", "rebinding.json", ["lab.example"])
 
     def test_handle_cli_args_routes_adblock_lint_flags(self):
         with mock.patch.object(hosts_editor, "_cli_adblock_lint", return_value=1) as mocked_lint:
@@ -2706,6 +2745,57 @@ profile:
         self.assertNotIn("printer", flagged_domains)
         self.assertNotIn("nas.local", flagged_domains)
         self.assertNotIn("dev.local", flagged_domains)
+
+    # ---- DNS rebinding protection checks ----
+    def test_dns_rebinding_report_separates_candidates_local_aliases_and_redirects(self):
+        lines = [
+            "0.0.0.0 ads.example",
+            "127.0.0.1 telemetry.example",
+            "192.168.1.10 router.lan",
+            "10.0.0.5 api.example.com",
+            "172.20.1.1 dev.example.com",
+            "172.32.1.1 public.example.com",
+            "100.64.0.2 tailscale.example.com",
+            "fc00::1 admin.example.com",
+            "fe80::1 printer.local",
+            "8.8.8.8 www.google.com",
+        ]
+
+        report = build_dns_rebinding_report(lines)
+
+        self.assertEqual(report["schema"], "hostsfileget.dns-rebinding-report.v1")
+        self.assertEqual(report["summary"]["total_mappings"], 10)
+        self.assertEqual(report["summary"]["rebinding_candidates"], 4)
+        self.assertEqual(report["summary"]["trusted_local_mappings"], 2)
+        self.assertEqual(report["summary"]["public_redirects"], 2)
+        self.assertEqual(report["summary"]["blocking_sink_mappings"], 2)
+
+        candidate_domains = {finding["domain"] for finding in report["rebinding_candidates"]}
+        self.assertEqual(
+            candidate_domains,
+            {"api.example.com", "dev.example.com", "tailscale.example.com", "admin.example.com"},
+        )
+        trusted_domains = {finding["domain"] for finding in report["trusted_local_mappings"]}
+        self.assertEqual(trusted_domains, {"router.lan", "printer.local"})
+        public_domains = {finding["domain"] for finding in report["public_redirects"]}
+        self.assertEqual(public_domains, {"public.example.com", "www.google.com"})
+
+        formatted = format_dns_rebinding_report(report)
+        self.assertIn("DNS Rebinding Protection Check", formatted)
+        self.assertIn("api.example.com -> 10.0.0.5", formatted)
+        self.assertIn("Roadmap source IDs", formatted)
+
+    def test_dns_rebinding_report_honors_extra_trusted_suffixes(self):
+        lines = ["10.0.0.5 app.lab.example"]
+
+        default_report = build_dns_rebinding_report(lines)
+        trusted_report = build_dns_rebinding_report(lines, trusted_suffixes=["lab.example"])
+
+        self.assertEqual(default_report["summary"]["rebinding_candidates"], 1)
+        self.assertEqual(default_report["summary"]["trusted_local_mappings"], 0)
+        self.assertEqual(trusted_report["summary"]["rebinding_candidates"], 0)
+        self.assertEqual(trusted_report["summary"]["trusted_local_mappings"], 1)
+        self.assertIn(".lab.example", trusted_report["trusted_suffixes"])
 
     # ---- export_lines_as_format ----
     def test_export_lines_as_format_hosts_roundtrips(self):

@@ -151,6 +151,11 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added curated HaGeZi encrypted-DNS bypass source entries with explicit breakage and network-policy caveats.
 - Documented DoH/DoT/DoQ hosts-file limits, router/firewall controls, and source basis in `docs/encrypted-dns-bypass.md`.
 
+**DNS rebinding protection checks**
+- Added static DNS rebinding-sensitive mapping reports for external-looking domains pointed at RFC1918, link-local, loopback, ULA, CGNAT, reserved, multicast, or other special-use ranges.
+- Added **Tools > DNS Rebinding Protection Check...**, `--dns-rebinding-report`, `--dns-rebinding-output`, and repeatable `--dns-rebinding-trusted-suffix` for local review JSON without live DNS queries or policy changes.
+- Documented resolver/router enforcement boundaries, trusted internal suffix handling, and source basis in `docs/dns-rebinding.md`.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

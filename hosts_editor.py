@@ -17,6 +17,7 @@ import hashlib
 import sys
 import csv
 import io
+import ipaddress
 import re
 import tempfile
 import threading
@@ -63,6 +64,7 @@ SOURCE_HEALTH_REPORT_SCHEMA_VERSION = 1
 SOURCE_HEALTH_SAMPLE_BYTES = 256 * 1024
 SOURCE_HEALTH_TIMEOUT_SECONDS = 15
 SOURCE_HEALTH_DEFAULT_WORKERS = 8
+DNS_REBINDING_REPORT_SCHEMA_VERSION = 1
 SOURCE_CACHE_DIRNAME = "source_cache"
 GIT_HISTORY_DIRNAME = "hosts_history_git"
 GIT_HISTORY_HOSTS_FILENAME = "hosts"
@@ -150,6 +152,81 @@ SOURCE_TRUST_RISK_WORDS = (
 # equivalent and will rewrite to the user's chosen sink. :: is the IPv6 null
 # address used by some DoH-aware stubs; ::1 is IPv6 loopback.
 BLOCK_SINK_IPS = {"0.0.0.0", "127.0.0.1", "::", "::1"}
+DNS_REBINDING_LOCAL_SUFFIXES = (
+    ".lan",
+    ".local",
+    ".localdomain",
+    ".localhost",
+    ".home",
+    ".home.arpa",
+    ".internal",
+    ".intranet",
+    ".corp",
+    ".test",
+)
+DNS_REBINDING_IP_RANGES = (
+    {
+        "category": "rfc1918-private",
+        "label": "RFC1918 private IPv4",
+        "risk": "high",
+        "networks": (
+            ipaddress.ip_network("10.0.0.0/8"),
+            ipaddress.ip_network("172.16.0.0/12"),
+            ipaddress.ip_network("192.168.0.0/16"),
+        ),
+    },
+    {
+        "category": "unique-local",
+        "label": "IPv6 unique-local",
+        "risk": "high",
+        "networks": (ipaddress.ip_network("fc00::/7"),),
+    },
+    {
+        "category": "link-local",
+        "label": "Link-local",
+        "risk": "medium",
+        "networks": (
+            ipaddress.ip_network("169.254.0.0/16"),
+            ipaddress.ip_network("fe80::/10"),
+        ),
+    },
+    {
+        "category": "loopback",
+        "label": "Loopback",
+        "risk": "high",
+        "networks": (
+            ipaddress.ip_network("127.0.0.0/8"),
+            ipaddress.ip_network("::1/128"),
+        ),
+    },
+    {
+        "category": "unspecified",
+        "label": "Unspecified/non-routable",
+        "risk": "low",
+        "networks": (
+            ipaddress.ip_network("0.0.0.0/8"),
+            ipaddress.ip_network("::/128"),
+        ),
+    },
+    {
+        "category": "shared-address",
+        "label": "Carrier-grade NAT or overlay",
+        "risk": "medium",
+        "networks": (ipaddress.ip_network("100.64.0.0/10"),),
+    },
+)
+DNS_REBINDING_CANDIDATE_CATEGORIES = {
+    "rfc1918-private",
+    "unique-local",
+    "link-local",
+    "loopback",
+    "unspecified",
+    "shared-address",
+    "reserved",
+    "multicast",
+    "special-use",
+}
+DNS_REBINDING_SOURCE_IDS = ("C1", "O7", "O8", "O10")
 
 
 def _default_hosts_file_path() -> str:
@@ -4794,6 +4871,337 @@ def scan_suspicious_redirects(lines: list[str]) -> list[tuple[int, str, str]]:
                 findings.append((idx, ip_token, domain))
 
     return findings
+
+
+def _normalize_dns_rebinding_suffix(suffix: str) -> str:
+    normalized = str(suffix or "").strip().lower().strip()
+    if not normalized:
+        return ""
+    if normalized.startswith("*."):
+        normalized = normalized[1:]
+    elif not normalized.startswith("."):
+        normalized = f".{normalized}"
+    return normalized.rstrip(".")
+
+
+def normalize_dns_rebinding_trusted_suffixes(extra_suffixes: list[str] | tuple[str, ...] | None = None) -> tuple[str, ...]:
+    seen: set[str] = set()
+    suffixes: list[str] = []
+    for suffix in (*DNS_REBINDING_LOCAL_SUFFIXES, *(extra_suffixes or ())):
+        normalized = _normalize_dns_rebinding_suffix(suffix)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            suffixes.append(normalized)
+    return tuple(suffixes)
+
+
+def is_dns_rebinding_local_domain(domain: str, trusted_suffixes: list[str] | tuple[str, ...] | None = None) -> bool:
+    normalized = str(domain or "").strip().lower().rstrip(".")
+    if not normalized:
+        return False
+    if normalized in LOCAL_DOMAINS:
+        return True
+    if "." not in normalized:
+        return True
+
+    suffixes = normalize_dns_rebinding_trusted_suffixes(trusted_suffixes)
+    for suffix in suffixes:
+        suffix_root = suffix.lstrip(".")
+        if normalized == suffix_root or normalized.endswith(suffix):
+            return True
+    return False
+
+
+def _dns_rebinding_ip_profile(ip_token: str) -> dict:
+    token = str(ip_token or "").strip()
+    lowered = token.lower()
+    if lowered in BLOCK_SINK_IPS:
+        return {
+            "category": "block-sink",
+            "label": "Standard hosts blocking sink",
+            "risk": "none",
+            "network": None,
+            "normalized": lowered,
+        }
+
+    try:
+        address = ipaddress.ip_address(token)
+    except ValueError:
+        return {
+            "category": "invalid",
+            "label": "Invalid IP",
+            "risk": "none",
+            "network": None,
+            "normalized": token,
+        }
+
+    for group in DNS_REBINDING_IP_RANGES:
+        for network in group["networks"]:
+            if address in network:
+                return {
+                    "category": group["category"],
+                    "label": group["label"],
+                    "risk": group["risk"],
+                    "network": str(network),
+                    "normalized": str(address),
+                }
+
+    if address.is_multicast:
+        category = "multicast"
+        label = "Multicast"
+        risk = "medium"
+    elif address.is_reserved:
+        category = "reserved"
+        label = "Reserved/special-purpose"
+        risk = "medium"
+    elif address.is_global:
+        category = "public"
+        label = "Publicly routable"
+        risk = "medium"
+    else:
+        category = "special-use"
+        label = "Special-use non-global"
+        risk = "medium"
+
+    return {
+        "category": category,
+        "label": label,
+        "risk": risk,
+        "network": None,
+        "normalized": str(address),
+    }
+
+
+def classify_dns_rebinding_mapping(
+    ip_token: str,
+    domain: str,
+    trusted_suffixes: list[str] | tuple[str, ...] | None = None,
+) -> dict:
+    ip_profile = _dns_rebinding_ip_profile(ip_token)
+    local_domain = is_dns_rebinding_local_domain(domain, trusted_suffixes)
+    classification = {
+        "domain": str(domain or "").strip().lower().rstrip("."),
+        "ip": str(ip_token or "").strip(),
+        "normalized_ip": ip_profile["normalized"],
+        "ip_category": ip_profile["category"],
+        "ip_category_label": ip_profile["label"],
+        "network": ip_profile["network"],
+        "risk": ip_profile["risk"],
+        "local_domain": local_domain,
+        "status": "ignored",
+        "reason": "",
+    }
+
+    category = ip_profile["category"]
+    if category == "invalid":
+        classification.update({
+            "status": "invalid",
+            "reason": "The mapping IP could not be parsed.",
+            "risk": "none",
+        })
+    elif category == "block-sink":
+        classification.update({
+            "status": "blocking_sink",
+            "reason": "Standard hosts-file blocking sinks are counted separately from rebinding candidates.",
+            "risk": "none",
+        })
+    elif category in DNS_REBINDING_CANDIDATE_CATEGORIES:
+        if local_domain:
+            classification.update({
+                "status": "trusted_local_mapping",
+                "reason": "Private or special-range target is scoped to a local-looking domain suffix.",
+                "risk": "low",
+            })
+        else:
+            classification.update({
+                "status": "rebinding_candidate",
+                "reason": "External-looking domain maps to a private, local, or special-use IP range.",
+            })
+    elif category == "public":
+        if local_domain:
+            classification.update({
+                "status": "public_mapping",
+                "reason": "Local-looking domain maps to a public IP; review only if unexpected.",
+                "risk": "low",
+            })
+        else:
+            classification.update({
+                "status": "public_redirect",
+                "reason": "External-looking domain maps to a public IP instead of a blocking sink.",
+            })
+    else:
+        classification.update({
+            "status": "ignored",
+            "reason": "Mapping did not match a rebinding-sensitive range.",
+            "risk": "low",
+        })
+    return classification
+
+
+def _iter_hosts_mapping_records(lines: list[str]) -> list[dict]:
+    records: list[dict] = []
+    for line_number, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if not stripped or _is_comment_line(stripped):
+            continue
+        content = stripped.split("#", 1)[0].strip()
+        tokens = [token for token in TOKEN_SPLITTER.split(content) if token]
+        if len(tokens) < 2 or not _looks_like_ip_token(tokens[0]):
+            continue
+        for token in tokens[1:]:
+            domain, _ = _extract_domain_from_token(token, allow_single_label=True)
+            if not domain:
+                continue
+            records.append({
+                "line_number": line_number,
+                "line": line,
+                "ip": tokens[0],
+                "domain": domain,
+            })
+    return records
+
+
+def build_dns_rebinding_report(
+    lines: list[str],
+    trusted_suffixes: list[str] | tuple[str, ...] | None = None,
+    max_findings: int = 100,
+) -> dict:
+    effective_suffixes = normalize_dns_rebinding_trusted_suffixes(trusted_suffixes)
+    records = _iter_hosts_mapping_records(lines)
+    buckets = {
+        "rebinding_candidates": [],
+        "trusted_local_mappings": [],
+        "public_redirects": [],
+        "blocking_sink_mappings": [],
+        "other_mappings": [],
+    }
+    status_counts: dict[str, int] = {}
+
+    for record in records:
+        classification = classify_dns_rebinding_mapping(
+            record["ip"],
+            record["domain"],
+            trusted_suffixes=effective_suffixes,
+        )
+        finding = {**record, **classification}
+        status = classification["status"]
+        status_counts[status] = status_counts.get(status, 0) + 1
+        if status == "rebinding_candidate":
+            bucket_name = "rebinding_candidates"
+        elif status == "trusted_local_mapping":
+            bucket_name = "trusted_local_mappings"
+        elif status == "public_redirect":
+            bucket_name = "public_redirects"
+        elif status == "blocking_sink":
+            bucket_name = "blocking_sink_mappings"
+        else:
+            bucket_name = "other_mappings"
+        if len(buckets[bucket_name]) < max_findings:
+            buckets[bucket_name].append(finding)
+
+    summary = {
+        "total_mappings": len(records),
+        "rebinding_candidates": status_counts.get("rebinding_candidate", 0),
+        "trusted_local_mappings": status_counts.get("trusted_local_mapping", 0),
+        "public_redirects": status_counts.get("public_redirect", 0),
+        "blocking_sink_mappings": status_counts.get("blocking_sink", 0),
+        "other_mappings": len(records)
+        - status_counts.get("rebinding_candidate", 0)
+        - status_counts.get("trusted_local_mapping", 0)
+        - status_counts.get("public_redirect", 0)
+        - status_counts.get("blocking_sink", 0),
+    }
+
+    return {
+        "schema": "hostsfileget.dns-rebinding-report.v1",
+        "schema_version": DNS_REBINDING_REPORT_SCHEMA_VERSION,
+        "summary": summary,
+        "status_counts": status_counts,
+        "trusted_suffixes": list(effective_suffixes),
+        "max_findings_per_bucket": max_findings,
+        "omitted_counts": {
+            bucket_name: max(0, summary.get(bucket_name, len(records)) - len(items))
+            for bucket_name, items in buckets.items()
+            if bucket_name in summary
+        },
+        "warnings": [
+            "This is a static hosts-file review; it does not observe live DNS answers or enforce resolver policy.",
+            "Standard hosts-file blocking sinks are not treated as DNS rebinding findings.",
+            "Internal lab domains should use explicit trusted suffixes before private-range findings are acted on.",
+        ],
+        "references": list(DNS_REBINDING_SOURCE_IDS),
+        **buckets,
+    }
+
+
+def _format_dns_rebinding_finding(finding: dict) -> str:
+    network = f"; network {finding['network']}" if finding.get("network") else ""
+    return (
+        f"- Line {finding['line_number']}: {finding['domain']} -> {finding['ip']} "
+        f"({finding['ip_category_label']}{network}; risk: {finding['risk']})"
+    )
+
+
+def format_dns_rebinding_report(report: dict) -> str:
+    summary = report.get("summary") or {}
+    lines = [
+        "DNS Rebinding Protection Check",
+        "",
+        "Summary:",
+        f"- Hosts mappings scanned: {int(summary.get('total_mappings') or 0):,}",
+        f"- Rebinding candidates: {int(summary.get('rebinding_candidates') or 0):,}",
+        f"- Trusted local mappings: {int(summary.get('trusted_local_mappings') or 0):,}",
+        f"- Public redirects: {int(summary.get('public_redirects') or 0):,}",
+        f"- Standard blocking sinks: {int(summary.get('blocking_sink_mappings') or 0):,}",
+        "",
+        "Boundary:",
+        "- HostsFileGet reports risky static mappings; it does not enforce DNS resolver rebinding protection.",
+        "- Normal blocking entries that use 0.0.0.0, 127.0.0.1, ::, or ::1 are separated from findings.",
+        "- Private lab names can be trusted by suffix instead of deleting legitimate LAN aliases.",
+        "",
+        "Trusted local suffixes:",
+        "- " + ", ".join(report.get("trusted_suffixes") or []),
+        "",
+        "Rebinding candidates:",
+    ]
+
+    candidates = report.get("rebinding_candidates") or []
+    if candidates:
+        lines.extend(_format_dns_rebinding_finding(finding) for finding in candidates)
+    else:
+        lines.append("- None found.")
+
+    lines.extend(["", "Trusted local/private mappings:"])
+    trusted = report.get("trusted_local_mappings") or []
+    if trusted:
+        lines.extend(_format_dns_rebinding_finding(finding) for finding in trusted[:25])
+        omitted = max(0, int(summary.get("trusted_local_mappings") or 0) - len(trusted[:25]))
+        if omitted:
+            lines.append(f"- ... {omitted:,} additional trusted local mapping(s) omitted.")
+    else:
+        lines.append("- None found.")
+
+    lines.extend(["", "Public redirects:"])
+    public_redirects = report.get("public_redirects") or []
+    if public_redirects:
+        lines.extend(_format_dns_rebinding_finding(finding) for finding in public_redirects[:25])
+        omitted = max(0, int(summary.get("public_redirects") or 0) - len(public_redirects[:25]))
+        if omitted:
+            lines.append(f"- ... {omitted:,} additional public redirect(s) omitted.")
+    else:
+        lines.append("- None found.")
+
+    lines.extend([
+        "",
+        "Review guidance:",
+        "- Investigate external-looking domains that map to RFC1918, link-local, loopback, ULA, or CGNAT ranges.",
+        "- Keep intentional lab mappings under a clear suffix such as .lan, .home.arpa, .internal, or a trusted suffix.",
+        "- Use resolver/router rebinding protection for live DNS answers; the hosts file can only express static A/AAAA overrides.",
+        "",
+        "Roadmap source IDs:",
+        "- " + ", ".join(report.get("references") or DNS_REBINDING_SOURCE_IDS),
+    ])
+    return "\n".join(lines)
 
 
 def find_sources_containing_domain(domain: str, source_corpus: dict[str, object]) -> list[str]:
@@ -9777,6 +10185,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="CNAME Cloaking Workflow...", command=self.show_cname_cloaking_workflow)
         tools_menu.add_command(label="DNS Bypass Diagnostics...", command=self.show_dns_bypass_diagnostics)
         tools_menu.add_command(label="Encrypted DNS Bypass Packs...", command=self.show_encrypted_dns_bypass_packs)
+        tools_menu.add_command(label="DNS Rebinding Protection Check...", command=self.show_dns_rebinding_report)
         tools_menu.add_command(label="DNS Interoperability Pack...", command=self.show_dns_integration_pack)
         tools_menu.add_command(label="Cloud DNS Adapters...", command=self.show_cloud_dns_adapters)
         tools_menu.add_command(label="Sources Report...", command=self.show_sources_report)
@@ -10818,6 +11227,18 @@ class HostsFileEditor:
             "Review resolver-bypass feeds and the router/firewall controls needed beyond the hosts file.",
             format_encrypted_dns_bypass_catalog(),
             tone="warning",
+            width=960,
+            height=720,
+        )
+
+    def show_dns_rebinding_report(self):
+        report = build_dns_rebinding_report(self.get_lines())
+        tone = "warning" if report["summary"].get("rebinding_candidates") else "info"
+        self._show_text_report_dialog(
+            "DNS rebinding protection check",
+            "Review static hosts mappings that send external-looking domains to private, local, or special IP ranges.",
+            format_dns_rebinding_report(report),
+            tone=tone,
             width=960,
             height=720,
         )
@@ -15116,6 +15537,28 @@ def _cli_encrypted_dns_bypass_plan(pack_id: str, output_path: str) -> int:
     return 0
 
 
+def _cli_dns_rebinding_report(
+    input_path: str,
+    output_path: str | None = None,
+    trusted_suffixes: list[str] | tuple[str, ...] | None = None,
+) -> int:
+    try:
+        lines = read_text_file_lines(input_path)
+        report = build_dns_rebinding_report(lines, trusted_suffixes=trusted_suffixes)
+        if output_path:
+            output_dir = os.path.dirname(os.path.abspath(output_path))
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+            write_text_file_atomic(output_path, json.dumps(report, indent=2))
+    except (OSError, ValueError) as exc:
+        _cli_print(f"DNS rebinding report failed: {exc}")
+        return 2
+    _cli_print(format_dns_rebinding_report(report))
+    if output_path:
+        _cli_print(f"Wrote DNS rebinding report to {output_path}")
+    return 0
+
+
 def _cli_adblock_lint(input_path: str, output_path: str | None = None) -> int:
     try:
         lines = read_text_file_lines(input_path)
@@ -15459,6 +15902,9 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--cname-cloaking-plan",
         "--encrypted-dns-bypass-list",
         "--encrypted-dns-bypass-plan",
+        "--dns-rebinding-report",
+        "--dns-rebinding-output",
+        "--dns-rebinding-trusted-suffix",
         "--adblock-lint",
         "--adblock-lint-output",
         "--adblock-quarantine",
@@ -15493,6 +15939,9 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--threat-feed-plan=",
         "--cname-cloaking-plan=",
         "--encrypted-dns-bypass-plan=",
+        "--dns-rebinding-report=",
+        "--dns-rebinding-output=",
+        "--dns-rebinding-trusted-suffix=",
         "--adblock-lint=",
         "--adblock-lint-output=",
         "--adblock-quarantine=",
@@ -15573,6 +16022,19 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         nargs=2,
         metavar=("PACK", "OUTPUT"),
         help="Write a local JSON plan for an encrypted-DNS bypass PACK to OUTPUT. No firewall or remote writes are performed.",
+    )
+    parser.add_argument(
+        "--dns-rebinding-report",
+        metavar="INPUT",
+        help="Check INPUT hosts-like text for external domains mapped to private, local, or special IP ranges.",
+    )
+    parser.add_argument("--dns-rebinding-output", metavar="PATH", help="Write the detailed DNS rebinding JSON report to PATH.")
+    parser.add_argument(
+        "--dns-rebinding-trusted-suffix",
+        action="append",
+        default=[],
+        metavar="SUFFIX",
+        help="Treat SUFFIX as internal when classifying private-range mappings. May be supplied more than once.",
     )
     parser.add_argument("--adblock-lint", metavar="INPUT", help="Lint INPUT for browser-only or unsafe adblock rules without launching the GUI.")
     parser.add_argument("--adblock-lint-output", metavar="PATH", help="Write the detailed adblock syntax lint JSON report to PATH.")
@@ -15677,6 +16139,14 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         return _cli_encrypted_dns_bypass_list()
     if args.encrypted_dns_bypass_plan:
         return _cli_encrypted_dns_bypass_plan(args.encrypted_dns_bypass_plan[0], args.encrypted_dns_bypass_plan[1])
+    if args.dns_rebinding_report or args.dns_rebinding_output:
+        if not args.dns_rebinding_report:
+            parser.error("--dns-rebinding-output requires --dns-rebinding-report INPUT")
+        return _cli_dns_rebinding_report(
+            args.dns_rebinding_report,
+            args.dns_rebinding_output,
+            args.dns_rebinding_trusted_suffix,
+        )
     if args.adblock_lint or args.adblock_lint_output:
         if not args.adblock_lint:
             parser.error("--adblock-lint-output requires --adblock-lint INPUT")

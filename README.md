@@ -57,6 +57,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - NRD/DGA/TIF threat feed pack planning with freshness and false-positive controls
   - CNAME cloaking workflow planning that separates hosts-reviewable disguised domains from DNS-only CNAME target feeds
   - encrypted-DNS bypass pack planning that separates hosts-reviewable resolver names from router/firewall handoffs
+  - DNS rebinding protection checks for external-looking domains mapped to private, local, loopback, link-local, ULA, or CGNAT ranges
   - false-positive triage for whitelist, pin, source-match, and upstream report decisions
   - entry provenance view for import-section ownership, source matches, and local audit events
 - Export adapters:
@@ -272,6 +273,13 @@ python hosts_editor.py --encrypted-dns-bypass-list
 python hosts_editor.py --encrypted-dns-bypass-plan router-firewall-handoff .\dns-bypass-plan.json
 ```
 
+Review static hosts mappings for DNS rebinding-sensitive private and local IP targets:
+
+```powershell
+python hosts_editor.py --dns-rebinding-report .\hosts.txt --dns-rebinding-output .\dns-rebinding-report.json
+python hosts_editor.py --dns-rebinding-report .\hosts.txt --dns-rebinding-trusted-suffix lab.example
+```
+
 Run the deterministic large-file benchmark with:
 
 ```powershell
@@ -303,6 +311,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - NRD/DGA threat feed packs: `docs/threat-feed-packs.md`
 - CNAME cloaking workflow: `docs/cname-cloaking.md`
 - Encrypted DNS bypass packs: `docs/encrypted-dns-bypass.md`
+- DNS rebinding protection checks: `docs/dns-rebinding.md`
 - Troubleshooting and hosts-file limits: `TROUBLESHOOTING.md`
 - Config schema: `docs/config-schema.md`
 - Curated source manifest: `docs/source-manifest.md`
