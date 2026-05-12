@@ -19,6 +19,7 @@ from hosts_editor import (
     DOMAIN_CATEGORY_RULES,
     FTL_BLOCKED_STATUS_CODES,
     HostsFileEditor,
+    I18N_CATALOG_SCHEMA_VERSION,
     PROVENANCE_EVENT_KINDS,
     PROFILE_SCHEMA_VERSION,
     SOURCE_HEALTH_REPORT_SCHEMA_VERSION,
@@ -29,6 +30,7 @@ from hosts_editor import (
     add_domain_to_whitelist_text,
     build_accessibility_audit_report,
     build_false_positive_triage_report,
+    build_i18n_catalog_report,
     build_entry_provenance_report,
     build_pinned_export_payload,
     build_source_domain_index,
@@ -76,6 +78,7 @@ from hosts_editor import (
     format_entry_provenance_report,
     format_false_positive_triage_report,
     format_accessibility_audit_report,
+    format_i18n_catalog_report,
     format_source_trust_badges,
     format_source_overlap_report,
     format_dns_bypass_diagnostics,
@@ -84,7 +87,9 @@ from hosts_editor import (
     looks_like_domain,
     looks_like_html_document,
     load_blocklist_sources_manifest,
+    load_i18n_catalog,
     migrate_config_snapshot,
+    normalize_locale_code,
     normalize_scheduler_start_time,
     normalize_line_to_hosts_entries,
     normalize_custom_source_url,
@@ -98,6 +103,7 @@ from hosts_editor import (
     rewrite_block_sink_ip,
     sanitize_config_snapshot,
     sanitize_custom_sources,
+    sanitize_i18n_catalog,
     sanitize_profile_id,
     sanitize_profile_snapshot,
     sanitize_profiles_snapshot,
@@ -109,6 +115,7 @@ from hosts_editor import (
     strip_lines_by_category,
     summarize_clean_changes,
     summarize_source_health_results,
+    translate_message,
     update_active_profile_snapshot,
     write_text_file_atomic,
 )
@@ -482,6 +489,74 @@ class HostsEditorLogicTests(unittest.TestCase):
                 load_blocklist_sources_manifest(str(path)),
                 {"Security": [("Threat Feed", "https://threats.example/hosts.txt", "Threat domains.")]},
             )
+
+    def test_sanitize_i18n_catalog_accepts_versioned_messages(self):
+        catalog = {
+            "schema_version": I18N_CATALOG_SCHEMA_VERSION,
+            "locale": "en-us",
+            "messages": {
+                "common.close": "Close",
+                "dialog.example.title": "Example title",
+            },
+        }
+
+        sanitized = sanitize_i18n_catalog(catalog)
+        self.assertEqual(sanitized["locale"], "en-US")
+        self.assertEqual(sanitized["messages"]["dialog.example.title"], "Example title")
+
+    def test_sanitize_i18n_catalog_rejects_bad_shape(self):
+        cases = [
+            {"schema_version": I18N_CATALOG_SCHEMA_VERSION + 1, "locale": "en-US", "messages": {"common.close": "Close"}},
+            {"schema_version": I18N_CATALOG_SCHEMA_VERSION, "locale": "../bad", "messages": {"common.close": "Close"}},
+            {"schema_version": I18N_CATALOG_SCHEMA_VERSION, "locale": "en-US", "messages": {"Bad Key": "Close"}},
+            {"schema_version": I18N_CATALOG_SCHEMA_VERSION, "locale": "en-US", "messages": {"common.close": "Close\nNow"}},
+            {"schema_version": I18N_CATALOG_SCHEMA_VERSION, "locale": "en-US", "messages": {"common.close": 3}},
+        ]
+
+        for catalog in cases:
+            with self.subTest(catalog=catalog):
+                with self.assertRaises(ValueError):
+                    sanitize_i18n_catalog(catalog)
+
+    def test_load_i18n_catalog_merges_missing_keys_from_builtin_fallback(self):
+        import tempfile
+        from pathlib import Path
+
+        catalog = {
+            "schema_version": I18N_CATALOG_SCHEMA_VERSION,
+            "locale": "en-US",
+            "messages": {
+                "common.close": "Dismiss",
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "en-US.json"
+            path.write_text(json.dumps(catalog), encoding="utf-8")
+            loaded = load_i18n_catalog(str(path))
+
+        self.assertEqual(loaded["messages"]["common.close"], "Dismiss")
+        self.assertEqual(loaded["messages"]["common.details"], "Details")
+        self.assertEqual(translate_message(loaded, "missing.key", fallback="Fallback"), "Fallback")
+
+    def test_load_i18n_catalog_reads_project_catalog(self):
+        loaded = load_i18n_catalog()
+        report = build_i18n_catalog_report(loaded)
+        self.assertEqual(loaded["locale"], normalize_locale_code("en-US"))
+        self.assertIn("dialog.i18n.title", loaded["messages"])
+        self.assertEqual(report["missing_required_keys"], [])
+        self.assertIn("Translation catalog", format_i18n_catalog_report(report))
+
+    def test_translate_message_formats_named_values_safely(self):
+        catalog = {
+            "messages": {
+                "status.count": "{count} entries",
+                "status.bad_template": "{missing} entries",
+            }
+        }
+
+        self.assertEqual(translate_message(catalog, "status.count", count=3), "3 entries")
+        self.assertEqual(translate_message(catalog, "status.bad_template", count=3), "{missing} entries")
 
     def test_check_source_health_record_marks_host_sample_healthy(self):
         class FakeResponse:

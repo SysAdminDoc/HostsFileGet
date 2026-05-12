@@ -12,6 +12,10 @@ if (project_root / "icon.ico").exists():
 source_manifest_path = project_root / "data" / "blocklist_sources.json"
 if source_manifest_path.exists():
     datas.append((str(source_manifest_path), "data"))
+i18n_dir = project_root / "data" / "i18n"
+if i18n_dir.exists():
+    for catalog_path in i18n_dir.glob("*.json"):
+        datas.append((str(catalog_path), "data/i18n"))
 
 icon_args = []
 if (project_root / "icon.ico").exists():

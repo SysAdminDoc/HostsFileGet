@@ -59,6 +59,7 @@ It is designed for people who work with large blocklists, external feed imports,
 - Configuration:
   - versioned JSON config migration
   - profile-ready schema mirror for future named whitelist/source/pin sets
+  - versioned English string catalog foundation for future localization
 
 ## Supported Input Shapes
 
@@ -96,6 +97,7 @@ The launcher will:
 - install Python only if needed
 - refresh the cached `hosts_editor.py` when the download succeeds
 - refresh the cached curated source manifest beside the editor
+- refresh the cached English string catalog beside the editor when available
 - fall back to the last valid cached editor copy if the network refresh fails
 - launch the editor
 
@@ -183,6 +185,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Windows DNS Client snapshot: `docs/windows-dns-client.md`
 - DNS bypass diagnostics: `docs/dns-bypass-diagnostics.md`
 - Accessibility audit: `docs/accessibility.md`
+- i18n string catalog: `docs/i18n.md`
 - Sourced implementation plan: `ROADMAP.md`
 - Release build notes: `docs/release.md`
 - Codex handoff notes: `CODEX_CHANGELOG.md`

@@ -39,12 +39,38 @@ DEFAULT_PROFILE_ID = "default"
 PROFILE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 SOURCE_MANIFEST_SCHEMA_VERSION = 1
 SOURCE_MANIFEST_RELATIVE_PATH = os.path.join("data", "blocklist_sources.json")
+I18N_CATALOG_SCHEMA_VERSION = 1
+DEFAULT_LOCALE = "en-US"
+I18N_CATALOG_RELATIVE_PATH = os.path.join("data", "i18n", f"{DEFAULT_LOCALE}.json")
+I18N_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9_]*)+$")
+I18N_LOCALE_PATTERN = re.compile(r"^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8})*$")
 ELEVATION_ATTEMPT_FLAG = "--hostsfileget-elevation-attempted"
 SOURCE_HEALTH_REPORT_SCHEMA_VERSION = 1
 SOURCE_HEALTH_SAMPLE_BYTES = 256 * 1024
 SOURCE_HEALTH_TIMEOUT_SECONDS = 15
 SOURCE_HEALTH_DEFAULT_WORKERS = 8
 SOURCE_CACHE_DIRNAME = "source_cache"
+
+DEFAULT_I18N_MESSAGES = {
+    "app.name": APP_NAME,
+    "common.close": "Close",
+    "common.details": "Details",
+    "status.default_hint": "Ctrl+S Cleaned Save   Ctrl+Shift+S Raw Save   F5 Reload",
+    "status.loading": "Loading...",
+    "button.stop_import": "Stop Import",
+    "menu.tools.accessibility_audit": "Accessibility Audit...",
+    "menu.tools.translation_catalog": "Translation Catalog...",
+    "dialog.accessibility.title": "Accessibility Audit",
+    "dialog.accessibility.intro": (
+        "Checks contrast ratios, font assumptions, and the manual screen-reader pass list "
+        "for the current Tk theme."
+    ),
+    "dialog.i18n.title": "Translation Catalog",
+    "dialog.i18n.intro": (
+        "Reports the active string catalog, fallback coverage, and key naming rules for "
+        "future localization work."
+    ),
+}
 
 # Hard cap for any single downloaded feed/whitelist payload (50 MB decompressed).
 # Even the biggest public blocklists are well under 20 MB; this guards against
@@ -2240,6 +2266,181 @@ def load_blocklist_sources_manifest(path: str | None = None) -> dict[str, list[t
         raise ValueError(f"Source manifest could not be read from {manifest_path!r}: {e}") from e
 
     return sanitize_source_manifest(payload)
+
+
+def normalize_locale_code(value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError("Locale must be a string.")
+    locale = value.strip()
+    if not locale or len(locale) > 35 or _contains_control_chars(locale):
+        raise ValueError("Locale is empty or invalid.")
+    if not I18N_LOCALE_PATTERN.match(locale):
+        raise ValueError(f"Locale {value!r} is not a supported BCP-47-style tag.")
+    parts = re.split(r"[-_]", locale)
+    normalized = [parts[0].lower()]
+    for part in parts[1:]:
+        if len(part) == 2 and part.isalpha():
+            normalized.append(part.upper())
+        elif len(part) == 4 and part.isalpha():
+            normalized.append(part.title())
+        else:
+            normalized.append(part)
+    return "-".join(normalized)
+
+
+def _coerce_i18n_catalog_schema_version(value) -> int:
+    if isinstance(value, bool):
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def build_default_i18n_catalog(source: str = "built-in fallback", source_path: str | None = None) -> dict:
+    return {
+        "schema_version": I18N_CATALOG_SCHEMA_VERSION,
+        "locale": DEFAULT_LOCALE,
+        "messages": dict(DEFAULT_I18N_MESSAGES),
+        "source": source,
+        "source_path": source_path,
+    }
+
+
+def sanitize_i18n_catalog(catalog) -> dict:
+    """Validate a versioned UI string catalog without applying fallbacks."""
+    if not isinstance(catalog, dict):
+        raise ValueError("i18n catalog must be a JSON object.")
+
+    version = _coerce_i18n_catalog_schema_version(catalog.get("schema_version"))
+    if version != I18N_CATALOG_SCHEMA_VERSION:
+        raise ValueError(
+            f"Unsupported i18n catalog schema_version {catalog.get('schema_version')!r}; "
+            f"expected {I18N_CATALOG_SCHEMA_VERSION}."
+        )
+
+    locale = normalize_locale_code(catalog.get("locale", ""))
+    messages = catalog.get("messages")
+    if not isinstance(messages, dict) or not messages:
+        raise ValueError("i18n catalog must contain a non-empty messages object.")
+
+    sanitized_messages: dict[str, str] = {}
+    for raw_key, raw_value in messages.items():
+        key = str(raw_key).strip()
+        if not key or len(key) > 120 or not I18N_KEY_PATTERN.match(key):
+            raise ValueError(f"i18n message key {raw_key!r} is invalid.")
+        if key in sanitized_messages:
+            raise ValueError(f"i18n message key {key!r} is duplicated.")
+        if not isinstance(raw_value, str):
+            raise ValueError(f"i18n message {key!r} must be a string.")
+        value = raw_value.strip()
+        if not value or len(value) > 1000 or _contains_control_chars(value):
+            raise ValueError(f"i18n message {key!r} has invalid text.")
+        sanitized_messages[key] = value
+
+    return {
+        "schema_version": I18N_CATALOG_SCHEMA_VERSION,
+        "locale": locale,
+        "messages": sanitized_messages,
+    }
+
+
+def load_i18n_catalog(path: str | None = None) -> dict:
+    catalog_path = path or os.path.join(_BUNDLE_DIR, I18N_CATALOG_RELATIVE_PATH)
+    try:
+        payload = json.loads(read_text_file_content(catalog_path))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"i18n catalog JSON is invalid: {e}") from e
+    except OSError as e:
+        if path is None:
+            fallback = build_default_i18n_catalog(source_path=catalog_path)
+            fallback["load_error"] = str(e)
+            return fallback
+        raise ValueError(f"i18n catalog could not be read from {catalog_path!r}: {e}") from e
+
+    sanitized = sanitize_i18n_catalog(payload)
+    messages = dict(DEFAULT_I18N_MESSAGES)
+    messages.update(sanitized["messages"])
+    return {
+        "schema_version": sanitized["schema_version"],
+        "locale": sanitized["locale"],
+        "messages": messages,
+        "source": "file",
+        "source_path": catalog_path,
+    }
+
+
+def translate_message(catalog: dict, key: str, fallback: str | None = None, **values) -> str:
+    messages = catalog.get("messages", {}) if isinstance(catalog, dict) else {}
+    text = messages.get(key)
+    if text is None:
+        text = DEFAULT_I18N_MESSAGES.get(key, fallback if fallback is not None else key)
+    if values:
+        try:
+            return text.format(**values)
+        except (IndexError, KeyError, ValueError):
+            return text
+    return text
+
+
+def build_i18n_catalog_report(catalog: dict, fallback_messages: dict[str, str] | None = None) -> dict:
+    fallback_messages = fallback_messages or DEFAULT_I18N_MESSAGES
+    messages = catalog.get("messages", {}) if isinstance(catalog, dict) else {}
+    if not isinstance(messages, dict):
+        messages = {}
+    message_keys = set(messages)
+    required_keys = set(fallback_messages)
+    return {
+        "schema_version": catalog.get("schema_version") if isinstance(catalog, dict) else None,
+        "locale": catalog.get("locale", DEFAULT_LOCALE) if isinstance(catalog, dict) else DEFAULT_LOCALE,
+        "source": catalog.get("source", "unknown") if isinstance(catalog, dict) else "unknown",
+        "source_path": catalog.get("source_path") if isinstance(catalog, dict) else None,
+        "load_error": catalog.get("load_error") if isinstance(catalog, dict) else None,
+        "message_count": len(message_keys),
+        "required_count": len(required_keys),
+        "missing_required_keys": sorted(required_keys - message_keys),
+        "extra_keys": sorted(message_keys - required_keys),
+        "key_rules": [
+            "Catalogs are JSON with schema_version, locale, and messages.",
+            "Message keys use dotted lowercase namespaces such as dialog.accessibility.title.",
+            "Runtime translation falls back to built-in English for missing keys.",
+        ],
+    }
+
+
+def format_i18n_catalog_report(report: dict) -> str:
+    lines = [
+        "Translation catalog",
+        f"Locale: {report.get('locale', DEFAULT_LOCALE)}",
+        f"Schema version: {report.get('schema_version')}",
+        f"Source: {report.get('source', 'unknown')}",
+    ]
+    if report.get("source_path"):
+        lines.append(f"Source path: {report.get('source_path')}")
+    if report.get("load_error"):
+        lines.append(f"Load fallback reason: {report.get('load_error')}")
+    lines.extend([
+        "",
+        f"Messages: {report.get('message_count', 0)}",
+        f"Required fallback keys: {report.get('required_count', 0)}",
+        f"Missing required keys: {len(report.get('missing_required_keys', []))}",
+        f"Extra locale-specific keys: {len(report.get('extra_keys', []))}",
+        "",
+        "Key rules:",
+    ])
+    for item in report.get("key_rules", []):
+        lines.append(f"  - {item}")
+    if report.get("missing_required_keys"):
+        lines.append("")
+        lines.append("Missing required keys:")
+        for key in report["missing_required_keys"]:
+            lines.append(f"  - {key}")
+    if report.get("extra_keys"):
+        lines.append("")
+        lines.append("Extra keys:")
+        for key in report["extra_keys"]:
+            lines.append(f"  - {key}")
+    return "\n".join(lines)
 
 
 def iter_curated_source_records(blocklist_sources: dict[str, list[tuple[str, str, str]]]):
@@ -4496,6 +4697,11 @@ class HostsFileEditor:
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self._icon_image = None
         self._apply_window_branding()
+        try:
+            self.i18n_catalog = load_i18n_catalog()
+        except ValueError as exc:
+            self.i18n_catalog = build_default_i18n_catalog()
+            self.i18n_catalog["load_error"] = str(exc)
 
         self.default_font = font.Font(family="Segoe UI", size=10)
         self.title_font = font.Font(family="Segoe UI Semibold", size=11)
@@ -4570,10 +4776,10 @@ class HostsFileEditor:
         self._init_menubar()
         
         # 1. Initialize Status Bar FIRST
-        self.default_status_hint = "Ctrl+S Cleaned Save   Ctrl+Shift+S Raw Save   F5 Reload"
+        self.default_status_hint = self.t("status.default_hint")
         status_frame = ttk.Frame(root, padding=(10, 6, 10, 10))
         status_frame.pack(side=tk.BOTTOM, fill=tk.X)
-        self.status_label = ttk.Label(status_frame, text="Loading...", font=self.default_font, foreground=PALETTE["subtext"])
+        self.status_label = ttk.Label(status_frame, text=self.t("status.loading"), font=self.default_font, foreground=PALETTE["subtext"])
         self.status_label.pack(side=tk.LEFT)
         self.status_hint_label = ttk.Label(
             status_frame,
@@ -4590,7 +4796,7 @@ class HostsFileEditor:
         self.progress_bar.pack(side=tk.RIGHT, padx=10)
         self.progress_bar.pack_forget() # Hide initially
         
-        self.stop_btn = ttk.Button(status_frame, text="Stop Import", command=self.cancel_import, style="Remove.TButton")
+        self.stop_btn = ttk.Button(status_frame, text=self.t("button.stop_import"), command=self.cancel_import, style="Remove.TButton")
         self.stop_btn.pack(side=tk.RIGHT, padx=5)
         self.stop_btn.pack_forget() # Hide initially
 
@@ -5138,6 +5344,9 @@ class HostsFileEditor:
             # Branding assets should never block the editor from launching.
             self._icon_image = None
 
+    def t(self, key: str, fallback: str | None = None, **values) -> str:
+        return translate_message(self.i18n_catalog, key, fallback, **values)
+
     def _configure_modal_window(
         self,
         dialog: tk.Toplevel,
@@ -5413,7 +5622,7 @@ class HostsFileEditor:
             intro_text,
             accent=self._dialog_accent_for_tone(tone),
         )
-        ttk.Label(intro, text="Details", style="SectionTitle.TLabel").pack(anchor="w")
+        ttk.Label(intro, text=self.t("common.details"), style="SectionTitle.TLabel").pack(anchor="w")
         text_box = scrolledtext.ScrolledText(dialog, wrap=tk.WORD)
         self._style_code_surface(text_box, font_spec=self.mono_small_font)
         text_box.pack(expand=True, fill="both", padx=20, pady=(0, 12))
@@ -5421,7 +5630,7 @@ class HostsFileEditor:
         text_box.configure(state="disabled")
         footer = ttk.Frame(dialog)
         footer.pack(fill="x", padx=20, pady=(0, 20))
-        ttk.Button(footer, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
+        ttk.Button(footer, text=self.t("common.close"), command=dialog.destroy, style="Secondary.TButton").pack(side="right")
         dialog.grab_set()
 
     def _init_stats_panel(self, parent):
@@ -5990,7 +6199,8 @@ class HostsFileEditor:
         tools_menu.add_separator()
         tools_menu.add_command(label="Schedule Auto-Update...", command=self.show_schedule_wizard)
         tools_menu.add_command(label="Preferences...", command=self.show_preferences)
-        tools_menu.add_command(label="Accessibility Audit...", command=self.show_accessibility_audit)
+        tools_menu.add_command(label=self.t("menu.tools.accessibility_audit"), command=self.show_accessibility_audit)
+        tools_menu.add_command(label=self.t("menu.tools.translation_catalog"), command=self.show_i18n_catalog_report)
         tools_menu.add_separator()
         convert_menu = tk.Menu(tools_menu, tearoff=0, bg=PALETTE["mantle"], fg=PALETTE["text"],
                                activebackground=PALETTE["blue"], activeforeground="#0b1020")
@@ -7436,14 +7646,22 @@ class HostsFileEditor:
         report = build_accessibility_audit_report()
         failing = report["summary"]["total_pairs"] - report["summary"]["passing_pairs"]
         tone = "success" if failing == 0 else "warning"
-        intro = (
-            "Checks contrast ratios, font assumptions, and the manual screen-reader pass list "
-            "for the current Tk theme."
-        )
         self._show_text_report_dialog(
-            "Accessibility Audit",
-            intro,
+            self.t("dialog.accessibility.title"),
+            self.t("dialog.accessibility.intro"),
             format_accessibility_audit_report(report),
+            tone=tone,
+            width=760,
+            height=620,
+        )
+
+    def show_i18n_catalog_report(self):
+        report = build_i18n_catalog_report(self.i18n_catalog)
+        tone = "warning" if report.get("missing_required_keys") or report.get("load_error") else "success"
+        self._show_text_report_dialog(
+            self.t("dialog.i18n.title"),
+            self.t("dialog.i18n.intro"),
+            format_i18n_catalog_report(report),
             tone=tone,
             width=760,
             height=620,
