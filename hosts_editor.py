@@ -3552,6 +3552,101 @@ def sanitize_pinned_domains(value) -> list[str]:
     return pinned
 
 
+WINDOWS_DNS_CLIENT_CHANNEL = "Microsoft-Windows-DNS-Client/Operational"
+WINDOWS_DNS_CLIENT_DEFAULT_EVENTS = 500
+WINDOWS_DNS_CLIENT_MAX_EVENTS = 5_000
+
+
+def _extract_domains_from_dns_event_value(value: str) -> list[str]:
+    domains: list[str] = []
+    seen: set[str] = set()
+    raw = str(value or "").strip()
+    candidates = [raw]
+    candidates.extend(token for token in TOKEN_SPLITTER.split(raw) if token)
+    for candidate in candidates:
+        clean = candidate.strip().strip('"\'').rstrip(".")
+        if not clean:
+            continue
+        domain, _ = _extract_domain_from_token(clean, allow_single_label=False)
+        if not domain or domain in seen:
+            continue
+        seen.add(domain)
+        domains.append(domain)
+    return domains
+
+
+def parse_windows_dns_client_events_xml(text: str, max_domains: int = 50_000) -> list[str]:
+    """Extract query hostnames from Windows DNS Client event XML."""
+    import xml.etree.ElementTree as ET
+
+    xml_text = str(text or "").lstrip("\ufeff").strip()
+    if not xml_text:
+        return []
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        try:
+            root = ET.fromstring(f"<Events>{xml_text}</Events>")
+        except ET.ParseError as exc:
+            raise ValueError("Could not parse Windows DNS Client XML.") from exc
+
+    domains: list[str] = []
+    seen: set[str] = set()
+    for elem in root.iter():
+        local_name = str(elem.tag).rsplit("}", 1)[-1].lower()
+        attr_name = str(elem.attrib.get("Name") or elem.attrib.get("name") or "").lower()
+        if not any(token in local_name or token in attr_name for token in ("query", "qname", "hostname", "host", "name")):
+            continue
+        value = "".join(elem.itertext()).strip()
+        for domain in _extract_domains_from_dns_event_value(value):
+            if domain in seen:
+                continue
+            seen.add(domain)
+            domains.append(domain)
+            if len(domains) >= max_domains:
+                return domains
+    return domains
+
+
+def build_windows_dns_client_wevtutil_command(max_events: int = WINDOWS_DNS_CLIENT_DEFAULT_EVENTS) -> list[str]:
+    """Return a bounded wevtutil query for recent DNS Client Operational events."""
+    try:
+        count = int(max_events)
+    except (TypeError, ValueError):
+        count = WINDOWS_DNS_CLIENT_DEFAULT_EVENTS
+    count = max(1, min(count, WINDOWS_DNS_CLIENT_MAX_EVENTS))
+    return [
+        "wevtutil",
+        "qe",
+        WINDOWS_DNS_CLIENT_CHANNEL,
+        "/rd:true",
+        f"/c:{count}",
+        "/f:xml",
+    ]
+
+
+def collect_recent_windows_dns_client_queries(
+    max_events: int = WINDOWS_DNS_CLIENT_DEFAULT_EVENTS,
+    timeout: int = 15,
+    runner=None,
+) -> list[str]:
+    """Read recent Windows DNS Client Operational events through wevtutil."""
+    runner = runner or subprocess.run
+    command = build_windows_dns_client_wevtutil_command(max_events)
+    completed = runner(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if getattr(completed, "returncode", 1) != 0:
+        detail = (getattr(completed, "stderr", "") or getattr(completed, "stdout", "") or "").strip()
+        raise RuntimeError(detail or "wevtutil could not read the DNS Client Operational log.")
+    return parse_windows_dns_client_events_xml(getattr(completed, "stdout", ""))
+
+
 # Pi-hole FTL stores per-query rows with integer status codes. Codes 1,4,5,
 # 6,7,8,9,10,11 all represent some form of block (upstream block, regex
 # match, gravity, wildcard, external block, etc.). Codes 2,3,12 are allow
@@ -4364,6 +4459,9 @@ class HostsFileEditor:
         ).pack(fill="x", pady=2)
         self._register_import_widget(
             self._btn(local_import_frame, "From NextDNS Log (CSV)", self.import_nextdns_log, "Import blocked domains from a NextDNS Query Log CSV.")
+        ).pack(fill="x", pady=2)
+        self._register_import_widget(
+            self._btn(local_import_frame, "From Windows DNS Snapshot", self.import_windows_dns_client_snapshot, "Read recent local Windows DNS Client query events.")
         ).pack(fill="x", pady=2)
 
         source_catalog, _ = self._create_inset_section_card(
@@ -5485,7 +5583,8 @@ class HostsFileEditor:
         import_menu.add_command(label="From NextDNS query log (CSV)...", command=self.import_nextdns_log)
         import_menu.add_command(label="From Pi-hole FTL (pihole-FTL.db)...", command=self.import_pihole_ftl)
         import_menu.add_command(label="From AdGuard Home query log...", command=self.import_adguard_home_querylog)
-        tools_menu.add_cascade(label="Import Blocked Queries From Log", menu=import_menu)
+        import_menu.add_command(label="From Windows DNS Client snapshot...", command=self.import_windows_dns_client_snapshot)
+        tools_menu.add_cascade(label="Import DNS Queries From Logs", menu=import_menu)
         tools_menu.add_separator()
         tools_menu.add_command(label="Schedule Auto-Update...", command=self.show_schedule_wizard)
         tools_menu.add_command(label="Preferences...", command=self.show_preferences)
@@ -8976,6 +9075,84 @@ class HostsFileEditor:
             self.update_status(f"No blocked domains found in '{filename}'.", is_error=True)
             return
         self.fetch_and_append_hosts(f"AdGuard Home: {filename}", lines_to_add=domains)
+
+    def import_windows_dns_client_snapshot(self):
+        if self._block_during_import("Windows DNS Client snapshot"):
+            return
+        if os.name != "nt":
+            self._show_notice_dialog(
+                "Windows DNS Client log unavailable",
+                "This import reads the Windows DNS Client Operational event log and only works on Windows.",
+                tone="warning",
+            )
+            return
+
+        if not self._confirm_dialog(
+            "Read Windows DNS Client queries",
+            "This reads recent local DNS Client Operational events and extracts queried hostnames. These are observed queries, not confirmed blocks.",
+            tone="warning",
+            confirm_text="Read Snapshot",
+            details=(
+                "Use this as a diagnostic feed only. Appending observed domains to hosts entries can break normal browsing "
+                "if you import too broadly. Review the summary before appending and use Save Cleaned preview before writing."
+            ),
+            width=640,
+        ):
+            return
+
+        count = simpledialog.askinteger(
+            "Windows DNS Client snapshot",
+            "Recent event count to scan:",
+            initialvalue=WINDOWS_DNS_CLIENT_DEFAULT_EVENTS,
+            minvalue=1,
+            maxvalue=WINDOWS_DNS_CLIENT_MAX_EVENTS,
+            parent=self.root,
+        )
+        if not count:
+            return
+
+        self.update_status(f"Reading recent DNS Client Operational events ({count} max)...")
+
+        def worker():
+            try:
+                domains = collect_recent_windows_dns_client_queries(max_events=count)
+                error: Exception | None = None
+            except Exception as e:
+                domains = []
+                error = e
+
+            def apply_result():
+                if error is not None:
+                    self.update_status(f"Windows DNS Client import failed: {error}", is_error=True)
+                    self._show_notice_dialog(
+                        "Could not read Windows DNS Client events",
+                        "The DNS Client Operational log could not be queried. It may be disabled, unavailable, or blocked by permissions.",
+                        tone="error",
+                        details=str(error),
+                    )
+                    return
+                if not domains:
+                    self.update_status("No DNS query domains were found in the recent Windows DNS Client events.", is_error=True)
+                    return
+
+                preview = "\n".join(domains[:100])
+                if len(domains) > 100:
+                    preview += f"\n...and {len(domains) - 100:,} more"
+                if not self._confirm_dialog(
+                    "Append observed DNS queries?",
+                    f"Found {len(domains):,} unique queried domain(s). Append them to the editor as hosts entries?",
+                    tone="warning",
+                    confirm_text="Append Queries",
+                    details=preview,
+                    width=700,
+                ):
+                    self.update_status("Windows DNS Client snapshot import cancelled.")
+                    return
+                self.fetch_and_append_hosts("Windows DNS Client Snapshot", lines_to_add=domains)
+
+            self._safe_after(0, apply_result)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def show_find_replace_dialog(self, _event=None):
         if self._block_during_import("Find / Replace"):

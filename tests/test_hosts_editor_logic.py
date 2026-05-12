@@ -33,10 +33,12 @@ from hosts_editor import (
     build_source_overlap_report,
     build_source_request_headers,
     build_source_trust_badges,
+    build_windows_dns_client_wevtutil_command,
     categorize_entries_by_domain_hint,
     check_source_health_record,
     check_source_health_records,
     classify_source_freshness,
+    collect_recent_windows_dns_client_queries,
     parse_pinned_import_payload,
     read_provenance_events,
     IPV4_REGEX,
@@ -57,6 +59,7 @@ from hosts_editor import (
     fuzzy_score,
     parse_adguard_home_querylog,
     parse_pihole_ftl_blocked_domains,
+    parse_windows_dns_client_events_xml,
     summarize_source_contributions,
     export_lines_as_format,
     extract_blocking_domains_from_lines,
@@ -2021,6 +2024,77 @@ class HostsEditorLogicTests(unittest.TestCase):
     def test_parse_agh_querylog_empty_and_malformed(self):
         self.assertEqual(parse_adguard_home_querylog(""), [])
         self.assertEqual(parse_adguard_home_querylog("not json at all"), [])
+
+    # ---- v2.17+: Windows DNS Client Operational events ----
+    def test_parse_windows_dns_client_events_xml_extracts_query_names(self):
+        xml = """
+        <Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
+          <System>
+            <Provider Name="Microsoft-Windows-DNS-Client" />
+            <Computer>workstation.example.local</Computer>
+          </System>
+          <EventData>
+            <Data Name="QueryName">Ads.Example.COM.</Data>
+            <Data Name="QueryType">1</Data>
+          </EventData>
+        </Event>
+        <Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
+          <UserData>
+            <DnsQuery>
+              <QueryName>tracker.example</QueryName>
+            </DnsQuery>
+          </UserData>
+        </Event>
+        """
+
+        domains = parse_windows_dns_client_events_xml(xml)
+
+        self.assertEqual(domains, ["ads.example.com", "tracker.example"])
+
+    def test_parse_windows_dns_client_events_xml_rejects_malformed_xml(self):
+        with self.assertRaises(ValueError):
+            parse_windows_dns_client_events_xml("<Event><EventData>")
+
+    def test_windows_dns_client_wevtutil_command_is_bounded(self):
+        command = build_windows_dns_client_wevtutil_command(999999)
+
+        self.assertIn("wevtutil", command[0])
+        self.assertIn("/rd:true", command)
+        self.assertIn("/f:xml", command)
+        self.assertIn("/c:5000", command)
+
+    def test_collect_recent_windows_dns_client_queries_uses_runner(self):
+        calls = []
+
+        class Completed:
+            returncode = 0
+            stdout = (
+                '<Event><EventData>'
+                '<Data Name="QueryName">observed.example</Data>'
+                '</EventData></Event>'
+            )
+            stderr = ""
+
+        def fake_runner(command, **kwargs):
+            calls.append((command, kwargs))
+            return Completed()
+
+        domains = collect_recent_windows_dns_client_queries(max_events=3, runner=fake_runner)
+
+        self.assertEqual(domains, ["observed.example"])
+        self.assertIn("/c:3", calls[0][0])
+        self.assertTrue(calls[0][1]["capture_output"])
+
+    def test_collect_recent_windows_dns_client_queries_reports_runner_failure(self):
+        class Completed:
+            returncode = 5
+            stdout = ""
+            stderr = "The specified channel could not be found."
+
+        with self.assertRaises(RuntimeError) as ctx:
+            collect_recent_windows_dns_client_queries(runner=lambda *_args, **_kwargs: Completed())
+
+        self.assertIn("channel", str(ctx.exception))
 
     # ---- v2.15: Pi-hole FTL ----
     def test_ftl_blocked_status_codes_covers_known_block_statuses(self):

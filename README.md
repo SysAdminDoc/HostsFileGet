@@ -44,6 +44,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - custom persistent sources
   - pfSense DNSBL log import
   - NextDNS CSV import
+  - Windows DNS Client Operational snapshot import
   - manual pasted list import
 - Search and cleanup:
   - find / next / previous navigation
@@ -163,6 +164,7 @@ python hosts_editor.py --source-health --source-health-output source-health-repo
 - Source overlap matrix: `docs/source-overlap.md`
 - False-positive triage: `docs/false-positive-triage.md`
 - Entry provenance: `docs/entry-provenance.md`
+- Windows DNS Client snapshot: `docs/windows-dns-client.md`
 - Sourced implementation plan: `ROADMAP.md`
 - Release build notes: `docs/release.md`
 - Codex handoff notes: `CODEX_CHANGELOG.md`
