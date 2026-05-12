@@ -183,6 +183,11 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added **Tools > Source Bundle Selector...** so bundle imports reuse the existing batch import worker, cache fallback, cancellation, and Raw/Normalized import mode.
 - Added bundle catalog validation, source-name indexing, report formatting helpers, docs, and regression tests.
 
+**Source adapter plugins**
+- Added manifest-only local source adapter plugins from `source_adapters\*.json`; plugin code is never imported or executed.
+- Added **Tools > Source Adapter Plugins...** plus `--source-adapter-list` to inspect loaded/skipped plugin manifests and contributed sources.
+- Plugin sources appear in batch import under `Plugin: <category>` and reuse the existing import, cache, retry, and preview-before-write path.
+
 **Filter Builder**
 - Added **Tools > Filter Builder...** for local fielded queries across current editor lines, fetched-source domains, curated source metadata, and recent queries.
 - Added persisted `filter_query_history` config state with sanitation, dedupe, and newest-first promotion.

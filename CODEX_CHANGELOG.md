@@ -97,6 +97,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F050 complete. Next roadmap item: F051 parallel source fetcher with bounded retries.
 - Completed F051: added bounded parallel source imports, retry-wrapped fetches, source-order-preserving output merge, docs, and regression tests for retry behavior, worker clamping, and parallel completion order.
 - Updated `ROADMAP.md` to mark F051 complete. Next roadmap item: F045 source adapter plugin interface.
+- Completed F045: added manifest-only source adapter plugin loading, GUI/CLI catalog reporting, batch-import integration, docs, and regression tests for plugin validation, merge behavior, skipped manifest reporting, and CLI routing.
+- Updated `ROADMAP.md` to mark F045 complete. Next roadmap item: F046 local REST facade with bearer auth.
 
 ## Scope
 
