@@ -1,396 +1,451 @@
 # HostsFileGet Roadmap
 
-Living roadmap of features — what shipped, what's queued, and what's still being researched. Organized by theme, not by date.
+Version: 2026-05-12 research reset
+Repo state basis: `main` at `4749083` plus external research current to 2026-05-12
+Scope: Windows-first desktop hosts-file editor, importer, cleaner, diagnostics, and safe writer
+
+This document supersedes the earlier broad idea dump. Useful shipped history has been preserved as baseline context, but the forward roadmap is now source-backed and tiered. Every active candidate cites at least one source ID from the appendix.
+
+## Roadmap Contract
+
+HostsFileGet should remain a local, Windows-first tool for people who need to inspect, clean, import, explain, and safely write `C:\Windows\System32\drivers\etc\hosts`.
+
+Non-negotiables:
+
+- Hosts file writes stay previewed, backup-backed, and recoverable.
+- Network access is for user-requested feed imports, source checks, or docs, not background telemetry.
+- Cloud sync, APIs, LLMs, and commercial DNS integrations are optional adapters, not defaults.
+- Browser cosmetic blocking, path-level ad blocking, and full network DNS enforcement are out of scope unless implemented as exports or diagnostics.
+- The current Catppuccin/Tkinter desktop identity is preserved unless a redesign is explicitly requested.
+
+## State Of The Repo
+
+### What Exists Today
+
+- Language and runtime: Python 3.x, Tkinter desktop UI, Windows-first assumptions, PowerShell launcher.
+- Entry points: `hosts_editor.py` for GUI and CLI, `PythonLauncher.ps1` for elevated launch/bootstrap, `HostsFileGet.spec` for PyInstaller.
+- Packaging: PyInstaller one-file Windows EXE with `uac_admin=True`; build artifacts exist locally under `build/` and `dist/` but are not tracked.
+- Tests: `tests/test_hosts_editor_logic.py` contains 110 pure-function unit tests covering parsing, normalization, config, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, and find/replace.
+- Docs: `README.md`, `CHANGELOG.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `LICENSE`, and this roadmap.
+- License: MIT.
+
+### Product Reality
+
+HostsFileGet already provides:
+
+- Raw and cleaned save paths with preview, backups, dry-run mode, admin detection, read-only lock support, and panic restore.
+- Curated and custom source import, manual paste import, pfSense, NextDNS CSV, Pi-hole FTL, and AdGuard Home query log importers.
+- Source freshness dots, update-on-launch, scheduled update, `--update`, `--apply`, `--backup`, `--disable`, `--enable`, `--silent`, and provenance JSONL logging.
+- Live stats, category hints, source report, health scan, DNS flush, domain check, find/replace, cleanup commands, import-section removal, backup diff, pinned domains, and export formats.
+
+### Stated Philosophy
+
+The repo positions itself as a safety-first desktop utility for large hosts files and blocklist workflows, not a DNS server replacement. The design language favors preview-before-write, recoverability, local control, and Windows operational pragmatism.
+
+### Hard Constraints
+
+- The hosts file requires Administrator privileges for real writes on Windows.
+- The hosts format has no wildcard semantics; `*.example.com` must be normalized or explained as a non-native dialect.
+- Hosts-based blocking cannot block URL paths, same-domain ads, browser cosmetic selectors, or encrypted DNS traffic that bypasses the OS resolver.
+- Tkinter `Text` performance and full-file rescans are scaling risks above tens or hundreds of thousands of lines.
+- No package manifest currently pins Python or PyInstaller versions.
+- No `.github/` workflow exists for CI, release builds, signed artifacts, source health checks, or dependency advisory scanning.
+- The app is still concentrated in one large `hosts_editor.py`, which slows future review and increases regression risk.
+
+### Recurring Local Pain Points
+
+Git history and handoff notes show repeated work in the same areas:
+
+- Parser edge cases: high-octet IPv4, URL/adblock/dnsmasq dialects, malformed logs, bad encodings.
+- Windows privilege and file-state issues: UAC, read-only attributes, AV/indexer locks, safe backup/restore, disabled hosts state.
+- Thread and Tk lifecycle safety: background import callbacks after teardown, `after()` cleanup, worker cancellation.
+- Import safety: large downloads, gzip bombs, HTML error pages, source-name injection, duplicate custom sources.
+- UX safety: preview wording, attached dialogs, mode badges, first-run flow, stale source state, import/removal selection clarity.
+- Performance: O(n) text scans, search highlight caps, expensive diffs, large dialog widget counts.
+
+## Research Coverage
+
+The research pass covered all requested source classes:
+
+- Direct OSS competitors: Windows/macOS hosts editors, hosts aggregators, Android hosts blockers, DNS sinkholes, and list managers.
+- Commercial competitors: NextDNS, Control D, AdGuard DNS, DNSFilter.
+- Adjacent projects: Pi-hole, AdGuard Home, Technitium DNS Server, blocky, dnscrypt-proxy, uBlock Origin-adjacent DNS/blocklist ecosystems.
+- Awesome lists: awesome-selfhosted DNS category and awesome-adblock.
+- Community signal: Reddit, Hacker News, Stack Overflow, Microsoft Q&A, GitHub issues/discussions.
+- Standards and APIs: Microsoft NRPT, WFP, ETW/DNS diagnostics, DNS cache APIs, DoH, DoQ, SVCB/HTTPS.
+- Academic and engineering research: NRD/phishing research, CNAME cloaking research, malicious domain and DNS filtering studies.
+- Dependency/security: Python 3.14 release stream, PyInstaller 6.20 changelog, PyInstaller CVE-2025-59042, GitHub Advisory Database.
+
+Repeated signals after the last query pass were mostly variants of the same themes: false positives, DNS bypass, profile policy, source trust, logs/analytics, performance at large blocklist sizes, and package/release hygiene.
+
+## OSS Competitor Snapshot
+
+Stars, push dates, and contributors are from a GitHub API snapshot taken on 2026-05-12 unless the repo was unavailable.
+
+| ID | Project | Stars | Last push | Maintainer signal | Relevant product signal |
+| --- | ---: | ---: | --- | --- | --- |
+| O1 | oldj/SwitchHosts | 26,605 | 2026-05-12 | multi-contributor | Electron hosts manager; syntax highlight, remote hosts, tray switch, localized READMEs |
+| O2 | scottlerch/HostsFileEditor | 1,241 | 2025-10-11 | mostly single maintainer | Windows editor; bulk enable/disable/move, filter/sort, tray, archive/restore, ping |
+| O3 | 2ndalpha/gasmask | 3,839 | 2026-03-01 | multi-contributor | macOS hosts manager; local/remote/combined files, menu-bar quick switching, logs |
+| O4 | StevenBlack/hosts | 30,338 | 2026-05-11 | active contributors | canonical hosts aggregator; 31 variants, source contacts, whitelist/blacklist overlays |
+| O5 | AdAway/AdAway | 9,062 | 2026-02-10 | active Android project | hosts-based Android blocker; source lists, preview builds, translation/contribution workflows |
+| O6 | pi-hole/pi-hole | 58,579 | 2026-05-12 | active core team | network DNS sinkhole; dashboard, DHCP option, high query scale, Docker/install docs |
+| O7 | AdguardTeam/AdGuardHome | 33,968 | 2026-05-12 | active team | DNS server with rules, query logs, rewrites, API, CNAME/IP blocking, translations |
+| O8 | TechnitiumSoftware/DnsServer | 8,364 | 2026-05-09 | active maintainer/team | recursive/authoritative DNS, blocklist URLs, clustering, OIDC, encrypted DNS, CNAME cloaking |
+| O9 | hectorm/hblock | 1,940 | 2026-01-20 | active solo + contributors | shell updater; systemd timer, nightly formats, allowlist guidance, hMirror source lookup |
+| O10 | hagezi/dns-blocklists | 22,682 | 2026-05-12 | active solo | tiered list families, NRD/DGA, DoH/VPN/Tor bypass, DNS rebinding, native tracker lists |
+| O11 | blocklistproject/Lists | 4,816 | 2026-05-11 | active contributors | many content categories and multiple output formats |
+| O12 | Ultimate-Hosts-Blacklist | 1,560 | 2026-05-11 | bot + maintainers | very large combined hosts source |
+| O13 | crazy-max/WindowsSpyBlocker | 5,117 | 2025-02-02 | active enough | Windows telemetry-oriented hosts/firewall packs |
+| O14 | DNSCrypt/dnscrypt-proxy | 13,287 | 2026-05-12 | active | encrypted DNS proxy with blocklist builder and relay/privacy primitives |
+| O15 | 0xERR0R/blocky | 6,604 | 2026-05-12 | active | lightweight DNS proxy/ad blocker, alternative to Pi-hole |
+| O16 | jacklul/pihole-updatelists | 1,641 | 2026-05-02 | active | remote list sync automation for Pi-hole |
+| O17 | AdGuard HostlistsRegistry | 367 | 2026-05-12 | active AdGuard team | curated registry rules for list inclusion, complaints, metadata |
+| O18 | ppfeufer/adguard-filter-list | 408 | recent enough | active enough | combined AdGuardHome DNS list with allowlist caveats |
+| O19 | Maza ad blocking | listed by awesome-selfhosted | 2025-11-24 in index | active enough | local OS ad blocker like Pi-hole but local |
+| O20 | NPS-Hosts-Manager | 0 | 2020-07-29 | inactive | lightweight Windows hosts manager |
+
+## Priority Themes
+
+Now themes are the work that most improves trust, maintainability, and release quality without changing the product's identity:
+
+1. Make the release/build path reliable and auditable.
+2. Move curated source metadata out of the monolith and verify it continuously.
+3. Improve explainability for false positives, source overlap, provenance, and DNS bypass.
+4. Add tests for generated outputs, parser invariants, GUI smoke, and large files.
+5. Bring accessibility, i18n foundations, and docs up to the level of the feature surface.
+
+Next themes are major user-facing capability expansions:
+
+1. Named profiles and declarative config.
+2. Migration and interoperability with SwitchHosts, Gas Mask, HostsFileEditor, Pi-hole, AdGuard Home, NextDNS, and Control D.
+3. Better source formats, rule dialects, and source bundles.
+4. Live DNS/query observability from Windows and imported logs.
+5. Safe automation and packaging for Windows users.
+
+Later themes are useful but have larger blast radius:
+
+1. Router/gateway pushes and enterprise deployment exports.
+2. Windows network stack integrations beyond the hosts file.
+3. Optional API/TUI/developer extensions.
+4. Threat-intel enrichment that introduces quotas, privacy, or third-party dependency risk.
+
+## Feature Harvest And Gap Analysis
 
 Legend:
-- ✅ Shipped
-- 🚧 Implemented on `main` / pending release
-- 📋 Backlog (researched, not yet built)
-- 🔬 Research / speculative
-
----
-
-## 1. Safety & Recovery
-
-- ✅ **Timestamped rotating backups** — keep `N=5` snapshots `hosts.YYYYMMDD-HHMMSS.bak` alongside the rolling `hosts.bak`
-- ✅ **Disable / Enable hosts** — replace hosts with minimal Microsoft template, stash original as `hosts.disabled`, swap back on re-enable
-- ✅ **Hosts Health Scan** — flag non-loopback, non-LAN redirects as probable malware hijack indicators
-- ✅ **Revert to Backup with preview** — diff current vs `.bak` before restore
-- ✅ **Emergency DNS Recovery** — external `.bat` that force-kills Dnscache and installs a blank hosts file
-- ✅ **Panic Restore** — one-click restore to stock Microsoft default (distinct from generic backup restore)
-- ✅ **Backup diff viewer** — pick any two snapshots and compare side-by-side
-- ✅ **Configurable retention** — let the user choose how many timestamped backups to keep
-- ✅ **Hosts file read-only lock after save** — prevent malware tampering (HostsMan parity)
-- ✅ **Integrity alarm** — detect external modifications since last save and prompt
-
-## 2. Imports & Curated Sources
-
-- ✅ **NRD feed** (xRuffKez Newly-Registered-Domains, 14/30 day) — high-value for phishing defense, low false-positive rate
-- ✅ **CNAME-cloaking blocklist** — ship curated NextDNS CNAME-cloak list (Eulerian, Keyade, Criteo first-party trackers)
-- 📋 **Category bundles** — one-click Adult / Gambling / Social / Dating / Piracy / Streaming presets sourced from OISD/StevenBlack categorized feeds
-- 📋 **Vendor telemetry toggles** per OS/device (NextDNS-flagship style) — Apple/Samsung/Xiaomi/Windows/Roku/LG WebOS
-- ✅ **Curated source catalog** — now 160+ sources across Major, Ads, Tracking, Telemetry, Malware, Phishing, Category Filters, Regional, Vendor/Platform groups (+56 added in v2.12)
-- ✅ **Custom persistent user sources**
-- ✅ **pfSense DNSBL log import**
-- ✅ **NextDNS CSV import**
-- ✅ **Manual paste import**
-- ✅ **Batch Import dialog** with select-all / select-none
-- ✅ **Import Mode** — Raw vs Normalized
-- ✅ **50 MB download cap + gzip-bomb guard**
-- ✅ **Source "Peek" preview** — fetch first ~80 lines before committing to import
-- ✅ **Per-source last-fetched timestamp** — tooltip shows "3 days ago"
-- ✅ **Scheduled auto-update** via Windows Task Scheduler integration
-- ✅ **Update-on-launch** opt-in (admin-gated, stale sources only)
-- ✅ **Silent CLI mode** — headless exit-code-only, toast on completion
-- ✅ **`--update` CLI flag** — re-fetch every previously-imported source
-- ✅ **Per-source stale indicator**
-- 📋 **Group/folder organization for custom sources** — drag-to-reorder, collapsible
-- ✅ **Remove imported source section** without deleting it
-- 📋 **Import from URL-based source list file** (`.dat`/`.txt`) for team sharing
-- 📋 **Parse additional logs** — Pi-hole FTL, AdGuard Home, Technitium, OPNsense, Unbound blockfile, dnsmasq logs
-- 🔬 **ETag / Last-Modified caching** — skip unchanged sources on re-fetch
-- 🔬 **Mirror / fallback URL** per source — if primary 404s, try the jsDelivr / statically mirror
-- 🔬 **Parallel source fetcher** — `asyncio`+`aiohttp` to refresh 56 sources at once; cuts minutes to seconds
-- 🔬 **Gravity-style consolidated SQLite DB** (Pi-hole mental model) — domains + adlists tables, dedupe at import, 10× faster diff for 1M+ entries
-- 🔬 **Cosmetic-rule quarantine** — on AdGuard-syntax import, split off `##` cosmetic rules to a separate file with export-as-uBO-user-filters option
-- 🔬 **DGA heuristic scorer** — local n-gram Markov model flags unknown domains as DGA-likely without needing a feed
-- 🔬 **Typosquat watchdog** — given a list of brands you own, generate Levenshtein-1 / homoglyph / bitsquat permutations and probe DNS for active squats
-- 🔬 **LLM-endpoint opt-out pack** — curated OpenAI/Anthropic/Gemini/Perplexity endpoints with toggles for "block inference" / "block telemetry" / "block training crawlers" (GPTBot, ClaudeBot, Google-Extended)
-- 🔬 **State-aligned media pack** — RT/Sputnik/CGTN/PressTV with citations to the enforcement source (EU sanctions, OFAC)
-- 🔬 **Ad-verification bypass pack** — DoubleVerify, Moat, IAS bot-detection beacons
-- 🔬 **Rugpull / crypto-scam adapter** — Chainabuse + CryptoScamDB + ScamSniffer JSON → hosts with 48h freshness gate
-
-## 3. Editor & UX
-
-- ✅ **Catppuccin Mocha dark theme**
-- ✅ **Live stats panel** — total, final active, duplicates, whitelist-removed, normalized
-- ✅ **Live badges** — Admin state, editor state, import mode, write mode
-- ✅ **Debounced inline warnings** — red = discard, yellow = normalize
-- ✅ **Search: Find / Prev / Next / Remove matching**
-- ✅ **Sidebar source filter** (name/category/URL/tooltip)
-- ✅ **Editor right-click context menu** — Whitelist domain, Copy domain, Toggle comment, Remove line, Check domain
-- ✅ **Ctrl+/ toggle comment** on selection
-- ✅ **Syntax highlighting** — IP / domain / comment coloring
-- ✅ **Line numbers in editor gutter**
-- 📋 **Drag-and-drop file import** (requires `tkinterdnd2`)
-- ✅ **Portable mode** — detect sibling `settings.json` and use it instead of `%APPDATA%`
-- 📋 **Adblock-syntax linter** inline in editor
-- 📋 **Regex-based whitelist/blacklist patterns** with live match preview
-- 📋 **Redirection rules** — `(hostname → custom IP)` tracked separately from blocks
-- 📋 **Regex + exact + wildcard tiers** — expose the distinction (AGH-style) instead of conflating all three
-- 📋 **IDN / punycode toggle** — render `xn--` as Unicode with Cyrillic/Latin homoglyph spoof warning
-- 🔬 **Collapsible import sections** — fold everything between `# --- Import Start/End ---` markers
-- 🔬 **Multi-cursor edits** — Ctrl+click multiple lines and edit simultaneously (VSCode-style)
-- 🔬 **Bookmarks / pinned lines** — mark a line, jump back with Ctrl+1..9
-- 🔬 **Clipboard history ring** — last 20 copied hosts entries, quick re-paste
-- 🔬 **sed-style command bar** — `Ctrl+R` opens `s/0.0.0.0/127.0.0.1/g`, `d/^#.*ads/`, `g/doubleclick/p`
-- 🔬 **Query language** — `SELECT domain WHERE source='OISD' AND added_after='2026-01-01'` → CSV
-- 🔬 **Diff-against-pasted-text** — paste a snippet; highlight which lines are new vs already-present
-- 🔬 **Gas Mask `@group` syntax** import — support Mac editor dialect for migrations
-
-### 3a. Navigation & Discovery (inspired by VSCode / Sublime / JetBrains)
-
-- 📋 **Sticky source header** — pin current source block header ("# StevenBlack unified") at top of viewport as you scroll — orientation in 100k-line files
-- 📋 **Breadcrumb trail** — clickable `Profile > Source > Category > Domain` above editor
-- 📋 **Minimap with heatmap overlay** — standard minimap colored by recency of DNS hits (from imported log parsers)
-- 📋 **Peek source** — hover a domain + hotkey → inline popup of every source that lists it, no navigation
-- ✅ **Goto-anything fuzzy** — one dialog ranks domains / comments / source names / profiles / bookmarks
-- 📋 **Structural search/replace** — "all `*.cdn.*` under source X with comment containing 'tracker'"
-- 📋 **Refactor preview pane** — diff before committing a bulk rename/merge
-
-### 3b. History, Provenance & Versioning (Git clients / Lightroom)
-
-- 📋 **Blame gutter** — left margin shows which source/import/edit introduced each line, timestamp on hover
-- 📋 **History brush / timeline scrubber** — slider reveals the file state at any past point, entries color-coded by age
-- 📋 **Before/after toggle** — hotkey flips between current state and last-imported state
-- 📋 **Non-destructive edits stack** — each change a reversible layer, toggle on/off independently (Lightroom-style)
-- 📋 **Provenance trail panel** — for any entry, full lineage: first imported from X on date, modified by Y, commented by Z
-
-### 3c. Safety, Secrets & Trust (Password managers)
-
-- 🔬 **Vault-protected entries** — sensitive whitelist rules (banking) require master-password unlock to view/edit
-- 🔬 **Reveal-on-hover comments** — notes masked as dots until hovered (screen-share safety)
-- 📋 **Trust badges per source** — signed / verified / unknown based on hash-pinning + HTTPS provenance
-
-### 3d. Organization & Curation (Email / RSS / Notion)
-
-- 📋 **Focused vs Other split** — auto-partition imports into "curated official" and "user ad-hoc" tabs
-- ✅ **Star/pin entries** — flag high-value rules, survive wipes, appear in "Starred" smart view
-- 📋 **Unreviewed badge** — new imports carry unread dot until viewed in diff
-- 📋 **Tag sidebar** — multi-tag entries with free-form labels (`tracker`, `ads`, `work-only`)
-- 📋 **Backlinks panel** — show every source/note/profile that references a given domain
-- 🔬 **Graph view** — domain clusters by shared subdomain / source overlap / tag co-occurrence (Obsidian-style)
-- 🔬 **Inline Markdown notes** — rich notes with fenced code/links/images attached to entries
-
-### 3e. Querying & Data Work (Database GUIs)
-
-- 📋 **Query history panel** — every regex/filter logged, re-runnable, pinnable
-- 📋 **Filter builder GUI** — `source = X AND tag = Y AND last_hit > 30d` without typing
-- 📋 **CSV/JSON round-trip** — export rows, edit in Excel, re-import with conflict resolution
-
-### 3f. Power-User & Keyboard-First (Alfred/Raycast/vim)
-
-- 📋 **Global hotkey quick-add overlay** — system-wide hotkey → tiny popup; type domain, enter, added, main app never opens
-- 📋 **Slash commands in entry field** — `/import`, `/diff`, `/backup` trigger actions without menus
-- 📋 **Command history scrollback** — Up-arrow walks prior commands, fzf-filterable
-- 🔬 **Which-key popup** — after leader key, popup reveals available chords *(opt-in; conflicts with "no keyboard shortcuts" default — gate behind a pref)*
-
-### 3g. Intelligence & Assistance
-
-- 📋 **Typo suggestions** — "did you mean `doubleclick.net`?" on misspelled whitelist additions
-- 📋 **Inline ghost-text completion** — subdomain completions from known tracker databases as you type
-- 📋 **Confidence badges** — "99% of users block this" / "uncommon block" per entry
-- 📋 **Source library icons** — fetched favicon per source in the catalog (Playnite-style visual recognition)
-- 🔬 **Achievement milestones** — toasts at "100k blocked" / "1 year clean" / "first custom rule"
-- 🔬 **Recently imported shelf** — dashboard card with last 5 source updates + counts + dates
-
-### 3h. Review, Spaced Repetition & Monitoring
-
-- 📋 **Stale entry review queue** — entries not seen in DNS logs for N days surface in a "maybe remove?" queue (Anki-style)
-- 📋 **Watch expressions** — persistent "notify me when `*.x.com` appears in any imported source"
-- 📋 **Conditional rules** — activate only when VPN on / work network / date range (IDE-debugger conditional breakpoints)
-
-### 3i. Polish, Output & Workflow
-
-- 📋 **Post-action hooks** — after save/apply/import, run user-defined scripts (flush DNS, webhook, git commit) — ShareX post-capture pattern
-- 📋 **Copy-as-screenshot** — right-click selection → styled PNG of entries on clipboard (bug-report / Discord share)
-- ✅ **First-run wizard** — "Block ads? Trackers? Adult? Social? Gambling?" → preselect curated sources (Linear/Figma-style onboarding)
-- ✅ **Sources Report (Top-N)** — rank by total / duplicate / unique contribution (Process Explorer top-N)
-- ✅ **Kill-all-from-source** — right-click source header → "remove all 47,213 entries from this source" (Task Manager kill-tree)
-- 📋 **Zen mode** — fullscreen, hide chrome, single column, generous whitespace for curation sessions (iA Writer / VSCode Zen)
-- 📋 **Stat HUD** — corner overlay: entries count / duplicates / avg age / profile size delta — always-on situational awareness
-
-## 4. Cleanup & Transformations
-
-- ✅ **Auto-Clean + Preview** — dedupe, normalize, whitelist-filter, produce canonical sorted output
-- ✅ **Normalize & Deduplicate**
-- ✅ **pfSense / NextDNS log → hosts** conversion
-- ✅ **Convert Block IPs** — rewrite all loopback-style sinks to `0.0.0.0`, `127.0.0.1`, or `::`
-- ✅ **Granular cleanup commands** — "Delete comments only", "Delete empty lines only", "Delete invalid lines only"
-- 📋 **Batch operations** — sed/awk-style find-and-replace with preview
-- 🔬 **Streaming parser for 1M+ entry files** — mmap-backed editor pane for huge lists
-
-## 5. Diagnostics & Insight
-
-- ✅ **Flush DNS** — `ipconfig /flushdns` from inside the app
-- ✅ **Check Domain tool** — is it blocked? whitelisted? which previously-fetched sources contain it?
-- ✅ **Hosts Health Scan** — flag suspicious non-loopback redirects
-- ✅ **Built-in DNS resolver** — resolve a domain bypassing hosts, report its real IP
-- ✅ **Ping / connectivity test** from the editor context menu
-- 📋 **"Which source blocked this?"** inverse lookup — show every curated list that contains a given domain
-- ✅ **Per-category stats breakdown** — "40k ads, 15k telemetry, 8k malware"
-- ✅ **Top-contributing sources report** — which list added the most unique domains this session
-- 📋 **Source overlap matrix** — redundant-source pruning insight
-- 📋 **Historical growth chart** — sparkline from saved backup snapshots
-- ✅ **Allowlist audit log / provenance sidecar** — who-added-what-when tracked in `hosts.provenance.json` (AGH 0.107+ parity)
-- 📋 **Tray badge counter** — uBO-style numeric badge showing blocks-since-midnight from DNS Client log (see §12)
-- 📋 **"Logger" live tail view** — mini window tails the nearest available DNS query log and highlights hits against current hosts
-- 🔬 **Blocked-query trend** — parse imported logs and render a 30-day histogram
-- 🔬 **Registrar sankey** — Domain → Registrar → Registrant-Country flow view reveals when 40% of blocks trace to one bulletproof registrar
-- 🔬 **Category treemap explorer** — leaf size = domain count, color = last-seen freshness; drill into source
-- 🔬 **Per-source sparklines** — inline entry-count-over-30-days spark on source panel; spot collapsed feeds instantly
-- 🔬 **Redirect-chain force graph** — render observed HTTP redirect chain for a blocked domain before apply
-- 🔬 **ECH/ESNI awareness** — flag entries where hostname blocking is futile (Cloudflare ECH-enabled list); recommend IP-range alternative
-- 🔬 **DoH canary toggle** — one-click block for `use-application-dns.net` + Chrome's `dns.google` probe
-- 🔬 **Encrypted-DNS client handoff** — detect YogaDNS/DNSCrypt/Simple-DNSCrypt and warn "your resolver is overriding hosts for these 12 domains"
-- 🔬 **DoH/DoT bootstrap pairing** — when blocking a domain that would otherwise break the user's DoH resolver discovery, auto-suggest adding the resolver's IP as a bootstrap hosts entry
-
-## 6. Profiles & Environments
-
-- 📋 **Multiple named hosts profiles** — Work / Gaming / Full Block / Minimal — swap active with one click
-- 📋 **Client-group emulation (Pi-hole v6 style)** — per-device profiles (Kids-PC / Work-Laptop) that generate different hosts outputs per target
-- 📋 **Layered/merge profiles** — a profile that references other local + remote files and merges on activation
-- 📋 **System tray icon with quick-switch** — right-click tray to swap profile without opening main window
-- 📋 **Profile export/import** — portable file for team distribution
-- 📋 **Game-profile presets** — "Riot Vanguard" / "Easy Anti-Cheat" / "BattlEye" / "Denuvo" / "Roblox Hyperion" that *unblock* telemetry each anti-cheat requires
-- 📋 **Steam/Epic/Battle.net CDN allowlist** — pre-built safe-list so downloads aren't throttled
-- 📋 **Console telemetry sheets** — PS5 / Xbox / Switch per-platform block sets (built here, deployed via router)
-- 📋 **Roblox safe-chat mode** — block social+chat endpoints, preserve gameplay (kid-safety)
-- 📋 **Twitch rotating ad-CDN toggle** — auto-refresh from community feed
-- 🔬 **Conditional profiles** — auto-switch based on Wi-Fi SSID or VPN status
-
-## 7. Scripting & Automation
-
-- ✅ **CLI args**: `--version`, `--disable`, `--enable`, `--backup`, `--apply PATH`
-- 📋 **`--update`** — re-fetch previously imported curated sources headlessly
-- 📋 **`--profile NAME`** — apply a named profile
-- 📋 **Windows Task Scheduler wizard** — one-click create scheduled task for `--update` or `--apply`
-- 📋 **PowerShell module wrapper** — `Import-HostsFileGet`, `Enable-Hosts`, etc.
-- 🔬 **Webhook / notification hooks** — POST to a URL on save / update success
-
-## 7b. Windows Deep Integration
-
-- 🔬 **WFP ALE Layer IP Blocker** — Windows Filtering Platform driver hook (`FwpmEngineOpen0`) closes the gap where a blocked domain resolves via DoH bypass; blocks at IP/CIDR level
-- 🔬 **NRPT Policy Surgeon** — GUI for `Add-DnsClientNrptRule`; pin `.corp.local` to internal DNS while global hosts stays ad-focused; export as `.pol` for GPO
-- 🔬 **Surgical DNS cache flush** — per-entry eviction via `DnsFlushResolverCacheEntry_W` with pre-flush hit-count from `Get-DnsClientCache`
-- 🔬 **Windows Sandbox `.wsb` generator** — emits mapped-folder config with a logon command that copies hosts, for sandboxed browsing against the live blocklist
-- 🔬 **Hyper-V Gen2 injector** — pushes hosts into running VMs via `hvsocket`, no VM networking round-trip
-- 🔬 **Credential Guard-aware signing** — signs hosts with a cert stored in the VBS-isolated key store so VTL0 malware can't forge
-- 🔬 **Reliability Monitor provider** — register as `System.Reliability` source so hosts edits show up next to driver installs in the reliability timeline
-- 🔬 **Storage Sense exclusion registrar** — auto-register the backup vault so aggressive cleanup doesn't wipe rollback history
-
-## 1b. Extended Recovery Paths
-
-- 🔬 **WinRE ReAgent hook** — registers `ReAgentc /setosimage` custom tool; Shift+Restart → Advanced Options → "Repair Hosts File"
-- 🔬 **BitLocker-aware recovery partition** — writes signed recovery hosts to unencrypted WinRE partition so recovery works pre-unlock
-- 🔬 **VSS writer** — real `IVssWriter` implementation so Veeam / Macrium / Windows Backup capture hosts transactionally
-- 🔬 **System Restore integration** — call `SRSetRestorePoint` before batch apply; rollback = one-click System Restore
-- 🔬 **Safe Mode escape hatch** — `SafeBoot\Minimal\HostsFileGetSafe` service strips hosts to known-good minimal on Safe Mode boot
-
-## 7c. Router & Gateway Ecosystem
-
-- 📋 **pfBlockerNG DNSBL bidirectional sync** — keep pfSense DNSBL and Windows hosts consistent
-- 📋 **OPNsense Unbound override pusher** — SSH+API push as `local-data:` overrides with diff preview
-- 📋 **OpenWrt uci bridge** — emit `/etc/config/dhcp` dnsmasq blocks, push via `uci import` over SSH
-- 📋 **MikroTik RouterOS script generator** — `/ip dns static add` scripts for CHR and hardware devices, TTL + regex-match aware
-- 📋 **Squid `domain_acl` mirror** — generate `acl blocklist dstdomain "/etc/squid/hostsfile.acl"` fragments for transparent proxy reuse
-
-## 7d. Parental Controls & Family Safety
-
-- 📋 **Windows Family Safety bridge** — read Microsoft Family Safety web-filter list via Graph API, reconcile with local hosts
-- 📋 **Per-SID scheduled profiles** — Task Scheduler jobs keyed on user SID swap profiles when a specific account logs in (kid = strict, admin = permissive)
-- 📋 **Homework Mode countdown tray** — countdown with auto-restore on expiry, overrides logged to Event Log for parent review
-- 📋 **Chore Reward whitelist token** — HMAC-signed one-shot token (QR/NFC) that temporarily unblocks for N minutes, non-replayable
-- 📋 **SafeSearch lock via CNAME pinning** — map google/bing/ddg to forcesafesearch A records, alarm on override
-
-## 7e. Browser-Specific Integration
-
-- 📋 **Enterprise ADMX companion** — Chrome/Edge managed policy `HostsFileGetBypass` so SSO/ADFS domains are exempt from hosts redirection at the browser layer
-- 📋 **`proxy.pac` emitter** — convert blocklist to Firefox/Chromium proxy.pac (`return "PROXY 0.0.0.0:1";` for blocked domains); survives DoH since browser picks proxy pre-resolution
-- 📋 **WebRTC leak domains bundle** — curated STUN/TURN endpoint blocklist, toggleable per profile
-
-- ✅ **Export hosts format** (original behaviour of `Save Raw`)
-- ✅ **Export Cleaned As…** — hosts / domains-only / adblock / dnsmasq / pi-hole
-- ✅ **Import from Pi-hole FTL database** (`pihole-FTL.db`) — blocked queries → hosts (direct SQLite, SMB/SSH-friendly)
-- ✅ **Import from AdGuard Home querylog.json** — streaming JSONL + live-tail mode
-- 📋 **Technitium REST API client** — query blocked-queries endpoint
-- 📋 **Unbound / dnsmasq log tailers** — regex-based, format auto-detection
-- 📋 **OPNsense/pfSense Unbound syslog listener** — listen UDP/514 locally, ingest blocked-query events
-- 📋 **BIND RPZ log ingest** — parse `rpz-nsdname`/`rpz-ip` hits from `named.log`
-- 📋 **Windows DNS Client ETW tap** — subscribe to `Microsoft-Windows-DNS-Client` provider for real-time local-query stream, no log file needed
-- 📋 **Git-versioned hosts files** — detect `.git` in config dir, stage+commit on save
-- 📋 **SSH push to remote `/etc/hosts`** — one-click deploy to pfSense jail / Raspberry Pi / homelab Linux box (paramiko)
-- 📋 **WSL2 resolv.conf warning** — detect and alert when users expect WSL to inherit Windows hosts (it often doesn't)
-- 🔬 **MDM / Intune `.intunewin` export** — wrap hosts + install script as Intune Win32 app for org-wide push
-- 🔬 **GPO / ADMX snippet generator** — emit GPP File-copy XML, drop into SYSVOL, done
-- 🔬 **SCCM / PDQ Deploy package export** — `.ps1` wrapper + hosts payload zipped
-- 🔬 **Ansible playbook / Terraform `local_file` export** — hosts rendered as declarative IaC artifact
-- 🔬 **Community allowlist repo** — curated whitelists for Zoom/Teams/banking pulled from a vetted GitHub org
-
-## 9. Security / Forensics / OSINT
-
-- ✅ **Source-name injection hardening** — strip CRLF/tabs from import markers
-- ✅ **HTML-response guard** — reject `<html>…</html>` payloads masquerading as hosts
-- 📋 **VirusTotal lookup** for domains flagged by Health Scan (4 req/min free tier, cache aggressively)
-- 📋 **MalwareBazaar integration** — cross-check suspicious redirects
-- 📋 **URLhaus (abuse.ch) live feed** — built-in malware blocklist source with live threat counts
-- 📋 **Export hosts as YARA rule** — generate a YARA sig for the full blocklist for IR teams running YARA on proxy logs
-- 📋 **IOC import (STIX 2.1 / MISP)** — pull domain indicators from a MISP instance, auto-rotate on IOC expiry
-- 📋 **Phishing-kit feed integration** — PhishTank + OpenPhish with 48h auto-expire (phishing has short lifespan)
-- 📋 **Certificate Transparency watchlist** — monitor crt.sh for newly-issued certs matching user brand patterns (e.g. `paypal*`); auto-block typosquats as they appear
-- 📋 **Signed-manifest mode** — sign hosts with an Ed25519 keypair, embed signature as a comment; on-launch verify and alert on tamper
-- 📋 **Read-only "approved-entries" mode** — lock corporate-managed lines (greyed + unremovable) while allowing user additions below (Chrome managed-policy mental model)
-- 🔬 **LLM-assisted "why is this blocked?"** — pull filter-list metadata and summarize the reason a domain is on the list (offline pre-built domain→reason DB)
-- 🔬 **Smart whitelist suggestions** — broken-site reports scan recent hits for that TLD, small bundled classifier ranks likely offender
-- 🔬 **Natural-language rule entry** — "Block all TikTok telemetry" → LLM + curated map expands to correct domain set (opt-in, local Ollama or API key)
-- 🔬 **Auto-categorize custom entries** — paste 200 domains, LLM sorts into ads/tracking/malware/social
-- 🔬 **TLS certificate preview** — show cert chain for a highlighted domain (helps decide "real or phishing")
-
-## 10. Platform & Packaging
-
-- ✅ **Windows admin auto-elevation** (UAC prompt) with elevation-loop guard
-- ✅ **High-DPI awareness**
-- ✅ **PyInstaller bundle (`HostsFileGet.spec`)**
-- ✅ **PowerShell WPF splash launcher** (`PythonLauncher.ps1`)
-- ✅ **`%LOCALAPPDATA%` config with atomic writes**
-- 📋 **PyInstaller CI workflow** — Windows build on push/tag
-- 📋 **Code-signed release artifacts**
-- 📋 **Winget manifest** for `SysAdminDoc.HostsFileGet`
-- 🔬 **macOS `/etc/hosts` port** — Catppuccin-themed SwiftUI or Qt wrapper reusing the Python core
-- 🔬 **Linux AppImage** with polkit elevation
-
-## 10a. Developer Workflow
-
-- 📋 **VS Code companion extension** — syntax highlighting, hover-preview source attribution, "Test this rule" codelens that pings the resolver, live-diff sidebar against remote sources
-- 📋 **prompt_toolkit TUI** — full-screen terminal mode for SSH/serial-console admins, fuzzy search, live DNS event tail
-- 📋 **REPL rule tester** — `hostsfileget repl` drops into interactive shell; type a domain, see matching source(s) + override chain resolution
-- 📋 **Local REST facade** — `127.0.0.1:47823` GET/POST/DELETE for entries with bearer-token auth; enables Ansible/Chef/PowerShell DSC modules to manage hosts declaratively
-
-## 10b. Declarative / DevOps
-
-- 📋 **YAML/TOML declarative source-of-truth** (`hosts.yaml`) — sources/allowlist/profiles described, hosts file becomes a generated artifact; `hostsfileget build` deterministic
-- 📋 **Git-backed hosts repo mode** — every apply is a commit ("Added 412 domains from OISD"); rollback = `git revert`
-- 📋 **GitHub Actions template** — nightly rebuild from declarative config, opens PR if diff > threshold
-- 📋 **`pre-commit` lint hook** — standalone lint binary for CI flags invalid IPs, duplicate domains, punycode mismatches, TLD typos
-- 🔬 **Webhook / notification hooks** — POST to a URL on save / update success
-- 🔬 **Hot-reload daemon** — background service watches declarative YAML, regenerates on save
-
-## 10c. Collaboration
-
-- 📋 **Shareable whitelist patches (`.hfgpatch`)** — signed allowlist additions + reason; team members apply with one click + diff
-- 📋 **GitHub Gist sync** — settings + custom entries sync to a secret Gist for multi-machine roaming
-- 📋 **Merge-request review mode** — side-by-side diff of a proposed hosts change with approve/reject/comment
-
-## 10d. Accessibility & i18n
-
-- 📋 **High-contrast + dyslexia-friendly font toggle** — OpenDyslexic / Atkinson Hyperlegible bundled, per-user remembered
-- 📋 **IDN / punycode toggle with homoglyph warning** — render `xn--` as Unicode, flag Cyrillic-Latin spoofs
-- 🔬 **Screen-reader-friendly tree mode** — alternative nav: source → category → domain with accessibility labels
-- 🔬 **RTL-aware editor** — Arabic/Hebrew comments render correctly
-
-## 10e. SSL / Zero Trust
-
-- 🔬 **Cloudflare Access policy sync** — import Cloudflare Zero Trust Gateway block categories via API, merge with hosts so off-WARP endpoints keep parity
-- 🔬 **HTTPS downgrade guardrail** — refuse to load any source rule mapping a domain to a non-loopback IP unless user confirms; prevents malicious feeds from silent SSL-strip via hosts
-
-## 11. Tests & Quality
-
-- ✅ **42 pure-function unit tests** — parsing, normalization, cleanup stats, sanitization, HTTP limits
-- 📋 **Property-based tests** for `normalize_line_to_hosts_entries` (Hypothesis)
-- 📋 **Tk widget smoke tests** via `pytest-tk` or `pyvirtualdisplay`
-- 📋 **Golden-file diff tests** for the Cleaned Save output
-- 📋 **Source-schema fuzzer** — Hypothesis-driven BOM/CRLF/UTF-16/comment-style mutations per source; prove parser survives adversarial feeds
-- 📋 **Chaos dependence detector** — nightly randomize-disable one source, diff resulting blocklist; alert if any single source provides >25% of unique entries
-- 📋 **Canary domain heartbeat** — maintain 3 owned canary domains in blocklist; watchdog confirms they fail to resolve post-apply, catches silent corruption
-- 🔬 **Benchmark regression suite** — ensure 50K-line files stay under a defined rebuild ms budget
-
-## 12. Performance & Scale
-
-- 📋 **Virtual-scroll / mmap-backed editor** for 500k+ line files — render visible window only (Tk Text can't natively)
-- 📋 **Streaming chunked parser** — process 2M-line lists in 10k chunks, never freeze UI
-- 📋 **Differential updates** — per-source ETag/Last-Modified cache; skip unchanged
-- 🔬 **Bloom-filter dedupe during import** — 10× memory reduction vs `set()` for massive lists
-- 🔬 **Compiled blocklist cache** — post-dedupe sorted+zstd cache; re-apply is a copy, not a rebuild
-
----
-
-*This roadmap is appended to as new research lands. See `CHANGELOG.md` for shipped history.*
-
-## Open-Source Research (Round 2)
-
-### Related OSS Projects
-- StevenBlack/hosts — https://github.com/StevenBlack/hosts — the canonical unified hosts aggregator; 31 variants, 87K+ base entries, 170K+ with gambling/porn extensions (Apr 2026)
-- forficate/hosts-block — https://github.com/forficate/hosts-block — Go aggregator inspired by StevenBlack, hosts + unbound output formats, single static binary, TOML config
-- Host Minder — https://github.com/mkrd/HostMinder — Python GUI for swapping /etc/hosts between StevenBlack variants (closest analog to HostsFileGet)
-- Hosts-BL — https://github.com/tiuxo/hosts-bl — hosts list tool; removes comments/dupes, compresses, converts to dnsmasq/DualServer/RPZ/Privoxy/Unbound formats
-- Maza ad blocking — https://github.com/tanrax/maza-ad-blocking — bash auto-updater, also emits dnsmasq config
-- BlackHosts — CLI updater/installer mentioned in StevenBlack repo, cross-platform
-- dnscrypt-proxy — https://github.com/DNSCrypt/dnscrypt-proxy — includes a builder for block lists from local + remote sources in common formats
-- Pi-hole — https://github.com/pi-hole/pi-hole — reference for gravity list pipeline (multi-source fetch → dedupe → normalize)
-
-### Features to Borrow
-- **31-variant selector UI** (StevenBlack) — mirror the variant matrix (base / fakenews / gambling / porn / social, ± combinations) as presets rather than making users hand-pick sources
-- **Multi-format output** (Hosts-BL) — emit hosts, dnsmasq, unbound, RPZ, Privoxy, Pi-hole gravity formats from one download
-- **Stat diff after update** (StevenBlack workflow) — print "added 1,203, removed 87, now 87,770 entries" after each refresh
-- **Whitelist.example pattern** (StevenBlack `whitelist`/`blacklist` files) — user-editable allow/deny overlay applied after merge, preserved across updates
-- **Comment/dup stripping + compression to 9 domains per line** (Hosts-BL) — drastically shrinks resulting file for DNS daemons that accept it
-- **Scheduled auto-update with cron/Task Scheduler registration** (Maza) — one-click "install weekly updater" button
-- **Public anycast DoH/DoT fallback mirror** (Control D `freedns.controld.com/x-stevenblack`) — option to point OS DNS at hosted mirror instead of writing local file
-- **Source list editor with priority ordering** (Pi-hole gravity) — reorder sources so later ones override earlier on conflict
-
-### Patterns & Architectures Worth Studying
-- Pi-hole's **gravity pipeline** — fetch-all → normalize (strip IPs, comments, BOMs) → dedupe → apply allow/deny overlay → emit. Each stage is testable in isolation
-- StevenBlack's **data/ directory of upstream sources** — sources are literal URL lists, trivial to audit and contribute to
-- Hosts-BL's **format-as-transformation** approach — every output format is a pure function over a normalized IR, no special-casing
-- dnscrypt-proxy's **block list builder** — handles remote fetch with ETag/If-Modified-Since caching, avoiding re-download on cron runs
-- **NRPT vs. hosts file tradeoff on Windows** — `Add-DnsClientNrptRule` blocks per-suffix without touching hosts; worth offering as an alternative output mode
+
+- Fit: Yes, Guarded, or No.
+- Impact and effort: 1 low to 5 high.
+- Prevalence: rare, emerging, common, table-stakes.
+- Tier: Now, Next, Later, Under Consideration, Rejected.
+- Risk/dependencies includes security, stability, licensing, maintenance, dependency bloat, and order constraints.
+
+| ID | Feature | Category | Prevalence | Fit | Impact | Effort | Risk/dependencies | Tier | Sources |
+| --- | --- | --- | --- | --- | ---: | ---: | --- | --- | --- |
+| F001 | Architecture and module map | Docs, dev-experience | table-stakes | Yes | 4 | 2 | Must document current monolith before splitting it. | Now | L3, L4 |
+| F002 | CI for compile, unit tests, PowerShell parser | Testing, dev-experience | table-stakes | Yes | 5 | 2 | Needs Windows runner; no product risk. | Now | L2, L6, D4 |
+| F003 | PyInstaller release workflow | Distribution | table-stakes | Yes | 5 | 3 | Must pin Python/PyInstaller and avoid artifact drift. | Now | L5, D1, D2, D3 |
+| F004 | Code signing, checksums, SBOM, dependency advisory scan | Security, distribution | common | Yes | 5 | 4 | Certificate cost and release-key handling. | Now | D2, D3, D4 |
+| F005 | Versioned config schema and migrator tests | Reliability, migration | common | Yes | 4 | 3 | Must preserve current configs and portable mode. | Now | L5, L6, O1, O3 |
+| F006 | External curated source manifest | Data, dev-experience | common | Yes | 5 | 3 | Requires schema, validation, and tests before moving URLs out of code. | Now | O4, O17, O18 |
+| F007 | Source health checker | Reliability, observability | common | Yes | 4 | 3 | Network flakes need quarantined reporting, not failing every build. | Now | O4, O9, O17 |
+| F008 | ETag/Last-Modified cache | Performance, offline | common | Yes | 4 | 3 | Requires metadata migration and conditional request tests. | Now | O14, O16 |
+| F009 | Source trust badges | Security, UX | emerging | Yes | 4 | 3 | Needs transparent criteria: HTTPS, maintainer activity, license, complaints path. | Now | O17, O4, O10 |
+| F010 | False-positive triage flow | UX, reliability | table-stakes | Yes | 5 | 4 | Depends on source attribution and source overlap. | Now | O7, O9, K3, K6 |
+| F011 | Source overlap matrix | Data, UX | common | Yes | 4 | 3 | Needs normalized source-domain index; may be expensive on large lists. | Now | O6, O9, O10 |
+| F012 | Entry provenance/blame panel | Observability, audit | common | Yes | 5 | 4 | Builds on current provenance JSONL and import section metadata. | Now | L2, C4, O7 |
+| F013 | Windows DNS Client ETW import/live tail spike | Observability | emerging | Guarded | 4 | 4 | Must be opt-in; ETW privileges and volume need testing. | Now | S5, S6, K1 |
+| F014 | DoH/DoT/DoQ bypass diagnostics | Security, docs, UX | common | Yes | 5 | 3 | Do not promise enforcement; explain limitations and router/firewall handoff. | Now | S7, S8, K1, K5 |
+| F015 | Named profile data model groundwork | UX, multi-user | table-stakes | Yes | 5 | 4 | Must not disturb current single-editor workflow. | Now | O1, O2, O3, C2 |
+| F016 | Golden-file cleaned-output tests | Testing | table-stakes | Yes | 5 | 2 | Requires stable fixtures. | Now | L6, O4 |
+| F017 | Property-based parser/fuzzer tests | Testing, reliability | common | Yes | 4 | 3 | Adds Hypothesis dependency or custom fuzzer; gate dependency choice. | Now | L6, A10 |
+| F018 | GUI smoke tests | Testing, accessibility | common | Yes | 4 | 4 | Tk automation on Windows is brittle; start with launch and dialog smoke only. | Now | L4, O1, O2 |
+| F019 | Large-file benchmark suite | Performance | common | Yes | 4 | 3 | Needs fixtures and reproducible timing budget. | Now | L3, O6, K2 |
+| F020 | High-contrast, screen-reader, and font audit | Accessibility | table-stakes | Yes | 4 | 4 | Requires manual Windows accessibility smoke and no visual redesign. | Now | O1, O5, C5 |
+| F021 | i18n string catalog foundation | i18n | common | Yes | 3 | 4 | Avoid translating before text is externalized. | Now | O1, O5, C5 |
+| F022 | Importers for SwitchHosts, Gas Mask, HostsFileEditor archives | Migration | common | Yes | 4 | 4 | Needs sample formats; keep as import-only first. | Now | O1, O2, O3 |
+| F023 | RPZ, Unbound, Privoxy, compressed-hosts exports | Integrations | common | Yes | 4 | 3 | Needs pure transformation IR and golden tests. | Now | O4, O9, O11 |
+| F024 | Limitations and troubleshooting guide | Docs | table-stakes | Yes | 5 | 2 | Must be blunt about wildcards, same-domain ads, admin rights, DoH. | Now | K5, K7, K8, K9 |
+| F025 | Declarative YAML/TOML source of truth | Dev-experience, automation | common | Yes | 5 | 4 | Depends on profile model and schema versioning. | Next | O4, C2, C3 |
+| F026 | Git-backed history and rollback | Reliability, collaboration | common | Yes | 4 | 4 | Optional only; must not require Git for normal users. | Next | O4, C4, K6 |
+| F027 | CLI profile apply/export/import | Automation, profiles | common | Yes | 4 | 3 | Depends on named profile model. | Next | O2, C2, L5 |
+| F028 | Scheduler hardening and activity report | Automation, observability | common | Yes | 4 | 3 | Builds on existing schtasks support and silent logs. | Next | O9, L2, K8 |
+| F029 | Managed portable bundle config | Distribution, migration | common | Yes | 3 | 3 | Must keep local-user and portable paths unambiguous. | Next | O1, O3, L5 |
+| F030 | Pi-hole/AdGuard/Technitium/blocky interoperability pack | Integrations | table-stakes | Yes | 5 | 4 | Prefer export/import files and APIs before remote writes. | Next | O6, O7, O8, O15 |
+| F031 | NextDNS and Control D import/export adapters | Integrations | common | Guarded | 4 | 4 | API keys, privacy, and quotas; never default. | Next | C1, C2, C3, C4 |
+| F032 | Adblock syntax linter and cosmetic-rule quarantine | Data, UX | common | Yes | 4 | 4 | Must distinguish DNS-compatible rules from browser-only syntax. | Next | O7, O17, K4 |
+| F033 | Regex/exact/wildcard rule tiers with hosts warnings | UX, data | common | Yes | 5 | 4 | Must warn hosts cannot natively express wildcards. | Next | C3, K9, S12 |
+| F034 | IDN/punycode and homograph warnings | Security, i18n | common | Yes | 4 | 3 | Use deterministic checks; do not over-block. | Next | C1, S1 |
+| F035 | NRD/DGA threat feed pack | Security | common | Yes | 4 | 3 | Needs freshness and false-positive controls. | Next | C1, O10, A1, A2, A3 |
+| F036 | CNAME cloaking source and explanation workflow | Security, privacy | common | Yes | 4 | 3 | Hosts cannot resolve CNAME dynamically; keep as feed/import guidance. | Next | C1, O8, S11, A4, A5 |
+| F037 | Encrypted DNS resolver bypass pack | Security, platform | common | Guarded | 4 | 3 | DNS-only block is incomplete; pair with router/firewall docs. | Next | O10, S7, S8, K1 |
+| F038 | DNS rebinding protection checks | Security | common | Yes | 4 | 3 | Need careful LAN/private-range distinction to avoid breaking dev labs. | Next | C1, O7, O8, O10 |
+| F039 | SafeSearch and restricted-mode templates | Parental controls | common | Yes | 3 | 3 | Hosts-only support is partial; document browser/DNS provider differences. | Next | C1, C5 |
+| F040 | Time-bound profile activation | UX, parental controls | common | Guarded | 3 | 4 | Needs profiles and scheduler; avoid surprising automatic writes. | Next | C1, C2 |
+| F041 | Tray quick switch | UX, profiles | table-stakes for hosts managers | Yes | 4 | 4 | Tk tray support may require dependency; keep optional. | Next | O1, O2, O3 |
+| F042 | Variant/bundle selector | UX, imports | table-stakes | Yes | 4 | 3 | Bundle definitions should live in external manifest. | Next | O4, O10, O11 |
+| F043 | Filter builder and query history | UX, data | common | Yes | 3 | 4 | Depends on internal source/domain index. | Next | C4, O7 |
+| F044 | Restore-point or VSS-backed apply | Recovery | rare | Guarded | 4 | 5 | High Windows API complexity; spike before commit. | Next | S3, L2 |
+| F045 | Source adapter plugin interface | Plugin ecosystem | common | Guarded | 4 | 5 | Needs stable internal contracts and sandboxing. | Next | O16, O17, C7 |
+| F046 | Local REST facade with bearer auth | Dev-experience, integrations | common | Guarded | 3 | 5 | Attack surface; off by default, loopback only, auth required. | Next | O7, C7 |
+| F047 | Provenance log filters and export | Observability, audit | common | Yes | 3 | 2 | Builds on current JSONL log. | Next | L2, C4 |
+| F048 | Watch expressions | Observability, UX | emerging | Yes | 3 | 3 | Needs background import/source index hooks. | Next | C4, O7 |
+| F049 | Source freshness and growth charts | Observability | common | Yes | 3 | 3 | Store compact history; avoid telemetry. | Next | C4, O6 |
+| F050 | Virtualized large-list views | Performance, UX | common | Yes | 5 | 5 | Tk Text constraints; likely requires architectural split. | Next | L3, K2 |
+| F051 | Parallel source fetcher with bounded retries | Performance, reliability | common | Yes | 4 | 4 | Preserve cancellation and UI thread safety. | Next | O6, O14, L4 |
+| F052 | Winget and Chocolatey manifests | Distribution | common | Yes | 4 | 4 | Depends on reproducible signed release artifacts. | Next | O1, O2, D6 |
+| F053 | Translation contribution workflow | i18n | common | Yes | 3 | 3 | Depends on string catalog. | Next | O1, O5 |
+| F054 | Encrypted opt-in sync via Gist or local Git remote | Collaboration | emerging | Guarded | 3 | 5 | Privacy and token handling; start with Git remote first. | Next | C2, C4 |
+| F055 | Signed shareable allowlist/profile patches | Collaboration, security | emerging | Yes | 4 | 4 | Needs schema, signing key UX, and trust model. | Next | C2, C3, L2 |
+| F056 | WFP IP/CIDR blocker companion | Platform/OS, security | rare | Guarded | 4 | 5 | Separate companion/service; main app should not ship a driver. | Later | S3, K1 |
+| F057 | NRPT policy editor/export | Platform/OS | emerging | Guarded | 4 | 4 | Admin and GPO risk; expose as export/spike first. | Later | S1, S2 |
+| F058 | Windows Sandbox and VM hosts injector | Platform/OS | rare | Guarded | 2 | 5 | Useful for lab workflows but niche. | Later | S3 |
+| F059 | Router/gateway push adapters | Integrations | common | Guarded | 4 | 5 | Credentials and bricking risk; generate scripts before live push. | Later | O6, O7, O8, K1 |
+| F060 | Intune/GPO/PDQ/SCCM package exports | Distribution, multi-user | common in enterprise | Guarded | 4 | 5 | Requires signed artifacts and managed-line mode. | Later | C6, S1 |
+| F061 | VS Code companion extension | Dev-experience | rare | Guarded | 2 | 5 | Separate ecosystem; only after API/export contracts stabilize. | Later | O1, O2 |
+| F062 | prompt_toolkit TUI | Dev-experience, accessibility | rare | Guarded | 3 | 5 | New dependency and parallel UI surface. | Later | O9, O14 |
+| F063 | Local custom block page server | UX, diagnostics | common in DNS products | Guarded | 2 | 4 | Hosts cannot redirect paths; local server must be explicit. | Later | C1, C5, C3 |
+| F064 | Advanced DNS rewrites/CNAME/private domains | Platform, integrations | common | Guarded | 3 | 4 | Hosts can map A/AAAA only; richer rewrites belong to export adapters. | Later | C3, O8 |
+| F065 | Certificate Transparency and typosquat watchdog | Security, OSINT | emerging | Guarded | 4 | 5 | External service dependency and false positives. | Later | C1, A1, A2, A7 |
+| F066 | VirusTotal, URLhaus, MISP, STIX enrichment | Security, OSINT | common in security tools | Guarded | 4 | 5 | API keys, quotas, licensing, and privacy. | Later | C6, A1, A2 |
+| F067 | TLS certificate preview | Security, UX | emerging | Guarded | 3 | 4 | Network side effects; must be explicit and cached minimally. | Later | A8 |
+| F068 | LLM-assisted "why blocked" summaries | UX, data | rare | Guarded | 2 | 5 | Privacy/cost; prefer offline metadata before any API. | Later | C4, O17 |
+| F069 | Mobile DNS profile export QR | Mobile, distribution | common | Guarded | 3 | 4 | Hosts file does not roam; export DNS/provider config instead. | Later | C1, C5, K5 |
+| F070 | Roaming endpoint strategy | Mobile, offline | common | Guarded | 4 | 5 | Likely outside hosts scope; document integration rather than own it. | Later | C1, C2, K5 |
+| F071 | Multi-account user administration | Multi-user | common in servers | No | 2 | 5 | Contradicts local desktop scope; corporate managed lines cover the need better. | Rejected | O7, K11 |
+| F072 | DNS server clustering inside HostsFileGet | Platform | common in DNS servers | No | 1 | 5 | This is a hosts editor, not a DNS server. | Rejected | O8 |
+| F073 | Runtime CNAME resolution before every save | Security | emerging | Guarded | 3 | 5 | Under consideration only; may be slow and privacy-sensitive. | Under Consideration | A4, A5, S11 |
+| F074 | `proxy.pac` emitter | Browser integration | emerging | Guarded | 3 | 4 | Can solve some DoH/browser paths but not hosts semantics. | Under Consideration | K5, K7 |
+| F075 | OpenSnitch/Little Snitch export | Integrations | rare | Guarded | 2 | 4 | Adjacent firewall ecosystem; useful only if user demand appears. | Under Consideration | K12 |
+| F076 | Full analytics dashboard | Observability | common in DNS products | Guarded | 3 | 5 | Local-only and opt-in; avoid building surveillance UI. | Under Consideration | C1, C4, C5, C6 |
+| F077 | Smart whitelist suggestions | UX, reliability | emerging | Guarded | 4 | 5 | Requires logs and classifier; risk of unsafe suggestions. | Under Consideration | K3, K6, O9 |
+| F078 | Gamified milestones | UX | rare | No | 1 | 2 | Not aligned with utility/audit tone. | Rejected | L8 |
+| F079 | Vault-protected entries | Security | rare | Guarded | 2 | 5 | Hosts content is ultimately plaintext; may create false privacy expectations. | Under Consideration | L8 |
+| F080 | Screen-share masked notes | Security, UX | rare | Guarded | 2 | 3 | Notes are not currently first-class; wait for notes model. | Under Consideration | L8 |
+| F081 | Product telemetry | Telemetry | common | No | 1 | 3 | Violates local-control philosophy unless purely local diagnostics. | Rejected | L1, C4 |
+| F082 | Browser cosmetic filtering | UX, integrations | table-stakes for browser blockers | No | 1 | 5 | Hosts cannot express CSS/path rules; export/quarantine only. | Rejected | K7, O17 |
+| F083 | Default cloud sync | Collaboration | common commercial | No | 2 | 5 | Privacy and credentials; opt-in encrypted sync only. | Rejected | C1, C4 |
+| F084 | Silent automatic writes by default | Automation | common in agents | No | 1 | 2 | Contradicts preview-before-write safety model. | Rejected | L1, L2 |
+| F085 | Kernel driver in the main app | Platform | rare | No | 2 | 5 | Too much signing, crash, and security risk for a Tkinter app. | Rejected | S3 |
+| F086 | Anti-cheat/vendor telemetry unblock presets without citations | Data, gaming | rare | No | 1 | 3 | High breakage and trust risk; require source-backed allowlist policy first. | Rejected | K3 |
+| F087 | macOS/Linux first-class ports now | Platform | common competitors | No | 2 | 5 | Dilutes Windows-first focus; imports/exports are higher ROI. | Rejected | O1, O3 |
+| F088 | Always-on LLM/API rule assistant | UX, security | emerging | No | 1 | 5 | Privacy, cost, and hallucination risk are poor fit. | Rejected | C4 |
+| F089 | Bundling massive third-party blocklists in repo | Data, licensing | common but risky | No | 1 | 3 | License and freshness risk; keep URLs/manifests instead. | Rejected | O4, O10, O17 |
+| F090 | Editing upstream remote source files directly | Collaboration | rare | No | 1 | 5 | Unsafe and out of scope; provide reports/PR templates instead. | Rejected | O4, O17 |
+
+## Tiered Execution Plan
+
+### Now
+
+1. Documentation and architecture baseline: F001, F024.
+2. CI and release hygiene: F002, F003, F004.
+3. Config and source-data foundations: F005, F006, F007, F008, F009.
+4. Explainability and diagnostics: F010, F011, F012, F013, F014.
+5. Profile groundwork and migrations: F015, F022, F023.
+6. Quality gates: F016, F017, F018, F019.
+7. Accessibility and i18n foundations: F020, F021.
+
+Rationale: these items reduce maintenance risk, make the current product more trustworthy, and create the internal contracts needed for the larger profile/integration work.
+
+### Next
+
+1. Declarative and profile workflows: F025, F026, F027, F028, F029.
+2. DNS ecosystem interoperability: F030, F031, F032, F033, F034.
+3. Security packs and rule intelligence: F035, F036, F037, F038, F039, F040.
+4. Faster large-scale operations: F041, F042, F043, F047, F048, F049, F050, F051.
+5. Packaging, plugin, collaboration growth: F045, F046, F052, F053, F054, F055.
+6. Recovery spike: F044.
+
+Rationale: these are valuable and well-supported by the market, but most require the Now-phase source manifest, profile model, and test/release foundations.
+
+### Later
+
+1. Windows network stack companions: F056, F057, F058.
+2. Router and enterprise deployment exports: F059, F060.
+3. Developer-side extension surfaces: F061, F062.
+4. Advanced DNS/security enrichment: F063, F064, F065, F066, F067, F068, F069, F070.
+
+Rationale: these are plausible directions, but they either introduce credentials, services, signing, network-stack risk, or product-scope expansion.
+
+### Under Consideration
+
+F073, F074, F075, F076, F077, F079, F080 remain research candidates. They should not enter implementation until a prototype proves they can be local-first, understandable, and low-surprise.
+
+### Rejected
+
+F071, F072, F078, F081, F082, F083, F084, F085, F086, F087, F088, F089, F090 are rejected for current strategy. They either contradict the hosts-editor scope, violate local-control expectations, or introduce risk without enough user value.
+
+## Category Coverage Audit
+
+| Category | Coverage |
+| --- | --- |
+| Security | F004, F009, F014, F034-F038, F055-F057, F065-F068 |
+| Accessibility | F018, F020, F021, F053, F062 |
+| i18n/l10n | F021, F034, F053 |
+| Observability/telemetry | F012, F013, F047-F049, F076; telemetry is local-only unless user exports |
+| Testing | F002, F016-F019 |
+| Docs | F001, F024 |
+| Distribution/packaging | F003, F004, F052, F060 |
+| Plugin ecosystem | F045, F046 |
+| Mobile | F069, F070 |
+| Offline/resilience | F005, F008, F026, F028, F044 |
+| Multi-user/collab | F015, F040, F054, F055, F060 |
+| Migration paths | F005, F022, F030, F031 |
+| Upgrade strategy | F003-F006, F052 |
+
+## Adversarial Review Notes
+
+A hostile reviewer would likely object to four things:
+
+1. "This is still one giant Python file." Answer: F001 documents the split first; no large refactor should start before the public contracts and test fixtures are stable.
+2. "The roadmap overreaches into DNS server territory." Answer: server-like work is mostly rejected, later, or export-only; the core product remains a hosts editor.
+3. "External feeds are a supply-chain risk." Answer: F006-F009 put source metadata, health, trust, and caching before adding more feeds.
+4. "Logs and analytics can become surveillance." Answer: F013, F047, F049, and F076 are local, opt-in, and must include retention controls.
+
+## Appendix A - Source Index
+
+### Local Sources
+
+| ID | Source | Use |
+| --- | --- | --- |
+| L1 | `README.md` | Current product claims, workflow, requirements, safety model |
+| L2 | `CHANGELOG.md` | Shipped feature baseline through v2.17.0 |
+| L3 | `CLAUDE.md` | Architecture and gotchas snapshot |
+| L4 | `CODEX_CHANGELOG.md` | Prior audit findings, known gaps, validation history |
+| L5 | `hosts_editor.py` | Current implementation, entry points, config, UI, CLI, source catalog |
+| L6 | `tests/test_hosts_editor_logic.py` | Test inventory and current coverage shape |
+| L7 | `git log --oneline -n 200` | Recurring pain points and development history |
+| L8 | Prior `ROADMAP.md` | Existing idea inventory and shipped/backlog reconciliation |
+
+### OSS And Adjacent Projects
+
+| ID | URL | Signal used |
+| --- | --- | --- |
+| O1 | https://github.com/oldj/SwitchHosts | Hosts profile switching, remote hosts, tray, syntax highlight, i18n |
+| O2 | https://github.com/scottlerch/HostsFileEditor | Windows archive/restore, bulk row actions, sort/filter, tray, ping |
+| O3 | https://github.com/2ndalpha/gasmask | macOS local/remote/combined profiles, menu-bar switching, logs |
+| O4 | https://github.com/StevenBlack/hosts | Variant matrix, source directory, whitelist/blacklist overlays, source contacts |
+| O5 | https://github.com/AdAway/AdAway | Android hosts blocker, source lists, preview builds, translation workflow |
+| O6 | https://github.com/pi-hole/pi-hole | Dashboard, DHCP, install/release expectations, scale claims |
+| O7 | https://github.com/AdguardTeam/AdGuardHome | Query log, custom rules, rewrites, API, CNAME/IP blocking, issues |
+| O8 | https://github.com/TechnitiumSoftware/DnsServer | Encrypted DNS, clustering, OIDC, CNAME cloaking, blocklists |
+| O9 | https://github.com/hectorm/hblock | Timers, multiple outputs, allowlist guidance, source lookup |
+| O10 | https://github.com/hagezi/dns-blocklists | Tiered lists, NRD/DGA, bypass, rebinding, native tracker categories |
+| O11 | https://github.com/blocklistproject/Lists | Category lists and output format parity |
+| O12 | https://github.com/Ultimate-Hosts-Blacklist/Ultimate.Hosts.Blacklist | Large combined hosts source |
+| O13 | https://github.com/crazy-max/WindowsSpyBlocker | Windows telemetry pack model |
+| O14 | https://github.com/DNSCrypt/dnscrypt-proxy | Encrypted DNS and blocklist builder patterns |
+| O15 | https://github.com/0xERR0R/blocky | Lightweight DNS proxy/ad blocker pattern |
+| O16 | https://github.com/jacklul/pihole-updatelists | Remote list sync automation |
+| O17 | https://github.com/AdguardTeam/HostlistsRegistry | Hostlist metadata and inclusion criteria |
+| O18 | https://github.com/ppfeufer/adguard-filter-list | Combined list with whitelist caveats |
+| O19 | https://awesome-selfhosted.net/tags/dns.html | Awesome-list validation of DNS blocker ecosystem |
+| O20 | https://github.com/cdransf/awesome-adblock | Awesome-list validation of adjacent browser/network blockers |
+| O21 | https://github.com/tanrax/maza-ad-blocking | Local OS ad blocker pattern |
+| O22 | https://github.com/Lateralus138/NPS-Hosts-Manager | Lightweight Windows hosts manager baseline |
+| O23 | https://github.com/mitchellkrogza/Badd-Boyz-Hosts | Additional curated hosts source |
+| O24 | https://github.com/anudeepND/blacklist | Curated ad/tracking hostfile source |
+| O25 | https://github.com/Perflyst/PiHoleBlocklist | Smart TV and device-specific blocklist caveats |
+
+### Commercial Products
+
+| ID | URL | Signal used |
+| --- | --- | --- |
+| C1 | https://nextdns.io/ | Security toggles, NRD/DGA, IDN homographs, typosquatting, analytics, custom allow/deny, rewrites, profiles |
+| C2 | https://docs.controld.com/docs/profiles | Profiles, chained policies, priority order, endpoint assignment |
+| C3 | https://docs.controld.com/docs/custom-rules | Cloud hosts-file equivalent, wildcard support, block/bypass/redirect/private domains |
+| C4 | https://docs.controld.com/docs/analytics | Analytics levels, data retention, query metadata, storage region |
+| C5 | https://adguard-dns.io/en/welcome.html | Ad blocking, parental controls, per-device stats, customized filtering, encrypted protocols |
+| C6 | https://www.dnsfilter.com/ | Business DNS filtering, reporting, roaming clients, SSO, integrations |
+| C7 | https://apidocs.dnsfilter.com/ | API-first management precedent |
+
+### Community And Issue Signals
+
+| ID | URL | Signal used |
+| --- | --- | --- |
+| K1 | https://www.reddit.com/r/AdGuardHome/comments/1re336u/adguard_home_can_only_filter_what_it_sees_a_lot/ | DNS bypass by hardcoded DNS, DoH, DoQ; firewall handoff need |
+| K2 | https://www.reddit.com/r/selfhosted/comments/1sdg0vb/next_dns_pihole_adguard_home_technitium/ | Large-list RAM/performance and clustering preference |
+| K3 | https://www.reddit.com/r/pihole/comments/1t2c7hf/adguard_home_pihole_or_technitium/ | Product comparison, per-device control, safe search, uptime |
+| K4 | https://www.reddit.com/r/Adguard/comments/1reoqwo/adguard_dns_v220_with_custom_blocklists_is/ | Custom blocklist size limits and rule-count pain |
+| K5 | https://news.ycombinator.com/item?id=34374725 | Network blocking value, profiles, mobile/roaming, false positives |
+| K6 | https://news.ycombinator.com/item?id=39968103 | DNS blockers can break services and need easier bypass UX |
+| K7 | https://news.ycombinator.com/item?id=31549238 | DNS blockers cannot handle same-domain/path/cosmetic ads |
+| K8 | https://stackoverflow.com/questions/24260566/edit-hosts-file-in-python | Hosts writes require admin privileges |
+| K9 | https://stackoverflow.com/questions/138162/wildcards-in-a-windows-hosts-file | Hosts file does not support wildcard domains |
+| K10 | https://learn.microsoft.com/en-us/answers/questions/3758720/settingsmodifier-win32-hostsfilehijack | Windows Defender/hosts hijack false-positive and tamper concerns |
+| K11 | https://github.com/AdguardTeam/AdGuardHome/issues/997 | User accounts request signal in DNS admin products |
+| K12 | https://github.com/AdguardTeam/AdGuardHome/issues/2290 | Query log format reconsideration signal |
+| K13 | https://github.com/scottlerch/HostsFileEditor/issues/12 | Dynamic enabled-state UX issue |
+| K14 | https://github.com/scottlerch/HostsFileEditor/issues/10 | Windows JumpList/tray integration request |
+
+### Standards, Specs, And Platform APIs
+
+| ID | URL | Signal used |
+| --- | --- | --- |
+| S1 | https://learn.microsoft.com/en-us/powershell/module/dnsclient/add-dnsclientnrptrule | NRPT rule creation, namespace routing, punycode encoding |
+| S2 | https://learn.microsoft.com/en-us/powershell/module/dnsclient/remove-dnsclientnrptrule | NRPT cleanup/removal |
+| S3 | https://learn.microsoft.com/en-us/windows/win32/fwp/windows-filtering-platform-start-page | WFP capabilities and risk boundary |
+| S4 | https://learn.microsoft.com/en-us/windows/win32/dns/dns-functions | Windows DNS API function index; cache-flush APIs need implementation verification |
+| S5 | https://learn.microsoft.com/en-us/windows/win32/etw/about-event-tracing | ETW real-time/local log consumption |
+| S6 | https://learn.microsoft.com/en-us/windows-server/networking/dns/dns-logging-and-diagnostics | DNS logging and diagnostics context |
+| S7 | https://datatracker.ietf.org/doc/html/rfc8484 | DNS over HTTPS |
+| S8 | https://datatracker.ietf.org/doc/html/rfc9250 | DNS over QUIC |
+| S9 | https://datatracker.ietf.org/doc/html/rfc9460 | SVCB/HTTPS records |
+| S10 | https://datatracker.ietf.org/doc/html/rfc9461 | SVCB mapping for DNS servers |
+| S11 | https://adguard-dns.io/kb/ko/adguard-home/faq/ | CNAME/IP query-log behavior and logs |
+| S12 | https://stackoverflow.com/questions/61707242/can-i-use-wildcards-for-blocking-websites-in-hosts-files | Hosts wildcard limitation confirmation |
+
+### Academic, Research, And Engineering Sources
+
+| ID | URL | Signal used |
+| --- | --- | --- |
+| A1 | https://www.mdpi.com/1424-8220/26/3/1041 | Early phishing-domain detection with registry/campaign context |
+| A2 | https://discovery.ucl.ac.uk/id/eprint/10209951 | Newly registered phishing domains at scale |
+| A3 | https://link.springer.com/article/10.1186/s42400-025-00523-w | Newly registered domain activation behavior |
+| A4 | https://dev.ndss-symposium.org/ndss-paper/auto-draft-146/ | CNAME cloaking and cookie exfiltration risk |
+| A5 | https://petsymposium.org/2021/files/papers/issue3/popets-2021-0053.pdf | Large-scale DNS-based tracking evasion |
+| A6 | https://arxiv.org/abs/2009.14330 | ML detection of CNAME cloaking-based tracking |
+| A7 | https://netbeacon.org/recent-spike-in-malicious-phishing-concentrated-in-two-registrars/ | Registrar concentration in malicious phishing |
+| A8 | https://www.sciencedirect.com/science/article/pii/S0167404820303874 | Malicious site cloaking behavior |
+| A9 | https://pubmed.ncbi.nlm.nih.gov/41127663/ | LegitPhish phishing/legitimate URL dataset |
+| A10 | https://www.mdpi.com/2079-9292/11/8/1276 | DNS filtering evaluation and blocklist accuracy concerns |
+
+### Dependency And Security Sources
+
+| ID | URL | Signal used |
+| --- | --- | --- |
+| D1 | https://www.python.org/downloads/release/python-3145/ | Current Python 3.14 maintenance release stream |
+| D2 | https://pyinstaller.org/en/stable/CHANGES.html | PyInstaller 6.20 changes and compatibility |
+| D3 | https://github.com/advisories/GHSA-p2xp-xx3r-mffc | PyInstaller CVE-2025-59042 local privilege escalation |
+| D4 | https://github.com/advisories | Advisory scanning and OSS security database |
+| D5 | https://pypi.org/project/pyinstaller/ | PyInstaller package release metadata |
+| D6 | https://learn.microsoft.com/en-us/windows/package-manager/package/manifest | Winget manifest reference |
+
+## Appendix B - Research Queries
+
+Representative queries used:
+
+- `GitHub hosts file editor manager Windows open source SwitchHosts HostMinder Gas Mask hostsman alternative`
+- `GitHub hosts blocklist aggregator StevenBlack hBlock hosts-block hosts-bl maza ad blocking`
+- `commercial hosts file manager Windows HostsMan SwitchHosts features backup DNS flush blocklist update`
+- `NextDNS features blocklists analytics logs denylist allowlist parental control docs`
+- `Control D docs profiles analytics logs custom rules services DNS`
+- `site:news.ycombinator.com Pi-hole AdGuard Home NextDNS DNS blocking`
+- `reddit pi-hole adguard home nextdns allowlist false positives blocklist complaints`
+- `Stack Overflow Windows hosts file admin permission Python edit hosts file`
+- `Microsoft Windows hosts file documentation DNS Client hosts file NRPT Add-DnsClientNrptRule docs`
+- `IETF DNS over HTTPS RFC 8484 DNS over QUIC RFC 9250 encrypted client hello ECH hosts blocking limitations`
+- `DNS blocklist false positives study domain blocklist evaluation academic`
+- `CNAME cloaking blocklist detection research paper ad tracking`
+- `PyInstaller changelog latest 2026 security changes`
+- `GitHub Advisory Database PyInstaller vulnerability 2025 2026`
+
+## Appendix C - Self-Audit
+
+- Traceability: every roadmap candidate in the active register cites one or more appendix source IDs.
+- Tiering: every item has a tier and risk/dependency note.
+- Duplicates: old roadmap duplicates were merged into the feature register.
+- Misfits: browser cosmetic filtering, default cloud sync, silent writes, in-app DNS clustering, main-app kernel drivers, massive vendored blocklists, and uncited anti-cheat presets are explicitly rejected.
+- Thin categories: accessibility, i18n, telemetry/observability, testing, distribution, plugin ecosystem, mobile, offline resilience, multi-user/collaboration, migration, and upgrade strategy all have named items.
+- Philosophy check: all Now work reinforces current safety, local control, and Windows-first identity.
+- Disk check: this file is the repo-root `ROADMAP.md`.
