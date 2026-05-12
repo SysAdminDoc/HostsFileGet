@@ -34,7 +34,7 @@ Non-negotiables:
 - [x] F012 - Entry provenance/blame panel (`docs/entry-provenance.md`, Tools/context report, import/source/audit correlation)
 - [x] F013 - Windows DNS Client ETW import/live tail spike (`docs/windows-dns-client.md`, guarded Operational-log snapshot import)
 - [x] F014 - DoH/DoT/DoQ bypass diagnostics (`docs/dns-bypass-diagnostics.md`, policy/proxy diagnostic report)
-- [ ] F015 - Named profile data model groundwork
+- [x] F015 - Named profile data model groundwork (`profile_schema_version`, `active_profile_id`, sanitized profile payloads)
 - [ ] F016 - Golden-file cleaned-output tests
 - [ ] F017 - Property-based parser/fuzzer tests
 - [ ] F018 - GUI smoke tests
@@ -52,7 +52,7 @@ Non-negotiables:
 - Language and runtime: Python 3.x, Tkinter desktop UI, Windows-first assumptions, PowerShell launcher.
 - Entry points: `hosts_editor.py` for GUI and CLI, `PythonLauncher.ps1` for elevated launch/bootstrap, `HostsFileGet.spec` for PyInstaller.
 - Packaging: PyInstaller one-file Windows EXE with `uac_admin=True`; build artifacts exist locally under `build/` and `dist/` but are not tracked.
-- Tests: `tests/test_hosts_editor_logic.py` contains 110 pure-function unit tests covering parsing, normalization, config, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, and find/replace.
+- Tests: `tests/test_hosts_editor_logic.py` contains 154 pure-function unit tests covering parsing, normalization, config/profile sanitation, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, and find/replace.
 - Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `LICENSE`, and this roadmap.
 - License: MIT.
 
@@ -268,9 +268,10 @@ Legend:
 2. Completed - CI and release hygiene: F002, F003, F004.
 3. Completed - Config and source-data foundations: F005-F009.
 4. Completed - Explainability and diagnostics: F010-F014.
-5. Next - Profile groundwork and migrations: F015, F022, F023.
-6. Quality gates: F016, F017, F018, F019.
-7. Accessibility and i18n foundations: F020, F021.
+5. Completed - Profile data model groundwork: F015.
+6. Next - Quality gates: F016, F017, F018, F019.
+7. Migration/export interoperability: F022, F023.
+8. Accessibility and i18n foundations: F020, F021.
 
 Rationale: these items reduce maintenance risk, make the current product more trustworthy, and create the internal contracts needed for the larger profile/integration work.
 

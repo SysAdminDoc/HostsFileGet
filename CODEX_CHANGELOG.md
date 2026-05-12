@@ -31,6 +31,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F013 complete. Next roadmap item: F014 DoH/DoT/DoQ bypass diagnostics.
 - Completed F014: added DNS Bypass Diagnostics for browser encrypted-DNS policy and proxy signals, static hosts-file limit guidance, docs, and regression tests.
 - Updated `ROADMAP.md` to mark F014 complete. Next roadmap item: F015 named profile data model groundwork.
+- Completed F015: bumped config schema to 3, added versioned profile payload sanitation, mirrored the current single-editor state into the active profile on save, documented the profile schema, and added regression tests for IDs, mapping/list inputs, dedupe, and active-profile refresh.
+- Updated `ROADMAP.md` to mark F015 complete. Next roadmap item: F016 golden-file cleaned-output tests.
 
 ## Scope
 

@@ -15,10 +15,12 @@ from hosts_editor import (
     AGH_BLOCK_REASONS,
     BLOCK_SINK_IPS,
     CONFIG_SCHEMA_VERSION,
+    DEFAULT_PROFILE_ID,
     DOMAIN_CATEGORY_RULES,
     FTL_BLOCKED_STATUS_CODES,
     HostsFileEditor,
     PROVENANCE_EVENT_KINDS,
+    PROFILE_SCHEMA_VERSION,
     SOURCE_HEALTH_REPORT_SCHEMA_VERSION,
     SOURCE_MANIFEST_SCHEMA_VERSION,
     STALE_FRESH_HOURS,
@@ -93,6 +95,9 @@ from hosts_editor import (
     rewrite_block_sink_ip,
     sanitize_config_snapshot,
     sanitize_custom_sources,
+    sanitize_profile_id,
+    sanitize_profile_snapshot,
+    sanitize_profiles_snapshot,
     sanitize_source_cache_metadata,
     sanitize_source_manifest,
     sanitize_pinned_domains,
@@ -101,6 +106,7 @@ from hosts_editor import (
     strip_lines_by_category,
     summarize_clean_changes,
     summarize_source_health_results,
+    update_active_profile_snapshot,
     write_text_file_atomic,
 )
 
@@ -946,6 +952,95 @@ class HostsEditorLogicTests(unittest.TestCase):
         self.assertEqual(payload["whitelist"], "keep.example\nsafe.example")
         self.assertEqual(payload["source_last_fetched"], {"https://example.com/legacy.txt": stamp})
         self.assertEqual(payload["preferred_block_sink"], "::1")
+
+    def test_sanitize_profile_id_allows_safe_slug_only(self):
+        self.assertEqual(sanitize_profile_id("Work_Profile-1"), "work_profile-1")
+        self.assertEqual(sanitize_profile_id("../evil"), DEFAULT_PROFILE_ID)
+        self.assertEqual(sanitize_profile_id("", "fallback"), "fallback")
+
+    def test_sanitize_config_snapshot_builds_default_profile_from_current_fields(self):
+        payload = sanitize_config_snapshot(
+            {
+                "whitelist": ["keep.example", "safe.example"],
+                "custom_sources": [{"name": "Feed", "url": "https://example.com/hosts.txt"}],
+                "pinned_domains": ["Pinned.Example", "bad value"],
+                "preferred_block_sink": "::1",
+            },
+            os.getcwd(),
+        )
+
+        self.assertEqual(payload["config_version"], CONFIG_SCHEMA_VERSION)
+        self.assertEqual(payload["profile_schema_version"], PROFILE_SCHEMA_VERSION)
+        self.assertEqual(payload["active_profile_id"], DEFAULT_PROFILE_ID)
+        self.assertEqual(len(payload["profiles"]), 1)
+
+        profile = payload["profiles"][0]
+        self.assertEqual(profile["schema_version"], PROFILE_SCHEMA_VERSION)
+        self.assertEqual(profile["id"], DEFAULT_PROFILE_ID)
+        self.assertEqual(profile["name"], "Default")
+        self.assertEqual(profile["whitelist"], "keep.example\nsafe.example")
+        self.assertEqual(profile["custom_sources"], [{"name": "Feed", "url": "https://example.com/hosts.txt"}])
+        self.assertEqual(profile["pinned_domains"], ["pinned.example"])
+        self.assertEqual(profile["preferred_block_sink"], "::1")
+
+    def test_sanitize_profiles_snapshot_sanitizes_mapping_and_active_profile(self):
+        profiles, active_id = sanitize_profiles_snapshot(
+            {
+                "Work": {
+                    "name": "Work",
+                    "whitelist": "work.example",
+                    "preferred_block_sink": "127.0.0.1",
+                },
+                "../bad": {
+                    "name": "Bad",
+                    "whitelist": "bad.example",
+                },
+            },
+            active_profile_id="WORK",
+        )
+
+        self.assertEqual(active_id, "work")
+        self.assertEqual([profile["id"] for profile in profiles], ["work", "profile-2"])
+        self.assertEqual(profiles[0]["whitelist"], "work.example")
+        self.assertEqual(profiles[0]["preferred_block_sink"], "127.0.0.1")
+
+    def test_sanitize_profiles_snapshot_dedupes_duplicate_ids(self):
+        profiles, active_id = sanitize_profiles_snapshot(
+            [
+                {"id": "work", "name": "Work"},
+                {"id": "work", "name": "Work Copy"},
+                {"id": "../bad", "name": "Bad"},
+            ],
+            active_profile_id="missing",
+        )
+
+        self.assertEqual(active_id, "work")
+        self.assertEqual([profile["id"] for profile in profiles], ["work", "work-2", "profile-3"])
+
+    def test_update_active_profile_snapshot_refreshes_only_active_profile(self):
+        profiles = [
+            sanitize_profile_snapshot({"id": "default", "name": "Default", "whitelist": "old.example"}),
+            sanitize_profile_snapshot({"id": "work", "name": "Work", "whitelist": "old-work.example"}),
+        ]
+
+        updated, active_id = update_active_profile_snapshot(
+            profiles,
+            "work",
+            {
+                "whitelist": "new-work.example",
+                "custom_sources": [{"name": "Feed", "url": "https://example.com/hosts.txt"}],
+                "pinned_domains": ["Pinned.Example"],
+                "preferred_block_sink": "::",
+            },
+        )
+
+        self.assertEqual(active_id, "work")
+        self.assertEqual(updated[0]["whitelist"], "old.example")
+        self.assertEqual(updated[1]["name"], "Work")
+        self.assertEqual(updated[1]["whitelist"], "new-work.example")
+        self.assertEqual(updated[1]["custom_sources"], [{"name": "Feed", "url": "https://example.com/hosts.txt"}])
+        self.assertEqual(updated[1]["pinned_domains"], ["pinned.example"])
+        self.assertEqual(updated[1]["preferred_block_sink"], "::")
 
     def test_sanitize_config_snapshot_rejects_non_sha256_hashes(self):
         payload = sanitize_config_snapshot(

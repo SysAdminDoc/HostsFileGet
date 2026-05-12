@@ -33,7 +33,10 @@ import glob
 APP_NAME = "Hosts File Get"
 APP_SLUG = "HostsFileGet"
 APP_VERSION = "2.17.0"
-CONFIG_SCHEMA_VERSION = 2
+CONFIG_SCHEMA_VERSION = 3
+PROFILE_SCHEMA_VERSION = 1
+DEFAULT_PROFILE_ID = "default"
+PROFILE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 SOURCE_MANIFEST_SCHEMA_VERSION = 1
 SOURCE_MANIFEST_RELATIVE_PATH = os.path.join("data", "blocklist_sources.json")
 ELEVATION_ATTEMPT_FLAG = "--hostsfileget-elevation-attempted"
@@ -2345,6 +2348,166 @@ def build_source_health_report(
     }
 
 
+def _sanitize_whitelist_text(value) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple, set)):
+        return '\n'.join(
+            item.strip()
+            for item in (str(entry) for entry in value)
+            if item.strip()
+        )
+    return ""
+
+
+def sanitize_profile_id(value, fallback: str = DEFAULT_PROFILE_ID) -> str:
+    candidate = str(value).strip().lower() if isinstance(value, str) else ""
+    if PROFILE_ID_PATTERN.match(candidate):
+        return candidate
+
+    fallback_candidate = str(fallback).strip().lower() if isinstance(fallback, str) else ""
+    if PROFILE_ID_PATTERN.match(fallback_candidate):
+        return fallback_candidate
+
+    return DEFAULT_PROFILE_ID
+
+
+def _unique_profile_id(profile_id: str, used_ids: set[str]) -> str:
+    if profile_id not in used_ids:
+        return profile_id
+
+    base = profile_id[:56].rstrip("-_") or DEFAULT_PROFILE_ID
+    suffix = 2
+    while True:
+        suffix_text = f"-{suffix}"
+        candidate = f"{base[:64 - len(suffix_text)]}{suffix_text}"
+        if candidate not in used_ids:
+            return candidate
+        suffix += 1
+
+
+def _profile_name_from_id(profile_id: str) -> str:
+    label = profile_id.replace("-", " ").replace("_", " ").strip()
+    return label.title() if label else "Default"
+
+
+def _sanitize_profile_name(value, fallback_id: str) -> str:
+    if isinstance(value, str):
+        name = re.sub(r"\s+", " ", value.strip())
+        if name and not _contains_control_chars(name):
+            return name[:80]
+    return _profile_name_from_id(fallback_id)
+
+
+def _profile_preferred_sink(value) -> str:
+    return value if value in BLOCK_SINK_IPS else "0.0.0.0"
+
+
+def build_default_profile_snapshot(config) -> dict:
+    if not isinstance(config, dict):
+        config = {}
+    return {
+        "schema_version": PROFILE_SCHEMA_VERSION,
+        "id": DEFAULT_PROFILE_ID,
+        "name": "Default",
+        "whitelist": _sanitize_whitelist_text(config.get("whitelist", "")),
+        "custom_sources": sanitize_custom_sources(config.get("custom_sources", [])),
+        "pinned_domains": sanitize_pinned_domains(config.get("pinned_domains", [])),
+        "preferred_block_sink": _profile_preferred_sink(config.get("preferred_block_sink", "0.0.0.0")),
+    }
+
+
+def sanitize_profile_snapshot(profile, fallback_id: str = DEFAULT_PROFILE_ID, used_ids: set[str] | None = None) -> dict:
+    if not isinstance(profile, dict):
+        profile = {}
+    used_ids = used_ids if used_ids is not None else set()
+
+    profile_id = sanitize_profile_id(profile.get("id"), fallback_id)
+    profile_id = _unique_profile_id(profile_id, used_ids)
+    used_ids.add(profile_id)
+
+    return {
+        "schema_version": PROFILE_SCHEMA_VERSION,
+        "id": profile_id,
+        "name": _sanitize_profile_name(profile.get("name"), profile_id),
+        "whitelist": _sanitize_whitelist_text(profile.get("whitelist", "")),
+        "custom_sources": sanitize_custom_sources(profile.get("custom_sources", [])),
+        "pinned_domains": sanitize_pinned_domains(profile.get("pinned_domains", [])),
+        "preferred_block_sink": _profile_preferred_sink(profile.get("preferred_block_sink", "0.0.0.0")),
+    }
+
+
+def _iter_profile_candidates(profiles):
+    if isinstance(profiles, list):
+        for profile in profiles:
+            if isinstance(profile, dict):
+                yield profile
+        return
+
+    if isinstance(profiles, dict):
+        for profile_id, profile in profiles.items():
+            if not isinstance(profile, dict):
+                continue
+            candidate = dict(profile)
+            candidate.setdefault("id", profile_id)
+            yield candidate
+
+
+def sanitize_profiles_snapshot(
+    profiles,
+    active_profile_id: str | None = None,
+    fallback_profile: dict | None = None,
+) -> tuple[list[dict], str]:
+    sanitized_profiles: list[dict] = []
+    used_ids: set[str] = set()
+
+    for candidate in _iter_profile_candidates(profiles):
+        fallback_id = DEFAULT_PROFILE_ID if not sanitized_profiles else f"profile-{len(sanitized_profiles) + 1}"
+        sanitized_profiles.append(
+            sanitize_profile_snapshot(candidate, fallback_id=fallback_id, used_ids=used_ids)
+        )
+
+    if not sanitized_profiles:
+        sanitized_profiles.append(
+            sanitize_profile_snapshot(
+                fallback_profile or build_default_profile_snapshot({}),
+                fallback_id=DEFAULT_PROFILE_ID,
+                used_ids=used_ids,
+            )
+        )
+
+    active_id = sanitize_profile_id(active_profile_id, "")
+    profile_ids = {profile["id"] for profile in sanitized_profiles}
+    if active_id not in profile_ids:
+        active_id = sanitized_profiles[0]["id"]
+
+    return sanitized_profiles, active_id
+
+
+def update_active_profile_snapshot(
+    profiles,
+    active_profile_id: str | None,
+    current_config: dict,
+) -> tuple[list[dict], str]:
+    current_profile = build_default_profile_snapshot(current_config)
+    sanitized_profiles, active_id = sanitize_profiles_snapshot(
+        profiles,
+        active_profile_id,
+        fallback_profile=current_profile,
+    )
+
+    for index, profile in enumerate(sanitized_profiles):
+        if profile["id"] != active_id:
+            continue
+        updated = dict(profile)
+        for key in ("whitelist", "custom_sources", "pinned_domains", "preferred_block_sink"):
+            updated[key] = current_profile[key]
+        sanitized_profiles[index] = updated
+        break
+
+    return sanitized_profiles, active_id
+
+
 def _coerce_config_schema_version(value) -> int:
     if isinstance(value, bool):
         return 0
@@ -2394,17 +2557,7 @@ def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
     if not os.path.isdir(fallback_last_open_dir):
         fallback_last_open_dir = os.getcwd()
 
-    whitelist_value = config.get("whitelist", "")
-    if isinstance(whitelist_value, str):
-        whitelist_text = whitelist_value
-    elif isinstance(whitelist_value, (list, tuple, set)):
-        whitelist_text = '\n'.join(
-            item.strip()
-            for item in (str(entry) for entry in whitelist_value)
-            if item.strip()
-        )
-    else:
-        whitelist_text = ""
+    whitelist_text = _sanitize_whitelist_text(config.get("whitelist", ""))
 
     def _normalize_hash(value):
         # SHA-256 hex digests are exactly 64 lowercase hex characters.
@@ -2441,10 +2594,11 @@ def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
                 continue
             source_last_fetched[url] = stamp
 
+    custom_sources = sanitize_custom_sources(config.get("custom_sources", []))
     source_cache_metadata = sanitize_source_cache_metadata(config.get("source_cache_metadata", {}))
 
     preferred_sink_raw = config.get("preferred_block_sink", "0.0.0.0")
-    preferred_sink = preferred_sink_raw if preferred_sink_raw in BLOCK_SINK_IPS else "0.0.0.0"
+    preferred_sink = _profile_preferred_sink(preferred_sink_raw)
 
     raw_retention = config.get("backup_retention", BACKUP_RETENTION)
     try:
@@ -2454,11 +2608,23 @@ def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
     backup_retention = max(0, min(50, backup_retention))
 
     has_completed_first_run = bool(config.get("has_completed_first_run", False))
+    pinned_domains = sanitize_pinned_domains(config.get("pinned_domains", []))
+    fallback_profile = build_default_profile_snapshot({
+        "whitelist": whitelist_text,
+        "custom_sources": custom_sources,
+        "pinned_domains": pinned_domains,
+        "preferred_block_sink": preferred_sink,
+    })
+    profiles, active_profile_id = sanitize_profiles_snapshot(
+        config.get("profiles", []),
+        config.get("active_profile_id", DEFAULT_PROFILE_ID),
+        fallback_profile=fallback_profile,
+    )
 
     return {
         "config_version": CONFIG_SCHEMA_VERSION,
         "whitelist": whitelist_text,
-        "custom_sources": sanitize_custom_sources(config.get("custom_sources", [])),
+        "custom_sources": custom_sources,
         "last_applied_raw_hash": _normalize_hash(config.get("last_applied_raw_hash")),
         "last_applied_cleaned_hash": _normalize_hash(config.get("last_applied_cleaned_hash")),
         "last_open_dir": last_open_dir,
@@ -2467,9 +2633,12 @@ def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
         "preferred_block_sink": preferred_sink,
         "backup_retention": backup_retention,
         "has_completed_first_run": has_completed_first_run,
-        "pinned_domains": sanitize_pinned_domains(config.get("pinned_domains", [])),
+        "pinned_domains": pinned_domains,
         "update_on_launch": bool(config.get("update_on_launch", False)),
         "lock_after_save": bool(config.get("lock_after_save", False)),
+        "profile_schema_version": PROFILE_SCHEMA_VERSION,
+        "active_profile_id": active_profile_id,
+        "profiles": profiles,
     }
 
 def resolve_saved_state_hashes(current_hash: str, saved_raw_hash, saved_cleaned_hash) -> tuple[str | None, str | None]:
@@ -4266,6 +4435,11 @@ class HostsFileEditor:
         # Save as "keep no matter what", separate from the whitelist which
         # strips entries. Used for the Starred smart view.
         self.pinned_domains: set[str] = set()
+        # Profile schema groundwork. The current UI remains a single active
+        # editor; saves mirror that editor into the active profile payload.
+        self.profile_schema_version = PROFILE_SCHEMA_VERSION
+        self.active_profile_id = DEFAULT_PROFILE_ID
+        self.profiles: list[dict] = [build_default_profile_snapshot({})]
         # Auto-refresh stale sources on launch (opt-in, off by default).
         self._update_on_launch = False
         # Lock the hosts file with the Windows "read-only" attribute after a
@@ -6129,6 +6303,9 @@ class HostsFileEditor:
         self._backup_retention = sanitized_config.get("backup_retention", BACKUP_RETENTION)
         self._has_completed_first_run = sanitized_config.get("has_completed_first_run", False)
         self.pinned_domains = set(sanitized_config.get("pinned_domains", []))
+        self.profile_schema_version = sanitized_config.get("profile_schema_version", PROFILE_SCHEMA_VERSION)
+        self.active_profile_id = sanitized_config.get("active_profile_id", DEFAULT_PROFILE_ID)
+        self.profiles = sanitized_config.get("profiles", [build_default_profile_snapshot(sanitized_config)])
         self._update_on_launch = bool(sanitized_config.get("update_on_launch", False))
         self._lock_after_save = bool(sanitized_config.get("lock_after_save", False))
 
@@ -6160,6 +6337,21 @@ class HostsFileEditor:
         except tk.TclError:
             whitelist_text = self._last_saved_whitelist_text or ""
 
+        current_profile_fields = {
+            "whitelist": whitelist_text,
+            "custom_sources": self.custom_sources,
+            "pinned_domains": sorted(self.pinned_domains),
+            "preferred_block_sink": self._preferred_block_sink,
+        }
+        profiles, active_profile_id = update_active_profile_snapshot(
+            getattr(self, "profiles", []),
+            getattr(self, "active_profile_id", DEFAULT_PROFILE_ID),
+            current_profile_fields,
+        )
+        self.profile_schema_version = PROFILE_SCHEMA_VERSION
+        self.active_profile_id = active_profile_id
+        self.profiles = profiles
+
         config = sanitize_config_snapshot({
             "config_version": CONFIG_SCHEMA_VERSION,
             "whitelist": whitelist_text,
@@ -6175,10 +6367,16 @@ class HostsFileEditor:
             "pinned_domains": sorted(self.pinned_domains),
             "update_on_launch": self._update_on_launch,
             "lock_after_save": self._lock_after_save,
+            "profile_schema_version": self.profile_schema_version,
+            "active_profile_id": self.active_profile_id,
+            "profiles": self.profiles,
         }, self.last_open_dir)
         try:
             self._write_config_payload(config)
             self._last_saved_whitelist_text = config["whitelist"]
+            self.profile_schema_version = config["profile_schema_version"]
+            self.active_profile_id = config["active_profile_id"]
+            self.profiles = config["profiles"]
             self._source_metadata_dirty = False
             self._update_whitelist_summary()
             return True
