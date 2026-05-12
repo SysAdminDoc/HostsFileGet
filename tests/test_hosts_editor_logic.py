@@ -24,6 +24,8 @@ from hosts_editor import (
     PROVENANCE_EVENT_KINDS,
     PROFILE_SCHEMA_VERSION,
     SOURCE_HEALTH_REPORT_SCHEMA_VERSION,
+    SOURCE_ADAPTER_PLUGIN_SCHEMA,
+    SOURCE_ADAPTER_PLUGIN_SCHEMA_VERSION,
     SOURCE_MANIFEST_SCHEMA_VERSION,
     STALE_FRESH_HOURS,
     STALE_WARN_HOURS,
@@ -41,6 +43,7 @@ from hosts_editor import (
     build_provenance_log_report,
     build_rule_tier_report,
     build_source_domain_index,
+    build_source_adapter_plugin_sources,
     build_source_health_report,
     build_source_manifest_index,
     build_source_overlap_report,
@@ -165,6 +168,7 @@ from hosts_editor import (
     format_source_overlap_report,
     format_source_metrics_report,
     format_dns_bypass_diagnostics,
+    format_source_adapter_plugin_catalog,
     format_threat_feed_pack_catalog,
     format_threat_feed_pack_plan,
     build_schtasks_create_command,
@@ -185,8 +189,10 @@ from hosts_editor import (
     looks_like_html_document,
     load_blocklist_sources_manifest,
     load_source_bundle_catalog,
+    load_source_adapter_plugin_catalog,
     load_i18n_catalog,
     list_git_history_snapshots,
+    merge_source_adapter_plugin_sources,
     migrate_config_snapshot,
     normalize_locale_code,
     normalize_scheduler_start_time,
@@ -215,6 +221,7 @@ from hosts_editor import (
     sanitize_profile_snapshot,
     sanitize_profiles_snapshot,
     sanitize_source_cache_metadata,
+    sanitize_source_adapter_plugin_manifest,
     sanitize_source_bundle_catalog,
     sanitize_source_manifest,
     sanitize_source_metrics_history,
@@ -726,6 +733,104 @@ class HostsEditorLogicTests(unittest.TestCase):
                 load_blocklist_sources_manifest(str(path)),
                 {"Security": [("Threat Feed", "https://threats.example/hosts.txt", "Threat domains.")]},
             )
+
+    def test_source_adapter_plugin_manifest_is_manifest_only_and_merges_sources(self):
+        manifest = {
+            "schema_version": SOURCE_ADAPTER_PLUGIN_SCHEMA_VERSION,
+            "id": "lab-pack",
+            "name": "Lab Pack",
+            "description": "Internal reviewed feeds.",
+            "homepage": "https://example.com/lab-pack",
+            "maintainer": "Ops",
+            "license": "MIT",
+            "sources": [
+                {
+                    "name": "Lab Threats",
+                    "url": "https://example.com/lab-threats.txt",
+                    "description": "Internal threat feed.",
+                    "category": "Threat Feeds",
+                }
+            ],
+        }
+
+        plugin = sanitize_source_adapter_plugin_manifest(manifest, source_path="plugin.json")
+        self.assertEqual(plugin["schema"], SOURCE_ADAPTER_PLUGIN_SCHEMA)
+        self.assertEqual(plugin["id"], "lab-pack")
+        self.assertEqual(plugin["source_count"], 1)
+
+        plugin_sources = build_source_adapter_plugin_sources([plugin])
+        self.assertEqual(
+            plugin_sources,
+            {
+                "Plugin: Threat Feeds": [
+                    (
+                        "Lab Threats",
+                        "https://example.com/lab-threats.txt",
+                        "Internal threat feed. Plugin: Lab Pack.",
+                    )
+                ]
+            },
+        )
+
+        merged = merge_source_adapter_plugin_sources(
+            {"Curated": [("Curated Feed", "https://curated.example/hosts.txt", "Core feed.")]},
+            plugin_sources,
+        )
+        self.assertIn("Curated", merged)
+        self.assertIn("Plugin: Threat Feeds", merged)
+        self.assertIn("JSON manifests only", format_source_adapter_plugin_catalog({
+            "plugin_dirs": ["C:\\plugins"],
+            "plugins": [plugin],
+            "errors": [],
+            "source_count": 1,
+        }))
+
+    def test_source_adapter_plugin_rejects_invalid_or_ambiguous_sources(self):
+        manifest = {
+            "schema_version": SOURCE_ADAPTER_PLUGIN_SCHEMA_VERSION,
+            "id": "bad-pack",
+            "name": "Bad Pack",
+            "sources": [
+                {"name": "One", "url": "https://example.com/one.txt"},
+                {"name": "one", "url": "https://example.com/two.txt"},
+            ],
+        }
+
+        with self.assertRaises(ValueError):
+            sanitize_source_adapter_plugin_manifest(manifest)
+
+        bad_url = json.loads(json.dumps(manifest))
+        bad_url["sources"] = [{"name": "One", "url": "file:///tmp/hosts.txt"}]
+        with self.assertRaises(ValueError):
+            sanitize_source_adapter_plugin_manifest(bad_url)
+
+    def test_load_source_adapter_plugin_catalog_reports_skipped_manifests(self):
+        import tempfile
+        from pathlib import Path
+
+        good_manifest = {
+            "schema_version": SOURCE_ADAPTER_PLUGIN_SCHEMA_VERSION,
+            "id": "good-pack",
+            "name": "Good Pack",
+            "sources": [{"name": "Good Feed", "url": "https://example.com/good.txt"}],
+        }
+        bad_manifest = {
+            "schema_version": SOURCE_ADAPTER_PLUGIN_SCHEMA_VERSION,
+            "id": "bad-pack",
+            "name": "Bad Pack",
+            "sources": [{"name": "Bad Feed", "url": "ftp://example.com/bad.txt"}],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plugin_dir = Path(tmpdir)
+            (plugin_dir / "good.json").write_text(json.dumps(good_manifest), encoding="utf-8")
+            (plugin_dir / "bad.json").write_text(json.dumps(bad_manifest), encoding="utf-8")
+            catalog = load_source_adapter_plugin_catalog([str(plugin_dir)])
+
+        self.assertEqual(catalog["source_count"], 1)
+        self.assertEqual(catalog["plugins"][0]["id"], "good-pack")
+        self.assertEqual(len(catalog["errors"]), 1)
+        self.assertIn("invalid URL", catalog["errors"][0]["error"])
 
     def test_source_bundle_catalog_sanitizes_manifest_references(self):
         manifest = {
@@ -2422,6 +2527,10 @@ profile:
                 0,
             )
             mocked_export.assert_called_once_with("blocky", "in.txt", "out.txt")
+
+        with mock.patch.object(hosts_editor, "_cli_source_adapter_list", return_value=0) as mocked_adapters:
+            self.assertEqual(hosts_editor._handle_cli_args(["--source-adapter-list", "plugins"]), 0)
+            mocked_adapters.assert_called_once_with(["plugins"])
 
     def test_handle_cli_args_routes_cloud_dns_flags(self):
         with mock.patch.object(hosts_editor, "_cli_cloud_adapter_list", return_value=0) as mocked_list:

@@ -36,6 +36,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - unsaved-change prompts on reload and exit
 - Import pipeline:
   - curated web blocklists from a versioned JSON source manifest
+  - manifest-only local source adapter plugins for reviewed external source packs
   - manifest-defined source bundles for starter, balanced, aggressive, threat-intel, category, and platform-telemetry imports
   - source health reporting for curated feed reachability
   - ETag / Last-Modified refresh cache with cached-body fallback
@@ -242,6 +243,13 @@ python hosts_editor.py --integration-list
 python hosts_editor.py --integration-export adguard-home .\cleaned-hosts.txt .\adguard-dns-filter.txt
 ```
 
+Inspect manifest-only local source adapter plugins:
+
+```powershell
+python hosts_editor.py --source-adapter-list
+python hosts_editor.py --source-adapter-list .\source-adapters
+```
+
 Generate guarded cloud-DNS replay plans or extract blocked domains from cloud DNS CSV log exports:
 
 ```powershell
@@ -344,6 +352,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Troubleshooting and hosts-file limits: `TROUBLESHOOTING.md`
 - Config schema: `docs/config-schema.md`
 - Curated source manifest: `docs/source-manifest.md`
+- Source adapter plugins: `docs/source-adapter-plugins.md`
 - Source bundle selector: `docs/source-bundles.md`
 - Source health checks: `docs/source-health.md`
 - Source trust badges: `docs/source-trust.md`

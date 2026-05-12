@@ -55,6 +55,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `data/blocklist_sources.json` | Versioned curated blocklist catalog loaded at startup |
 | `data/i18n/en-US.json` | Versioned English UI string catalog for future localization |
 | `docs/source-manifest.md` | Curated source manifest schema and maintenance rules |
+| `docs/source-adapter-plugins.md` | Manifest-only source adapter plugin contract and safety boundary |
 | `docs/source-bundles.md` | Manifest-defined source bundle selector behavior and validation rules |
 | `docs/filter-builder.md` | Local filter/query builder syntax, query history, and limits |
 | `docs/watch-expressions.md` | Saved local query watch behavior and limits |
@@ -139,7 +140,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Config sanitation and declarative profiles: `sanitize_custom_sources`, `sanitize_config_snapshot`, `sanitize_filter_query_history`, `sanitize_profile_snapshot`, `sanitize_profiles_snapshot`, `update_active_profile_snapshot`, `parse_declarative_config_text`, `format_declarative_config_payload`, `upsert_profile_in_config`, `set_active_profile_in_config`, `apply_declarative_profile_to_config`, `build_profile_quick_switch_report`, `apply_profile_quick_switch`, `build_profile_tray_availability_report`, `resolve_saved_state_hashes`.
 - Profile schedule helpers: `normalize_profile_activation_days`, `sanitize_profile_activation_schedule`, `evaluate_profile_activation_schedule`, `apply_profile_activation_schedule`, `format_profile_activation_schedule_report`.
 - Config location and portable export: `get_primary_config_path`, `get_config_root_dir`, `build_config_location_report`, `write_portable_bundle_config`, `format_portable_bundle_export_summary`.
-- Source catalog loading: `sanitize_source_manifest`, `load_blocklist_sources_manifest`, `sanitize_source_bundle_catalog`, `load_source_bundle_catalog`, `format_source_bundle_catalog`, `format_source_bundle_report`.
+- Source catalog loading: `sanitize_source_manifest`, `load_blocklist_sources_manifest`, `sanitize_source_adapter_plugin_manifest`, `load_source_adapter_plugin_catalog`, `format_source_adapter_plugin_catalog`, `sanitize_source_bundle_catalog`, `load_source_bundle_catalog`, `format_source_bundle_catalog`, `format_source_bundle_report`.
 - i18n catalog loading: `normalize_locale_code`, `sanitize_i18n_catalog`, `load_i18n_catalog`, `translate_message`, `build_i18n_catalog_report`.
 - Source response caching and import retries: `fetch_source_with_cache`, `fetch_source_with_retries`, `resolve_import_fetch_worker_count`, `sanitize_source_cache_metadata`, `build_source_request_headers`.
 - Source trust display: `build_source_trust_badges`, `source_trust_report_url`, `format_source_trust_details`.
@@ -222,6 +223,7 @@ The CLI functions live near the bottom of `hosts_editor.py` and intentionally sh
 - `_cli_activity_report`
 - `_cli_integration_list`
 - `_cli_integration_export`
+- `_cli_source_adapter_list`
 - `_cli_cloud_adapter_list`
 - `_cli_cloud_adapter_plan`
 - `_cli_cloud_log_import`
@@ -248,6 +250,7 @@ Admin-required CLI actions must fail clearly when not elevated. Source health ch
 | Primary config | `%LOCALAPPDATA%\HostsFileGet\hosts_editor_config.json` | Default per-user config; schema documented in `docs/config-schema.md`; inspect with `--config-location` |
 | Portable config | `hosts_editor_config.json` next to script/exe | Used when present; create/manage with `--portable-export`; same schema as primary config |
 | Curated source manifest | `data/blocklist_sources.json` beside script, exe bundle, or launcher cache | Versioned schema documented in `docs/source-manifest.md` |
+| Source adapter plugins | `source_adapters\*.json` beside the active config location | Optional manifest-only local source packs; no plugin code execution |
 | i18n catalog | `data\i18n\en-US.json` beside script, exe bundle, or launcher cache | Optional versioned UI strings; built-in English fallback is used if the cached catalog is missing |
 | Source response cache | `source_cache\*.bin` beside the active config location | Raw source bodies keyed by normalized URL hash, verified by `source_cache_metadata` |
 | Source metrics history | Active config JSON | Compact local freshness/growth points under `source_metrics_history`, capped per source |
@@ -265,7 +268,7 @@ All writes that can affect the system hosts file should remain previewed or expl
 Current import flow:
 
 1. User selects curated/custom/manual/log/migration source, or a manifest-defined source bundle.
-2. Curated source and bundle metadata comes from the validated bundled source manifest.
+2. Curated source and bundle metadata comes from the validated bundled source manifest; optional source adapter plugin manifests can add local source categories without executing code.
 3. Source rows show locally derived trust badges before import; badges are documented in `docs/source-trust.md`.
 4. Download or file parse happens with size limits and encoding guards; web sources use ETag/Last-Modified conditional requests when cached metadata exists, and migration importers use bounded local file/folder readers.
 5. Source content is decoded and obvious HTML/error pages are rejected.

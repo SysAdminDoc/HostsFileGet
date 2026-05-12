@@ -101,6 +101,11 @@ SOURCE_MANIFEST_SCHEMA_VERSION = 1
 SOURCE_MANIFEST_RELATIVE_PATH = os.path.join("data", "blocklist_sources.json")
 SOURCE_BUNDLE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 SOURCE_BUNDLE_RISK_LEVELS = ("low", "medium", "high", "guarded")
+SOURCE_ADAPTER_PLUGIN_SCHEMA_VERSION = 1
+SOURCE_ADAPTER_PLUGIN_SCHEMA = "hostsfileget.source-adapter-plugin.v1"
+SOURCE_ADAPTER_PLUGIN_DIRNAME = "source_adapters"
+SOURCE_ADAPTER_PLUGIN_MAX_SOURCES = 200
+SOURCE_ADAPTER_PLUGIN_MAX_PLUGINS = 50
 I18N_CATALOG_SCHEMA_VERSION = 1
 DEFAULT_LOCALE = "en-US"
 I18N_CATALOG_RELATIVE_PATH = os.path.join("data", "i18n", f"{DEFAULT_LOCALE}.json")
@@ -987,7 +992,7 @@ class BulkSelectionDialog(tk.Toplevel):
         ttk.Label(header_frame, text="Choose the sources you want to import together.", font=("Segoe UI Semibold", 13)).pack(anchor="w", pady=(4, 0))
         ttk.Label(
             header_frame,
-            text="Selections are downloaded one at a time so progress, failures, and cancellation stay predictable.",
+            text="Selections are downloaded in a bounded parallel batch while output order stays tied to this review list.",
             foreground=PALETTE["subtext"],
             wraplength=640,
             justify="left",
@@ -1127,7 +1132,12 @@ class BulkSelectionDialog(tk.Toplevel):
         cb.pack(side="left", fill="x", expand=True)
         source_host = urllib.parse.urlparse(url).netloc or url
         ttk.Label(row, text=source_host, foreground=PALETTE["subtext"]).pack(side="right", padx=(8, 0))
-        source_kind = "saved" if category == "Custom Sources" else "curated"
+        if category == "Custom Sources":
+            source_kind = "saved"
+        elif str(category).startswith("Plugin:"):
+            source_kind = "external"
+        else:
+            source_kind = "curated"
         last_stamp = self.editor.source_last_fetched.get(url, "") if hasattr(self.editor, "source_last_fetched") else ""
         cache_metadata = self.editor.source_cache_metadata.get(url, {}) if hasattr(self.editor, "source_cache_metadata") else {}
         trust_badges = build_source_trust_badges(
@@ -4064,6 +4074,277 @@ def format_source_bundle_report(bundle: dict | None) -> str:
         source_description = str(source.get("description", "")).strip()
         if source_description:
             lines.append(f"  {source_description}")
+    return "\n".join(lines)
+
+
+def get_source_adapter_plugin_dirs(config_root_dir: str | None = None) -> list[str]:
+    root = config_root_dir or get_config_root_dir()
+    return [os.path.join(root, SOURCE_ADAPTER_PLUGIN_DIRNAME)]
+
+
+def normalize_source_adapter_plugin_dirs(plugin_dirs=None) -> list[str]:
+    if plugin_dirs in (None, "", []):
+        plugin_dirs = get_source_adapter_plugin_dirs()
+    if isinstance(plugin_dirs, (str, os.PathLike)):
+        plugin_dirs = [plugin_dirs]
+    normalized: list[str] = []
+    seen = set()
+    for raw_path in plugin_dirs or []:
+        try:
+            path = os.path.abspath(os.fspath(raw_path)).strip()
+        except TypeError:
+            continue
+        if not path:
+            continue
+        key = os.path.normcase(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(path)
+    return normalized
+
+
+def discover_source_adapter_plugin_files(plugin_dirs=None) -> tuple[list[str], list[dict[str, str]]]:
+    paths: list[str] = []
+    errors: list[dict[str, str]] = []
+    for directory in normalize_source_adapter_plugin_dirs(plugin_dirs):
+        try:
+            names = sorted(os.listdir(directory), key=str.lower)
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            errors.append({"path": directory, "error": str(e)})
+            continue
+        for name in names:
+            if not name.lower().endswith(".json"):
+                continue
+            path = os.path.join(directory, name)
+            if os.path.isfile(path):
+                paths.append(path)
+    return paths, errors
+
+
+def sanitize_source_adapter_plugin_manifest(manifest, source_path: str = "") -> dict:
+    if not isinstance(manifest, dict):
+        raise ValueError("Source adapter plugin manifest must be a JSON object.")
+
+    version = _coerce_source_manifest_schema_version(manifest.get("schema_version"))
+    if version != SOURCE_ADAPTER_PLUGIN_SCHEMA_VERSION:
+        raise ValueError(
+            f"Unsupported source adapter plugin schema_version {manifest.get('schema_version')!r}; "
+            f"expected {SOURCE_ADAPTER_PLUGIN_SCHEMA_VERSION}."
+        )
+
+    plugin_id = sanitize_source_bundle_id(manifest.get("id"))
+    name = str(manifest.get("name", "")).strip()
+    description = str(manifest.get("description", "")).strip()
+    homepage = str(manifest.get("homepage", "")).strip()
+    maintainer = str(manifest.get("maintainer", "")).strip()
+    license_id = str(manifest.get("license", "")).strip()
+
+    if not name or len(name) > 120 or _contains_control_chars(name):
+        raise ValueError(f"Source adapter plugin {plugin_id!r} has an invalid name.")
+    if len(description) > 700 or _contains_control_chars(description):
+        raise ValueError(f"Source adapter plugin {plugin_id!r} has an invalid description.")
+    if homepage and (
+        len(homepage) > 2083
+        or _contains_control_chars(homepage)
+        or _parse_valid_http_source_url(homepage) is None
+    ):
+        raise ValueError(f"Source adapter plugin {plugin_id!r} has an invalid homepage URL.")
+    if len(maintainer) > 160 or _contains_control_chars(maintainer):
+        raise ValueError(f"Source adapter plugin {plugin_id!r} has an invalid maintainer.")
+    if len(license_id) > 80 or _contains_control_chars(license_id):
+        raise ValueError(f"Source adapter plugin {plugin_id!r} has an invalid license.")
+
+    sources = manifest.get("sources")
+    if not isinstance(sources, list) or not sources:
+        raise ValueError(f"Source adapter plugin {plugin_id!r} must contain sources.")
+    if len(sources) > SOURCE_ADAPTER_PLUGIN_MAX_SOURCES:
+        raise ValueError(
+            f"Source adapter plugin {plugin_id!r} has too many sources; "
+            f"maximum is {SOURCE_ADAPTER_PLUGIN_MAX_SOURCES}."
+        )
+
+    sanitized_sources: list[dict[str, str]] = []
+    seen_source_names = set()
+    seen_source_urls = set()
+    for source_index, source_payload in enumerate(sources, start=1):
+        if not isinstance(source_payload, dict):
+            raise ValueError(f"Source adapter plugin {plugin_id!r} source #{source_index} must be an object.")
+        source_name = str(source_payload.get("name", "")).strip()
+        source_url = str(source_payload.get("url", "")).strip()
+        source_description = str(source_payload.get("description", "")).strip()
+        source_category = str(source_payload.get("category", "")).strip() or name
+
+        if not source_name or len(source_name) > 120 or _contains_control_chars(source_name):
+            raise ValueError(f"Source adapter plugin {plugin_id!r} source #{source_index} has an invalid name.")
+        if (
+            not source_url
+            or len(source_url) > 2083
+            or _contains_control_chars(source_url)
+            or _parse_valid_http_source_url(source_url) is None
+        ):
+            raise ValueError(f"Source adapter plugin {plugin_id!r} source {source_name!r} has an invalid URL.")
+        if len(source_description) > 500 or _contains_control_chars(source_description):
+            raise ValueError(f"Source adapter plugin {plugin_id!r} source {source_name!r} has an invalid description.")
+        if len(source_category) > 120 or _contains_control_chars(source_category):
+            raise ValueError(f"Source adapter plugin {plugin_id!r} source {source_name!r} has an invalid category.")
+
+        normalized_source_name = source_name.lower()
+        normalized_source_url = normalize_custom_source_url(source_url)
+        if normalized_source_name in seen_source_names:
+            raise ValueError(f"Source adapter plugin {plugin_id!r} source {source_name!r} is duplicated.")
+        if normalized_source_url in seen_source_urls:
+            raise ValueError(f"Source adapter plugin {plugin_id!r} URL {source_url!r} is duplicated.")
+
+        seen_source_names.add(normalized_source_name)
+        seen_source_urls.add(normalized_source_url)
+        sanitized_sources.append({
+            "name": source_name,
+            "url": source_url,
+            "description": source_description,
+            "category": source_category,
+        })
+
+    return {
+        "schema": SOURCE_ADAPTER_PLUGIN_SCHEMA,
+        "schema_version": SOURCE_ADAPTER_PLUGIN_SCHEMA_VERSION,
+        "id": plugin_id,
+        "name": name,
+        "description": description,
+        "homepage": homepage,
+        "maintainer": maintainer,
+        "license": license_id,
+        "source_path": source_path,
+        "source_count": len(sanitized_sources),
+        "sources": sanitized_sources,
+    }
+
+
+def load_source_adapter_plugin_manifest(path: str) -> dict:
+    try:
+        payload = json.loads(read_text_file_content(path))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Source adapter plugin JSON is invalid: {e}") from e
+    except OSError as e:
+        raise ValueError(f"Source adapter plugin could not be read from {path!r}: {e}") from e
+    return sanitize_source_adapter_plugin_manifest(payload, source_path=path)
+
+
+def build_source_adapter_plugin_sources(plugins) -> dict[str, list[tuple[str, str, str]]]:
+    grouped: dict[str, list[tuple[str, str, str]]] = {}
+    for plugin in plugins or []:
+        if not isinstance(plugin, dict):
+            continue
+        plugin_name = str(plugin.get("name", "")).strip() or str(plugin.get("id", "")).strip() or "Plugin"
+        for source in plugin.get("sources", []):
+            if not isinstance(source, dict):
+                continue
+            name = str(source.get("name", "")).strip()
+            url = str(source.get("url", "")).strip()
+            if not name or not url:
+                continue
+            category = str(source.get("category", "")).strip() or plugin_name
+            description = str(source.get("description", "")).strip()
+            if description:
+                description = f"{description} Plugin: {plugin_name}."
+            else:
+                description = f"Plugin: {plugin_name}."
+            grouped.setdefault(f"Plugin: {category}", []).append((name, url, description))
+    return grouped
+
+
+def merge_source_adapter_plugin_sources(blocklist_sources, plugin_sources) -> dict[str, list[tuple[str, str, str]]]:
+    merged: dict[str, list[tuple[str, str, str]]] = {}
+    for category, sources in (blocklist_sources or {}).items():
+        merged[str(category)] = list(sources or [])
+    for category, sources in (plugin_sources or {}).items():
+        if not sources:
+            continue
+        merged.setdefault(str(category), [])
+        merged[str(category)].extend(list(sources))
+    return merged
+
+
+def load_source_adapter_plugin_catalog(plugin_dirs=None) -> dict:
+    normalized_dirs = normalize_source_adapter_plugin_dirs(plugin_dirs)
+    paths, errors = discover_source_adapter_plugin_files(normalized_dirs)
+    plugins: list[dict] = []
+    seen_ids = set()
+    for path in paths[:SOURCE_ADAPTER_PLUGIN_MAX_PLUGINS]:
+        try:
+            plugin = load_source_adapter_plugin_manifest(path)
+            if plugin["id"] in seen_ids:
+                raise ValueError(f"Source adapter plugin id {plugin['id']!r} is duplicated.")
+            seen_ids.add(plugin["id"])
+            plugins.append(plugin)
+        except ValueError as e:
+            errors.append({"path": path, "error": str(e)})
+    if len(paths) > SOURCE_ADAPTER_PLUGIN_MAX_PLUGINS:
+        errors.append({
+            "path": "; ".join(normalized_dirs),
+            "error": (
+                f"Only the first {SOURCE_ADAPTER_PLUGIN_MAX_PLUGINS} source adapter plugin "
+                f"manifest(s) were loaded."
+            ),
+        })
+    sources_by_category = build_source_adapter_plugin_sources(plugins)
+    return {
+        "schema": SOURCE_ADAPTER_PLUGIN_SCHEMA,
+        "schema_version": SOURCE_ADAPTER_PLUGIN_SCHEMA_VERSION,
+        "plugin_dirs": normalized_dirs,
+        "plugins": plugins,
+        "errors": errors,
+        "source_count": sum(len(sources) for sources in sources_by_category.values()),
+        "sources_by_category": sources_by_category,
+    }
+
+
+def format_source_adapter_plugin_catalog(catalog: dict) -> str:
+    catalog = catalog if isinstance(catalog, dict) else load_source_adapter_plugin_catalog([])
+    plugins = [plugin for plugin in catalog.get("plugins", []) if isinstance(plugin, dict)]
+    errors = [error for error in catalog.get("errors", []) if isinstance(error, dict)]
+    lines = [
+        "Source Adapter Plugins",
+        f"Schema: {SOURCE_ADAPTER_PLUGIN_SCHEMA}",
+        f"Directories: {', '.join(catalog.get('plugin_dirs', [])) or '(none)'}",
+        f"Plugins: {len(plugins)}",
+        f"Sources: {int(catalog.get('source_count') or 0)}",
+        "",
+        "Sandbox: JSON manifests only. Plugin code is not imported or executed.",
+    ]
+    if plugins:
+        lines.extend(["", "Loaded plugins:"])
+        for plugin in plugins:
+            lines.append(
+                f"- {plugin.get('name', 'Unnamed plugin')} "
+                f"({plugin.get('id', '')}; sources: {int(plugin.get('source_count') or 0)})"
+            )
+            description = str(plugin.get("description", "")).strip()
+            if description:
+                lines.append(f"  {description}")
+            homepage = str(plugin.get("homepage", "")).strip()
+            if homepage:
+                lines.append(f"  Homepage: {homepage}")
+            for source in plugin.get("sources", [])[:8]:
+                if isinstance(source, dict):
+                    lines.append(
+                        f"  - {source.get('name', 'Unnamed source')} "
+                        f"[{source.get('category', plugin.get('name', 'Plugin'))}]"
+                    )
+            remaining = int(plugin.get("source_count") or 0) - min(8, int(plugin.get("source_count") or 0))
+            if remaining > 0:
+                lines.append(f"  - ...and {remaining} more")
+    else:
+        lines.extend(["", "- No valid source adapter plugin manifests were found."])
+    if errors:
+        lines.extend(["", "Skipped manifests:"])
+        for error in errors[:10]:
+            lines.append(f"- {error.get('path', '(unknown)')}: {error.get('error', 'unknown error')}")
+        remaining = len(errors) - min(10, len(errors))
+        if remaining > 0:
+            lines.append(f"- ...and {remaining} more")
     return "\n".join(lines)
 
 
@@ -11180,6 +11461,11 @@ class HostsFileEditor:
         self._cached_whitelist_set = frozenset()
         self.config_path = get_primary_config_path(self.CONFIG_FILENAME)
         self.last_open_dir = os.path.expanduser("~")
+        self.source_adapter_plugin_catalog = load_source_adapter_plugin_catalog()
+        self.BLOCKLIST_SOURCES = merge_source_adapter_plugin_sources(
+            self.BLOCKLIST_SOURCES,
+            self.source_adapter_plugin_catalog.get("sources_by_category", {}),
+        )
 
         # Per-session cache of fetched source text keyed by URL so custom
         # sources cannot collide with curated sources that share a label.
@@ -12671,6 +12957,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="Start Tray Quick Switch...", command=self.start_profile_tray_quick_switch)
         tools_menu.add_command(label="DNS Interoperability Pack...", command=self.show_dns_integration_pack)
         tools_menu.add_command(label="Cloud DNS Adapters...", command=self.show_cloud_dns_adapters)
+        tools_menu.add_command(label="Source Adapter Plugins...", command=self.show_source_adapter_plugins)
         tools_menu.add_command(label="Source Bundle Selector...", command=self.show_source_bundle_selector)
         tools_menu.add_command(label="Filter Builder...", command=self.show_filter_builder)
         tools_menu.add_command(label="Watch Expressions...", command=self.show_watch_expressions)
@@ -14186,6 +14473,18 @@ class HostsFileEditor:
             tone="info",
             width=880,
             height=660,
+        )
+
+    def show_source_adapter_plugins(self):
+        catalog = getattr(self, "source_adapter_plugin_catalog", None) or load_source_adapter_plugin_catalog()
+        errors = catalog.get("errors", []) if isinstance(catalog, dict) else []
+        self._show_text_report_dialog(
+            "Source adapter plugins",
+            "Manifest-only local source adapters. No plugin code is imported or executed.",
+            format_source_adapter_plugin_catalog(catalog),
+            tone="warning" if errors else "info",
+            width=920,
+            height=680,
         )
 
     # ----------------------------- Filter Builder ----------------------------
@@ -18898,7 +19197,12 @@ def _cli_update(hosts_path: str) -> int:
     # Reverse-map URL -> display name from the bundled catalog so the output
     # comments look like a GUI batch import.
     reverse: dict[str, str] = {}
-    for sources in HostsFileEditor.BLOCKLIST_SOURCES.values():
+    adapter_catalog = load_source_adapter_plugin_catalog()
+    effective_sources = merge_source_adapter_plugin_sources(
+        HostsFileEditor.BLOCKLIST_SOURCES,
+        adapter_catalog.get("sources_by_category", {}),
+    )
+    for sources in effective_sources.values():
         for name, url, _ in sources:
             reverse[url] = name
     for entry in sanitized.get("custom_sources", []):
@@ -19064,6 +19368,12 @@ def _cli_source_health(output_path: str | None, timeout: float, workers: int, fa
 def _cli_integration_list() -> int:
     _cli_print(format_dns_integration_pack_report())
     return 0
+
+
+def _cli_source_adapter_list(plugin_dirs=None) -> int:
+    catalog = load_source_adapter_plugin_catalog(plugin_dirs)
+    _cli_print(format_source_adapter_plugin_catalog(catalog))
+    return 1 if catalog.get("errors") else 0
 
 
 def _cli_integration_export(pack_id: str, input_path: str, output_path: str) -> int:
@@ -19675,6 +19985,7 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--activity-report-output",
         "--integration-list",
         "--integration-export",
+        "--source-adapter-list",
         "--cloud-adapter-list",
         "--cloud-adapter-plan",
         "--cloud-profile-id",
@@ -19723,6 +20034,7 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--history-restore=",
         "--activity-report-output=",
         "--integration-export=",
+        "--source-adapter-list=",
         "--cloud-adapter-plan=",
         "--cloud-profile-id=",
         "--cloud-log-import=",
@@ -19790,6 +20102,12 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         nargs=3,
         metavar=("PACK", "INPUT", "OUTPUT"),
         help="Export INPUT hosts-like text through a DNS integration PACK to OUTPUT without remote writes.",
+    )
+    parser.add_argument(
+        "--source-adapter-list",
+        nargs="*",
+        metavar="DIR",
+        help="List manifest-only source adapter plugins from DIR or the default config source_adapters directory.",
     )
     parser.add_argument("--cloud-adapter-list", action="store_true", help="List plan-only NextDNS and Control D cloud DNS adapters.")
     parser.add_argument(
@@ -19935,6 +20253,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
             args.integration_export[1],
             args.integration_export[2],
         )
+    if args.source_adapter_list is not None:
+        return _cli_source_adapter_list(args.source_adapter_list)
     if args.cloud_adapter_list:
         return _cli_cloud_adapter_list()
     if args.cloud_adapter_plan:
