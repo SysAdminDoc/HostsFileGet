@@ -52,6 +52,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - find / next / previous navigation
   - remove matching entries with selection + preview
   - adblock syntax linting plus cosmetic/path-rule quarantine for hosts-safe reviews
+  - rule tier reporting for exact, subdomain, wildcard, regex, path, exception, and browser-only rules
   - false-positive triage for whitelist, pin, source-match, and upstream report decisions
   - entry provenance view for import-section ownership, source matches, and local audit events
 - Export adapters:
@@ -234,6 +235,12 @@ python hosts_editor.py --adblock-lint .\filters.txt --adblock-lint-output .\adbl
 python hosts_editor.py --adblock-quarantine .\filters.txt .\filters.hosts-safe.txt
 ```
 
+Inspect exact/wildcard/regex/provider-only rule tiers before hosts conversion:
+
+```powershell
+python hosts_editor.py --rule-tier-report .\filters.txt --rule-tier-output .\rule-tiers.json
+```
+
 Run the deterministic large-file benchmark with:
 
 ```powershell
@@ -260,6 +267,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - DNS interoperability pack: `docs/dns-integrations.md`
 - Cloud DNS adapters: `docs/cloud-dns-adapters.md`
 - Adblock syntax lint: `docs/adblock-lint.md`
+- Rule tier report: `docs/rule-tiers.md`
 - Troubleshooting and hosts-file limits: `TROUBLESHOOTING.md`
 - Config schema: `docs/config-schema.md`
 - Curated source manifest: `docs/source-manifest.md`

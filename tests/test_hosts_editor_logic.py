@@ -35,6 +35,7 @@ from hosts_editor import (
     build_i18n_catalog_report,
     build_entry_provenance_report,
     build_pinned_export_payload,
+    build_rule_tier_report,
     build_source_domain_index,
     build_source_health_report,
     build_source_overlap_report,
@@ -45,6 +46,7 @@ from hosts_editor import (
     check_source_health_record,
     check_source_health_records,
     classify_adblock_rule_line,
+    classify_rule_tier_line,
     classify_source_freshness,
     collect_recent_windows_dns_client_queries,
     collect_dns_bypass_policy_snapshot,
@@ -106,6 +108,7 @@ from hosts_editor import (
     format_accessibility_audit_report,
     format_adblock_syntax_report,
     format_i18n_catalog_report,
+    format_rule_tier_report,
     format_declarative_config_payload,
     format_declarative_profile_summary,
     format_profile_list_summary,
@@ -241,6 +244,45 @@ class HostsEditorLogicTests(unittest.TestCase):
         self.assertEqual(quarantine_report["changed_lines"], 3)
         self.assertEqual(quarantined[0], "0.0.0.0 ads.example")
         self.assertTrue(quarantined[2].startswith("# HostsFileGet quarantined browser-only rule:"))
+
+    def test_rule_tier_classifier_separates_exact_wildcard_regex_and_subdomain_rules(self):
+        exact = classify_rule_tier_line("0.0.0.0 ads.example")
+        custom = classify_rule_tier_line("10.1.2.3 intranet.example")
+        subdomain = classify_rule_tier_line("||tracker.example^")
+        wildcard = classify_rule_tier_line("server-*.example.com")
+        regex = classify_rule_tier_line("/(^|\\.)ads[0-9]+\\.example$/")
+
+        self.assertEqual(exact["category"], "hosts-exact")
+        self.assertTrue(exact["hosts_native"])
+        self.assertEqual(custom["category"], "hosts-custom-mapping")
+        self.assertTrue(custom["hosts_native"])
+        self.assertEqual(subdomain["category"], "subdomain-scoped")
+        self.assertFalse(subdomain["hosts_native"])
+        self.assertIn("one exact line", subdomain["warning"])
+        self.assertEqual(wildcard["tier"], "wildcard")
+        self.assertIn("do not support wildcards", wildcard["warning"])
+        self.assertEqual(regex["tier"], "regex")
+        self.assertIn("cannot evaluate regex", regex["warning"])
+
+    def test_rule_tier_report_summarizes_hosts_warnings(self):
+        lines = [
+            "0.0.0.0 ads.example",
+            "10.0.0.5 intranet.example",
+            "||tracker.example^",
+            "*.tracking.example",
+            "/ads[0-9]+/",
+            "example.com##.ad-banner",
+        ]
+        report = build_rule_tier_report(lines)
+        self.assertEqual(report["hosts_native"], 2)
+        self.assertEqual(report["warning_count"], 4)
+        self.assertEqual(report["tiers"]["exact"], 2)
+        self.assertEqual(report["tiers"]["subdomain-scoped"], 1)
+        self.assertEqual(report["tiers"]["wildcard"], 1)
+        self.assertEqual(report["tiers"]["regex"], 1)
+        rendered = format_rule_tier_report(report)
+        self.assertIn("Rule tier report", rendered)
+        self.assertIn("Windows hosts files are exact hostname mappings", rendered)
 
     def test_clean_stats_do_not_go_negative(self):
         stats = compute_clean_impact_stats(["example.com"], set())
@@ -1729,6 +1771,29 @@ profile:
             self.assertEqual(quarantined[0], "0.0.0.0 ads.example")
             self.assertTrue(quarantined[2].startswith("# HostsFileGet quarantined browser-only rule:"))
 
+    def test_cli_rule_tier_report_writes_review_file(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "rules.txt"
+            report_path = Path(tmpdir) / "rule-tiers.json"
+            input_path.write_text(
+                "0.0.0.0 ads.example\n"
+                "||tracker.example^\n"
+                "*.tracking.example\n"
+                "/ads[0-9]+/\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(hosts_editor, "_cli_print"):
+                self.assertEqual(hosts_editor._cli_rule_tier_report(str(input_path), str(report_path)), 0)
+
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["hosts_native"], 1)
+            self.assertEqual(report["warning_count"], 3)
+            self.assertEqual(report["tiers"]["wildcard"], 1)
+
     def test_handle_cli_args_routes_integration_flags(self):
         with mock.patch.object(hosts_editor, "_cli_integration_list", return_value=0) as mocked_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--integration-list"]), 0)
@@ -1777,6 +1842,14 @@ profile:
                 0,
             )
             mocked_quarantine.assert_called_once_with("filters.txt", "quarantined.txt")
+
+    def test_handle_cli_args_routes_rule_tier_flags(self):
+        with mock.patch.object(hosts_editor, "_cli_rule_tier_report", return_value=0) as mocked_report:
+            self.assertEqual(
+                hosts_editor._handle_cli_args(["--rule-tier-report", "filters.txt", "--rule-tier-output", "tiers.json"]),
+                0,
+            )
+            mocked_report.assert_called_once_with("filters.txt", "tiers.json")
 
     def test_sanitize_config_snapshot_rejects_non_sha256_hashes(self):
         payload = sanitize_config_snapshot(
