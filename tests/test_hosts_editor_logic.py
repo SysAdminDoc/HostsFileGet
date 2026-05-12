@@ -66,7 +66,10 @@ from hosts_editor import (
     discover_import_sections,
     fuzzy_score,
     parse_adguard_home_querylog,
+    parse_gas_mask_archive_path,
+    parse_hostsfileeditor_archive_path,
     parse_pihole_ftl_blocked_domains,
+    parse_switchhosts_export_text,
     parse_windows_dns_client_events_xml,
     summarize_source_contributions,
     export_lines_as_format,
@@ -2275,6 +2278,112 @@ class HostsEditorLogicTests(unittest.TestCase):
         self.assertIn("0.0.0.0 absent.example", cleaned)
         self.assertNotIn("0.0.0.0 tracker.example", cleaned)
         self.assertGreaterEqual(stats["pinned_preserved"], 1)
+
+    # ---- vNext: migration importers ----
+    def test_parse_switchhosts_export_text_accepts_v3_tree(self):
+        payload = {
+            "version": [3, 0, 0, 0],
+            "list": [
+                {
+                    "id": "local-a",
+                    "title": "Local A",
+                    "where": "local",
+                    "content": "# local\n0.0.0.0 a.example\n",
+                },
+                {
+                    "id": "folder",
+                    "title": "Folder",
+                    "where": "folder",
+                    "children": [
+                        {
+                            "id": "remote-b",
+                            "title": "Remote B",
+                            "where": "remote",
+                            "content": "0.0.0.0 b.example\n",
+                        }
+                    ],
+                },
+            ],
+        }
+
+        records = parse_switchhosts_export_text(json.dumps(payload))
+
+        self.assertEqual([record["source"] for record in records], [
+            "SwitchHosts local: Local A",
+            "SwitchHosts remote: Remote B",
+        ])
+        self.assertIn("0.0.0.0 a.example", records[0]["lines"])
+        self.assertIn("0.0.0.0 b.example", records[1]["lines"])
+
+    def test_parse_switchhosts_export_text_accepts_v4_export_data(self):
+        payload = {
+            "version": [4, 2, 0, 0],
+            "data": {
+                "collection": {
+                    "hosts": [
+                        {"id": "one", "type": "local", "content": "0.0.0.0 one.example\n"}
+                    ]
+                },
+                "list": {"tree": [{"id": "one", "title": "One"}]},
+            },
+        }
+
+        records = parse_switchhosts_export_text(json.dumps(payload))
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["source"], "SwitchHosts local: One")
+        self.assertEqual(records[0]["lines"], ["0.0.0.0 one.example"])
+
+    def test_parse_switchhosts_export_text_rejects_unknown_shape(self):
+        with self.assertRaises(ValueError):
+            parse_switchhosts_export_text(json.dumps({"list": []}))
+
+    def test_parse_gas_mask_archive_path_expands_combined_profiles(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            local_dir = root / "Local"
+            remote_dir = root / "Remote"
+            combined_dir = root / "Combined"
+            local_dir.mkdir()
+            remote_dir.mkdir()
+            combined_dir.mkdir()
+            (local_dir / "Work.hst").write_text("0.0.0.0 work.example\n", encoding="utf-8")
+            (remote_dir / "Shared.hst").write_text("0.0.0.0 shared.example\n", encoding="utf-8")
+            (combined_dir / "All.hst").write_text("Local/Work\nRemote/Shared\n", encoding="utf-8")
+
+            records = parse_gas_mask_archive_path(str(root))
+
+        self.assertEqual(
+            [record["source"] for record in records],
+            ["Gas Mask Local: Work", "Gas Mask Remote: Shared", "Gas Mask Combined: All"],
+        )
+        combined = records[2]["lines"]
+        self.assertIn("# Hosts File: Work", combined)
+        self.assertIn("0.0.0.0 work.example", combined)
+        self.assertIn("# Hosts File: Shared", combined)
+        self.assertIn("0.0.0.0 shared.example", combined)
+
+    def test_parse_hostsfileeditor_archive_path_reads_plain_archive_files(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            archive_dir = Path(tmpdir)
+            (archive_dir / "morning").write_text("# saved\n0.0.0.0 morning.example\n", encoding="utf-8")
+            (archive_dir / "empty").write_text("# comment only\n", encoding="utf-8")
+            (archive_dir / "evening").write_text("0.0.0.0 evening.example\n", encoding="utf-8")
+
+            records = parse_hostsfileeditor_archive_path(str(archive_dir))
+
+        self.assertEqual(
+            [record["source"] for record in records],
+            ["HostsFileEditor archive: evening", "HostsFileEditor archive: morning"],
+        )
+        self.assertEqual(records[0]["lines"], ["0.0.0.0 evening.example"])
+        self.assertEqual(records[1]["lines"], ["# saved", "0.0.0.0 morning.example"])
 
     # ---- v2.15: AdGuard Home parser ----
     def test_agh_block_reasons_excludes_allow_and_rewrite(self):

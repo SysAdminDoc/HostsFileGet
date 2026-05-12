@@ -60,6 +60,10 @@ DEFAULT_I18N_MESSAGES = {
     "button.stop_import": "Stop Import",
     "menu.tools.accessibility_audit": "Accessibility Audit...",
     "menu.tools.translation_catalog": "Translation Catalog...",
+    "menu.tools.migration_imports": "Migration Imports",
+    "menu.tools.import_switchhosts": "From SwitchHosts export...",
+    "menu.tools.import_gas_mask": "From Gas Mask folder...",
+    "menu.tools.import_hostsfileeditor": "From HostsFileEditor archive folder...",
     "dialog.accessibility.title": "Accessibility Audit",
     "dialog.accessibility.intro": (
         "Checks contrast ratios, font assumptions, and the manual screen-reader pass list "
@@ -99,6 +103,9 @@ SOURCE_PREVIEW_MAX_LINES = 80
 SOURCE_CORPUS_CACHE_MAX_ENTRY_BYTES = 2 * 1024 * 1024
 SOURCE_CORPUS_CACHE_MAX_TOTAL_BYTES = 16 * 1024 * 1024
 SOURCE_CORPUS_CACHE_MAX_ENTRIES = 24
+MIGRATION_IMPORT_MAX_FILE_BYTES = 10 * 1024 * 1024
+MIGRATION_IMPORT_MAX_TOTAL_BYTES = 50 * 1024 * 1024
+MIGRATION_IMPORT_MAX_FILES = 2_000
 FALSE_POSITIVE_REPORT_MATCH_LIMIT = 30
 SOURCE_TRUST_DOC_PATH = "docs/source-trust.md"
 SOURCE_TRUST_RISK_WORDS = (
@@ -4371,6 +4378,276 @@ def parse_adguard_home_querylog(text: str) -> list[str]:
     return out
 
 
+def _safe_migration_source_name(value: str, fallback: str) -> str:
+    clean = re.sub(r"[\r\n\t\x00-\x1f\x7f]+", " ", str(value or "")).strip()
+    clean = re.sub(r"\s+", " ", clean)
+    if not clean:
+        clean = fallback
+    return clean[:140]
+
+
+def _migration_lines_have_hosts_entries(lines: list[str]) -> bool:
+    for line in lines:
+        entries, _, _ = normalize_line_to_hosts_entries(line)
+        if entries:
+            return True
+    return False
+
+
+def _migration_record(source: str, kind: str, lines: list[str], path: str | None = None) -> dict | None:
+    clean_lines = [str(line).rstrip("\r\n") for line in lines]
+    if not _migration_lines_have_hosts_entries(clean_lines):
+        return None
+    record = {
+        "source": _safe_migration_source_name(source, "Migration Import"),
+        "kind": _safe_migration_source_name(kind, "hosts"),
+        "lines": clean_lines,
+    }
+    if path:
+        record["path"] = str(path)
+    return record
+
+
+def _read_migration_text_file(path: str | os.PathLike) -> tuple[list[str], int]:
+    candidate = pathlib.Path(path)
+    if not candidate.is_file():
+        raise FileNotFoundError(f"Migration import file not found: {candidate}")
+    size = candidate.stat().st_size
+    if size > MIGRATION_IMPORT_MAX_FILE_BYTES:
+        raise ValueError(
+            f"{candidate.name} exceeds the migration import file cap "
+            f"({_format_size_limit(MIGRATION_IMPORT_MAX_FILE_BYTES)})."
+        )
+    with candidate.open("rb") as f:
+        raw = f.read(MIGRATION_IMPORT_MAX_FILE_BYTES + 1)
+    if len(raw) > MIGRATION_IMPORT_MAX_FILE_BYTES:
+        raise ValueError(
+            f"{candidate.name} exceeds the migration import file cap "
+            f"({_format_size_limit(MIGRATION_IMPORT_MAX_FILE_BYTES)})."
+        )
+    return decode_text_bytes(raw).splitlines(), len(raw)
+
+
+def _iter_migration_files(directory: pathlib.Path, *, recursive: bool = False) -> list[pathlib.Path]:
+    if not directory.is_dir():
+        raise FileNotFoundError(f"Migration import directory not found: {directory}")
+    if recursive:
+        iterator = directory.rglob("*")
+    else:
+        iterator = directory.iterdir()
+    files = sorted(path for path in iterator if path.is_file())
+    if len(files) > MIGRATION_IMPORT_MAX_FILES:
+        raise ValueError(
+            f"{directory} contains {len(files):,} files; migration imports are capped at "
+            f"{MIGRATION_IMPORT_MAX_FILES:,} files."
+        )
+    return files
+
+
+def _json_dicts(value):
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _json_dicts(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _json_dicts(child)
+
+
+def _switchhosts_title_map(value) -> dict[str, str]:
+    titles: dict[str, str] = {}
+    for item in _json_dicts(value):
+        item_id = str(item.get("id") or "").strip()
+        if not item_id:
+            continue
+        title = item.get("title") or item.get("name") or item.get("url") or ""
+        clean_title = _safe_migration_source_name(str(title), "")
+        if clean_title:
+            titles.setdefault(item_id, clean_title)
+    return titles
+
+
+def parse_switchhosts_export_text(text: str) -> list[dict]:
+    """Extract hosts records from SwitchHosts v3/v4 JSON exports."""
+    if not text.strip():
+        raise ValueError("SwitchHosts export is empty.")
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"SwitchHosts export JSON is invalid: {e}") from e
+    if not isinstance(payload, dict):
+        raise ValueError("SwitchHosts export must be a JSON object.")
+    version = payload.get("version")
+    if not isinstance(version, list) or not version:
+        raise ValueError("SwitchHosts export is missing its version array.")
+    try:
+        major_version = int(version[0])
+    except (TypeError, ValueError) as e:
+        raise ValueError("SwitchHosts export version is invalid.") from e
+    if major_version > 4:
+        raise ValueError(f"SwitchHosts export version {major_version} is newer than this importer understands.")
+
+    search_root = payload if major_version == 3 else payload.get("data")
+    if not isinstance(search_root, (dict, list)):
+        raise ValueError("SwitchHosts export does not contain an importable data object.")
+
+    title_map = _switchhosts_title_map(payload)
+    records: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for item in _json_dicts(search_root):
+        content = item.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        item_id = str(item.get("id") or "").strip()
+        title = (
+            title_map.get(item_id)
+            or _safe_migration_source_name(str(item.get("title") or item.get("name") or item_id), "hosts")
+        )
+        item_type = _safe_migration_source_name(
+            str(item.get("type") or item.get("where") or ("remote" if item.get("url") else "local")),
+            "local",
+        )
+        source = f"SwitchHosts {item_type}: {title}"
+        lines = content.splitlines()
+        dedupe_key = (source, "\n".join(lines))
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        record = _migration_record(source, item_type, lines)
+        if record:
+            records.append(record)
+    return records
+
+
+def _append_migration_file_record(
+    records: list[dict],
+    source: str,
+    kind: str,
+    path: pathlib.Path,
+    total_bytes: int,
+) -> int:
+    lines, byte_count = _read_migration_text_file(path)
+    total_bytes += byte_count
+    if total_bytes > MIGRATION_IMPORT_MAX_TOTAL_BYTES:
+        raise ValueError(
+            f"Migration import exceeds the total cap "
+            f"({_format_size_limit(MIGRATION_IMPORT_MAX_TOTAL_BYTES)})."
+        )
+    record = _migration_record(source, kind, lines, str(path))
+    if record:
+        records.append(record)
+    return total_bytes
+
+
+def parse_gas_mask_archive_path(path: str) -> list[dict]:
+    """Read Gas Mask Local/Remote/Combined archive folders as hosts records."""
+    root = pathlib.Path(path)
+    records: list[dict] = []
+    total_bytes = 0
+    if root.is_file():
+        total_bytes = _append_migration_file_record(records, f"Gas Mask: {root.stem}", "gasmask", root, total_bytes)
+        return records
+    if not root.is_dir():
+        raise FileNotFoundError(f"Gas Mask folder not found: {path}")
+
+    known_dirs = {
+        "Local": root / "Local",
+        "Remote": root / "Remote",
+        "Combined": root / "Combined",
+    }
+    has_known_layout = any(candidate.is_dir() for candidate in known_dirs.values())
+    host_registry: dict[tuple[str, str], dict] = {}
+
+    if has_known_layout:
+        for type_name in ("Local", "Remote"):
+            directory = known_dirs[type_name]
+            if not directory.is_dir():
+                continue
+            for file_path in _iter_migration_files(directory):
+                before = len(records)
+                total_bytes = _append_migration_file_record(
+                    records,
+                    f"Gas Mask {type_name}: {file_path.stem}",
+                    type_name.lower(),
+                    file_path,
+                    total_bytes,
+                )
+                if len(records) > before:
+                    host_registry[(type_name, file_path.stem)] = records[-1]
+
+        combined_dir = known_dirs["Combined"]
+        if combined_dir.is_dir():
+            for file_path in _iter_migration_files(combined_dir):
+                ref_lines, byte_count = _read_migration_text_file(file_path)
+                total_bytes += byte_count
+                if total_bytes > MIGRATION_IMPORT_MAX_TOTAL_BYTES:
+                    raise ValueError(
+                        f"Migration import exceeds the total cap "
+                        f"({_format_size_limit(MIGRATION_IMPORT_MAX_TOTAL_BYTES)})."
+                    )
+                expanded_lines: list[str] = []
+                for ref in ref_lines:
+                    ref = ref.strip()
+                    if not ref or "/" not in ref:
+                        continue
+                    ref_type, ref_name = ref.split("/", 1)
+                    linked = host_registry.get((ref_type, ref_name))
+                    if not linked:
+                        continue
+                    if expanded_lines:
+                        expanded_lines.append("")
+                    expanded_lines.extend([f"# Hosts File: {ref_name}", ""])
+                    expanded_lines.extend(linked["lines"])
+                if not expanded_lines and _migration_lines_have_hosts_entries(ref_lines):
+                    expanded_lines = ref_lines
+                record = _migration_record(
+                    f"Gas Mask Combined: {file_path.stem}",
+                    "combined",
+                    expanded_lines,
+                    str(file_path),
+                )
+                if record:
+                    records.append(record)
+    else:
+        for file_path in _iter_migration_files(root):
+            total_bytes = _append_migration_file_record(
+                records,
+                f"Gas Mask: {file_path.stem}",
+                "gasmask",
+                file_path,
+                total_bytes,
+            )
+
+    return records
+
+
+def parse_hostsfileeditor_archive_path(path: str) -> list[dict]:
+    """Read HostsFileEditor archive files, which are plain hosts text files."""
+    root = pathlib.Path(path)
+    records: list[dict] = []
+    total_bytes = 0
+    if root.is_file():
+        total_bytes = _append_migration_file_record(
+            records,
+            f"HostsFileEditor archive: {root.name}",
+            "hostsfileeditor",
+            root,
+            total_bytes,
+        )
+        return records
+    if not root.is_dir():
+        raise FileNotFoundError(f"HostsFileEditor archive path not found: {path}")
+    for file_path in _iter_migration_files(root):
+        total_bytes = _append_migration_file_record(
+            records,
+            f"HostsFileEditor archive: {file_path.name}",
+            "hostsfileeditor",
+            file_path,
+            total_bytes,
+        )
+    return records
+
+
 def apply_find_replace(
     lines: list[str],
     pattern: str,
@@ -5069,6 +5346,22 @@ class HostsFileEditor:
         ).pack(fill="x", pady=2)
         self._register_import_widget(
             self._btn(local_import_frame, "From Windows DNS Snapshot", self.import_windows_dns_client_snapshot, "Read recent local Windows DNS Client query events.")
+        ).pack(fill="x", pady=2)
+
+        migration_frame, _ = self._create_inset_section_card(
+            import_frame,
+            "Migration Archives",
+            "Append profiles exported by other hosts editors.",
+            accent=PALETTE["yellow"],
+        )
+        self._register_import_widget(
+            self._btn(migration_frame, "From SwitchHosts Export", self.import_switchhosts_export, "Import hosts profiles from a SwitchHosts JSON export.")
+        ).pack(fill="x", pady=2)
+        self._register_import_widget(
+            self._btn(migration_frame, "From Gas Mask Folder", self.import_gas_mask_archive, "Import Local, Remote, and Combined hosts profiles from a Gas Mask folder.")
+        ).pack(fill="x", pady=2)
+        self._register_import_widget(
+            self._btn(migration_frame, "From HostsFileEditor Archive", self.import_hostsfileeditor_archive, "Import plain hosts archives from a HostsFileEditor archive folder.")
         ).pack(fill="x", pady=2)
 
         source_catalog, _ = self._create_inset_section_card(
@@ -6197,6 +6490,13 @@ class HostsFileEditor:
         import_menu.add_command(label="From Windows DNS Client snapshot...", command=self.import_windows_dns_client_snapshot)
         tools_menu.add_cascade(label="Import DNS Queries From Logs", menu=import_menu)
         tools_menu.add_separator()
+        migration_menu = tk.Menu(tools_menu, tearoff=0, bg=PALETTE["mantle"], fg=PALETTE["text"],
+                                 activebackground=PALETTE["blue"], activeforeground="#0b1020")
+        migration_menu.add_command(label=self.t("menu.tools.import_switchhosts"), command=self.import_switchhosts_export)
+        migration_menu.add_command(label=self.t("menu.tools.import_gas_mask"), command=self.import_gas_mask_archive)
+        migration_menu.add_command(label=self.t("menu.tools.import_hostsfileeditor"), command=self.import_hostsfileeditor_archive)
+        tools_menu.add_cascade(label=self.t("menu.tools.migration_imports"), menu=migration_menu)
+        tools_menu.add_separator()
         tools_menu.add_command(label="Schedule Auto-Update...", command=self.show_schedule_wizard)
         tools_menu.add_command(label="Preferences...", command=self.show_preferences)
         tools_menu.add_command(label=self.t("menu.tools.accessibility_audit"), command=self.show_accessibility_audit)
@@ -6582,6 +6882,16 @@ class HostsFileEditor:
         )
         if selected_path:
             self.last_open_dir = os.path.dirname(selected_path)
+        return selected_path
+
+    def _choose_directory(self, title):
+        initial_dir = self.last_open_dir if os.path.isdir(self.last_open_dir) else os.path.expanduser("~")
+        selected_path = filedialog.askdirectory(
+            title=title,
+            initialdir=initial_dir,
+        )
+        if selected_path:
+            self.last_open_dir = selected_path
         return selected_path
 
     def load_config(self):
@@ -9592,6 +9902,105 @@ class HostsFileEditor:
             self._safe_after(100, self._check_import_queue)
 
     # ----------------------------- File Imports -------------------
+
+    def _apply_migration_import_records(self, source_label: str, records: list[dict]) -> bool:
+        if not records:
+            self.update_status(f"No usable hosts entries were found in {source_label}.", is_error=True)
+            return False
+
+        import_mode = self.import_mode.get()
+        new_lines: list[str] = []
+        imported_sections = 0
+        imported_entry_count = 0
+        for record in records:
+            source_name = record.get("source") or source_label
+            source_lines = record.get("lines") or []
+            if not isinstance(source_lines, list):
+                continue
+            processed = self._apply_import_mode_filter(str(source_name), source_lines, import_mode)
+            if not processed:
+                continue
+            if new_lines and new_lines[-1].strip() != "":
+                new_lines.append("")
+            new_lines.extend(processed)
+            imported_sections += 1
+            imported_entry_count += sum(
+                len(normalize_line_to_hosts_entries(line)[0])
+                for line in source_lines
+            )
+
+        if not new_lines:
+            self.update_status(f"No usable entries were found in {source_label}.", is_error=True)
+            return False
+
+        current_lines = self.get_lines()
+        if current_lines and current_lines[-1].strip() != "":
+            current_lines.append("")
+        current_lines.extend(new_lines)
+        self.set_text(current_lines)
+        self.update_status(
+            f"Success: Imported {imported_sections} {source_label} section(s), "
+            f"{imported_entry_count:,} parsed entr{'y' if imported_entry_count == 1 else 'ies'}."
+        )
+        return True
+
+    def import_switchhosts_export(self):
+        if self._block_during_import("SwitchHosts import"):
+            return
+        filepath = self._choose_file(
+            title="Select SwitchHosts JSON export",
+            filetypes=(("SwitchHosts JSON", "*.json"), ("All files", "*.*")),
+        )
+        if not filepath:
+            return
+        try:
+            lines, _byte_count = _read_migration_text_file(filepath)
+            records = parse_switchhosts_export_text("\n".join(lines))
+            self._apply_migration_import_records("SwitchHosts", records)
+        except Exception as e:
+            self.update_status(f"SwitchHosts import failed: {e}", is_error=True)
+            self._show_notice_dialog(
+                "Could not import SwitchHosts export",
+                "The selected JSON file could not be parsed as a supported SwitchHosts export.",
+                tone="error",
+                details=str(e),
+            )
+
+    def import_gas_mask_archive(self):
+        if self._block_during_import("Gas Mask import"):
+            return
+        folder = self._choose_directory("Select Gas Mask folder")
+        if not folder:
+            return
+        try:
+            records = parse_gas_mask_archive_path(folder)
+            self._apply_migration_import_records("Gas Mask", records)
+        except Exception as e:
+            self.update_status(f"Gas Mask import failed: {e}", is_error=True)
+            self._show_notice_dialog(
+                "Could not import Gas Mask folder",
+                "The selected folder could not be parsed as a Gas Mask Local/Remote/Combined archive.",
+                tone="error",
+                details=str(e),
+            )
+
+    def import_hostsfileeditor_archive(self):
+        if self._block_during_import("HostsFileEditor import"):
+            return
+        folder = self._choose_directory("Select HostsFileEditor archive folder")
+        if not folder:
+            return
+        try:
+            records = parse_hostsfileeditor_archive_path(folder)
+            self._apply_migration_import_records("HostsFileEditor", records)
+        except Exception as e:
+            self.update_status(f"HostsFileEditor import failed: {e}", is_error=True)
+            self._show_notice_dialog(
+                "Could not import HostsFileEditor archive",
+                "The selected folder could not be parsed as HostsFileEditor plain hosts archives.",
+                tone="error",
+                details=str(e),
+            )
             
     def import_pfsense_log(self):
         filepath = self._choose_file(

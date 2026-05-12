@@ -49,6 +49,7 @@ It is not a DNS server, browser ad blocker, cloud filtering service, or endpoint
 | `docs/entry-provenance.md` | Line-level provenance/blame report behavior and limits |
 | `docs/windows-dns-client.md` | Windows DNS Client Operational snapshot import behavior and limits |
 | `docs/dns-bypass-diagnostics.md` | Browser encrypted-DNS/proxy bypass diagnostic behavior and limits |
+| `docs/migration-imports.md` | SwitchHosts, Gas Mask, and HostsFileEditor archive import behavior and limits |
 | `docs/accessibility.md` | Contrast audit, font assumptions, and manual Windows accessibility release checks |
 | `docs/i18n.md` | String catalog schema, fallback behavior, and localization guardrails |
 | `CLAUDE.md` | Compact architecture and gotchas snapshot for agents |
@@ -110,6 +111,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Source analytics: `find_sources_containing_domain`, `summarize_source_contributions`, `build_source_domain_index`, `build_source_overlap_report`, `categorize_entries_by_domain_hint`, `classify_source_freshness`.
 - Provenance and pinned-domain helpers: `append_provenance_event`, `read_provenance_events`, `build_entry_provenance_report`, `format_entry_provenance_report`, `build_pinned_export_payload`, `parse_pinned_import_payload`, `sanitize_pinned_domains`.
 - Log importers: `parse_pihole_ftl_blocked_domains`, `parse_adguard_home_querylog`.
+- Migration importers: `parse_switchhosts_export_text`, `parse_gas_mask_archive_path`, `parse_hostsfileeditor_archive_path`.
 - Bulk text transformations: `apply_find_replace`, `discover_import_sections`, `remove_import_section`.
 
 When implementing roadmap features, extend this layer first, add tests, then connect it to the GUI.
@@ -177,10 +179,10 @@ All writes that can affect the system hosts file should remain previewed or expl
 
 Current import flow:
 
-1. User selects curated/custom/manual/log source.
+1. User selects curated/custom/manual/log/migration source.
 2. Curated source metadata comes from the validated bundled source manifest.
 3. Source rows show locally derived trust badges before import; badges are documented in `docs/source-trust.md`.
-4. Download or file parse happens with size limits and encoding guards; web sources use ETag/Last-Modified conditional requests when cached metadata exists.
+4. Download or file parse happens with size limits and encoding guards; web sources use ETag/Last-Modified conditional requests when cached metadata exists, and migration importers use bounded local file/folder readers.
 5. Source content is decoded and obvious HTML/error pages are rejected.
 6. Import mode determines whether entries are appended raw or normalized.
 7. Generated import sections are marked with sanitized source names.
