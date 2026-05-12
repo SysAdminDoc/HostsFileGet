@@ -39,6 +39,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F017 complete. Next roadmap item: F018 GUI smoke tests.
 - Completed F018: added `tests/test_gui_smoke.py` with patched Tk startup coverage and About/Preferences modal construction smoke tests, skipping cleanly when no Tk root is available.
 - Updated `ROADMAP.md` to mark F018 complete. Next roadmap item: F019 large-file benchmark suite.
+- Completed F019: added deterministic large-file benchmark generation/timing/reporting, docs, CI compilation coverage, a smoke test without timing assertions, and a local 5,000-line sample run.
+- Updated `ROADMAP.md` to mark F019 complete. Next roadmap item: F020 high-contrast, screen-reader, and font audit.
 
 ## Scope
 

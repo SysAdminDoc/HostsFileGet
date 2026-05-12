@@ -38,7 +38,7 @@ Non-negotiables:
 - [x] F016 - Golden-file cleaned-output tests (`tests/golden_cleaned/`, exact output/stat fixtures)
 - [x] F017 - Property-based parser/fuzzer tests (deterministic parser invariant and clean-idempotence fuzzers)
 - [x] F018 - GUI smoke tests (`tests/test_gui_smoke.py`, patched startup/modal coverage)
-- [ ] F019 - Large-file benchmark suite
+- [x] F019 - Large-file benchmark suite (`benchmarks/large_file_benchmark.py`, docs, smoke coverage)
 - [ ] F020 - High-contrast, screen-reader, and font audit
 - [ ] F021 - i18n string catalog foundation
 - [ ] F022 - Importers for SwitchHosts, Gas Mask, HostsFileEditor archives
@@ -52,7 +52,7 @@ Non-negotiables:
 - Language and runtime: Python 3.x, Tkinter desktop UI, Windows-first assumptions, PowerShell launcher.
 - Entry points: `hosts_editor.py` for GUI and CLI, `PythonLauncher.ps1` for elevated launch/bootstrap, `HostsFileGet.spec` for PyInstaller.
 - Packaging: PyInstaller one-file Windows EXE with `uac_admin=True`; build artifacts exist locally under `build/` and `dist/` but are not tracked.
-- Tests: `tests/test_hosts_editor_logic.py` and `tests/test_gui_smoke.py` contain 159 tests plus manifest-driven golden cleaned-output fixtures and deterministic parser fuzzers covering parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, and find/replace.
+- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 160 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, and find/replace.
 - Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `LICENSE`, and this roadmap.
 - License: MIT.
 
@@ -272,9 +272,9 @@ Legend:
 6. Completed - Golden cleaned-output fixtures: F016.
 7. Completed - Parser/fuzzer quality gate: F017.
 8. Completed - GUI smoke quality gate: F018.
-9. Next - Benchmark quality gate: F019.
+9. Completed - Benchmark quality gate: F019.
 10. Migration/export interoperability: F022, F023.
-11. Accessibility and i18n foundations: F020, F021.
+11. Next - Accessibility and i18n foundations: F020, F021.
 
 Rationale: these items reduce maintenance risk, make the current product more trustworthy, and create the internal contracts needed for the larger profile/integration work.
 

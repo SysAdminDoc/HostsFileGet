@@ -27,6 +27,8 @@ It is not a DNS server, browser ad blocker, cloud filtering service, or endpoint
 | `.github/workflows/source-health.yml` | Scheduled/manual curated-source reachability report |
 | `tests/test_hosts_editor_logic.py` | Regression suite for pure logic, deterministic parser fuzzers, golden cleaned-output fixtures, and selected GUI-adjacent helper paths |
 | `tests/test_gui_smoke.py` | Tk smoke tests for patched main-window startup and basic modal construction; skips when Tk cannot create a root |
+| `tests/test_benchmarks.py` | Smoke coverage for the benchmark harness without enforcing hardware-dependent timing budgets |
+| `benchmarks/large_file_benchmark.py` | Deterministic large-file parser/cleaner benchmark with human and JSON output |
 
 ## Repository Layout
 
@@ -205,11 +207,12 @@ The current suite is intentionally pure-function heavy because Tkinter GUI tests
 
 Required before large refactors:
 
-- Keep `python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py tests\test_gui_smoke.py` green.
+- Keep `python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py tests\test_gui_smoke.py tests\test_benchmarks.py benchmarks\large_file_benchmark.py` green.
 - Keep `python -m unittest discover -s tests -v` green.
 - Keep deterministic fuzz tests seeded; change seeds only when deliberately expanding coverage.
 - Update `tests/golden_cleaned/` fixtures intentionally when parser/normalizer behavior changes.
 - Keep GUI smoke tests non-destructive: patch admin checks, config load, hosts-file load, first-run, and auto-update paths.
+- Keep benchmark tests free of timing assertions; use `benchmarks/large_file_benchmark.py --max-clean-seconds` only on known hardware.
 - Keep source-manifest schema tests green before changing curated source metadata.
 - Keep source-health tests mocked; live source failures belong in the scheduled report artifact, not normal unit tests.
 - Add a minimal GUI smoke test only after CI is available.
