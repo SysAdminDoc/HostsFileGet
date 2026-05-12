@@ -1,7 +1,7 @@
 # HostsFileGet Roadmap
 
 Version: 2026-05-12 roadmap execution update
-Repo state basis: `main` through F036 implementation plus external research current to 2026-05-12
+Repo state basis: `main` through F037 implementation plus external research current to 2026-05-12
 Scope: Windows-first desktop hosts-file editor, importer, cleaner, diagnostics, and safe writer
 
 This document supersedes the earlier broad idea dump. Useful shipped history has been preserved as baseline context, but the forward roadmap is now source-backed and tiered. Every active candidate cites at least one source ID from the appendix.
@@ -56,6 +56,7 @@ Non-negotiables:
 - [x] F034 - IDN/punycode and homograph warnings (`docs/idn-homograph.md`, IDN report CLI, deterministic mixed-script/confusable warnings)
 - [x] F035 - NRD/DGA threat feed pack (`docs/threat-feed-packs.md`, guarded TIF/DGA/NRD pack plans, source-manifest entries)
 - [x] F036 - CNAME cloaking source and explanation workflow (`docs/cname-cloaking.md`, guarded hosts/DNS workflow plans, source-manifest entries)
+- [x] F037 - Encrypted DNS resolver bypass pack (`docs/encrypted-dns-bypass.md`, guarded hosts/router/firewall bypass plans, source-manifest entries)
 
 ## State Of The Repo
 
@@ -64,8 +65,8 @@ Non-negotiables:
 - Language and runtime: Python 3.x, Tkinter desktop UI, Windows-first assumptions, PowerShell launcher.
 - Entry points: `hosts_editor.py` for GUI and CLI, `PythonLauncher.ps1` for elevated launch/bootstrap, `HostsFileGet.spec` for PyInstaller.
 - Packaging: PyInstaller one-file Windows EXE with `uac_admin=True`; build artifacts exist locally under `build/` and `dist/` but are not tracked.
-- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 227 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation, migration importer fixtures, export-format fixtures, DNS integration fixtures, cloud DNS adapter fixtures, adblock syntax lint/quarantine fixtures, rule tier fixtures, IDN/homograph fixtures, threat-feed pack fixtures, CNAME cloaking workflow fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, NextDNS/Control D CSV logs, and find/replace.
-- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/cloud-dns-adapters.md`, `docs/adblock-lint.md`, `docs/rule-tiers.md`, `docs/idn-homograph.md`, `docs/threat-feed-packs.md`, `docs/cname-cloaking.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `LICENSE`, and this roadmap.
+- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 231 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation, migration importer fixtures, export-format fixtures, DNS integration fixtures, cloud DNS adapter fixtures, adblock syntax lint/quarantine fixtures, rule tier fixtures, IDN/homograph fixtures, threat-feed pack fixtures, CNAME cloaking workflow fixtures, encrypted-DNS bypass pack fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, NextDNS/Control D CSV logs, and find/replace.
+- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/cloud-dns-adapters.md`, `docs/adblock-lint.md`, `docs/rule-tiers.md`, `docs/idn-homograph.md`, `docs/threat-feed-packs.md`, `docs/cname-cloaking.md`, `docs/encrypted-dns-bypass.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `LICENSE`, and this roadmap.
 - License: MIT.
 
 ### Product Reality
@@ -86,6 +87,7 @@ HostsFileGet already provides:
 - `--idn-report` and `--idn-output` explain IDN/Punycode, mixed-script, and obvious confusable homograph candidates without changing cleaned output.
 - `--threat-feed-list` and `--threat-feed-plan` expose guarded TIF/DGA/NRD feed packs with local JSON plans, freshness policy, and false-positive controls.
 - `--cname-cloaking-list` and `--cname-cloaking-plan` expose guarded CNAME cloaking workflows that separate exact disguised-domain imports from DNS-only CNAME target and RPZ handoffs.
+- `--encrypted-dns-bypass-list` and `--encrypted-dns-bypass-plan` expose guarded encrypted-DNS bypass packs that separate hosts review from router/firewall/RPZ/IP handoffs.
 - Optional local Git-backed history commands for snapshot, status, and admin-gated rollback with normal `.bak` backup creation.
 - Live stats, category hints, source report, health scan, DNS flush, domain check, find/replace, cleanup commands, import-section removal, backup diff, pinned domains, and export formats.
 
@@ -305,13 +307,13 @@ Legend:
 15. Completed - Guarded cloud DNS adapters: F031.
 16. Completed - Adblock syntax lint and quarantine: F032.
 17. Completed - Rule tier warnings: F033.
-18. Completed - IDN, threat feed, and CNAME security reviews: F034, F035, F036.
+18. Completed - IDN, threat feed, CNAME, and encrypted-DNS bypass security reviews: F034, F035, F036, F037.
 
 Rationale: these items reduce maintenance risk, make the current product more trustworthy, and create the internal contracts needed for the larger profile/integration work.
 
 ### Next
 
-1. Security packs and rule intelligence: F037, F038, F039, F040.
+1. Security packs and rule intelligence: F038, F039, F040.
 2. Faster large-scale operations: F041, F042, F043, F047, F048, F049, F050, F051.
 3. Packaging, plugin, collaboration growth: F045, F046, F052, F053, F054, F055.
 5. Recovery spike: F044.

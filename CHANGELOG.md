@@ -145,6 +145,12 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added an AdGuard CNAME disguised-domain source-manifest category and clarified that the existing NextDNS CNAME target feed is DNS-handoff-only.
 - Documented hosts-file limits, RPZ/DNS handoff guidance, and source basis in `docs/cname-cloaking.md`.
 
+**Encrypted DNS bypass packs**
+- Added guarded encrypted-DNS bypass pack planning that separates hosts-reviewable resolver hostname feeds from router/firewall/RPZ/IP handoffs.
+- Added **Tools > Encrypted DNS Bypass Packs...**, `--encrypted-dns-bypass-list`, and `--encrypted-dns-bypass-plan PACK OUTPUT` for local review JSON without firewall or remote writes.
+- Added curated HaGeZi encrypted-DNS bypass source entries with explicit breakage and network-policy caveats.
+- Documented DoH/DoT/DoQ hosts-file limits, router/firewall controls, and source basis in `docs/encrypted-dns-bypass.md`.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

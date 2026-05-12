@@ -777,6 +777,21 @@
       ]
     },
     {
+      "name": "Encrypted DNS / Bypass",
+      "sources": [
+        {
+          "name": "HaGeZi Encrypted DNS Bypass Hosts",
+          "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/doh.txt",
+          "description": "Known encrypted-DNS resolver hostnames. Hosts-reviewable only for clients that use the OS resolver."
+        },
+        {
+          "name": "HaGeZi DoH VPN TOR Proxy Bypass",
+          "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/doh-vpn-proxy-bypass.txt",
+          "description": "Broad encrypted DNS, VPN, Tor, and proxy bypass list. High breakage risk; run adblock lint and triage first."
+        }
+      ]
+    },
+    {
       "name": "Threat Intelligence / NRD / DGA",
       "sources": [
         {

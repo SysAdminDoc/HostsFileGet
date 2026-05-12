@@ -5846,6 +5846,130 @@ CNAME_CLOAKING_PACK_ALIASES = {
     "nextdns": "cname-aware-dns",
     "rpz": "rpz-dns",
 }
+ENCRYPTED_DNS_BYPASS_WARNINGS = (
+    "Hosts files can block known resolver hostnames only when clients still ask the OS resolver.",
+    "DoH, DoT, DoQ, VPN, Tor, proxy, and hardcoded resolver bypass control requires router/firewall or managed endpoint policy.",
+    "Blocking public resolver domains, VPNs, Tor, or proxies can break privacy tools, developer workflows, and enterprise access.",
+)
+ENCRYPTED_DNS_BYPASS_SOURCES = (
+    {
+        "id": "hagezi-doh-hosts",
+        "name": "HaGeZi Encrypted DNS Bypass Hosts",
+        "source_type": "encrypted-dns-hosts",
+        "format": "hosts",
+        "url": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/doh.txt",
+        "hosts_file_fit": "review-import",
+        "enforcement_requirement": "Hosts import can block known DoH bootstrap hostnames only for OS-resolver traffic.",
+        "risk": "medium",
+        "description": "Encrypted DNS server hostnames in hosts-file format.",
+        "source_ids": ("O10", "S7", "S8", "K1"),
+    },
+    {
+        "id": "hagezi-doh-vpn-proxy-adblock",
+        "name": "HaGeZi DoH/VPN/TOR/Proxy Bypass",
+        "source_type": "bypass-services",
+        "format": "adblock",
+        "url": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/doh-vpn-proxy-bypass.txt",
+        "hosts_file_fit": "lint-before-import",
+        "enforcement_requirement": "Review with adblock lint and pair with network egress policy.",
+        "risk": "high",
+        "description": "Broad bypass-service blocklist covering encrypted DNS, VPN, Tor, and proxies.",
+        "source_ids": ("O10", "K1"),
+    },
+    {
+        "id": "hagezi-doh-vpn-proxy-domains",
+        "name": "HaGeZi DoH/VPN/TOR/Proxy Domains",
+        "source_type": "bypass-service-domains",
+        "format": "domains",
+        "url": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/doh-vpn-proxy-bypass-onlydomains.txt",
+        "hosts_file_fit": "dns-handoff",
+        "enforcement_requirement": "Wildcard-capable DNS, firewall URL table, or provider-side policy.",
+        "risk": "high",
+        "description": "Domain-only bypass-service feed for wildcard-capable DNS tools.",
+        "source_ids": ("O10", "K1"),
+    },
+    {
+        "id": "hagezi-doh-vpn-proxy-rpz",
+        "name": "HaGeZi DoH/VPN/TOR/Proxy RPZ",
+        "source_type": "bypass-service-rpz",
+        "format": "rpz",
+        "url": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/rpz/doh-vpn-proxy-bypass.txt",
+        "hosts_file_fit": "dns-handoff",
+        "enforcement_requirement": "RPZ-capable DNS resolver with documented rollback.",
+        "risk": "high",
+        "description": "RPZ form of the broad bypass-service blocklist.",
+        "source_ids": ("O10", "K1"),
+    },
+    {
+        "id": "hagezi-doh-ips",
+        "name": "HaGeZi Encrypted DNS Server IPs",
+        "source_type": "encrypted-dns-ips",
+        "format": "ip-list",
+        "url": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/ips/doh.txt",
+        "hosts_file_fit": "firewall-only",
+        "enforcement_requirement": "Firewall, router, or DNS server IP blocking; not a hosts-file source.",
+        "risk": "high",
+        "description": "Known encrypted DNS server IPv4 list for network egress policy.",
+        "source_ids": ("O10", "S8", "K1"),
+    },
+)
+ENCRYPTED_DNS_BYPASS_PACKS = (
+    {
+        "id": "doh-hosts-review",
+        "label": "Encrypted DNS hosts review",
+        "description": "Known encrypted-DNS hostnames that can be imported as a separate hosts section for local review.",
+        "source_ids": ("hagezi-doh-hosts",),
+        "risk": "medium",
+        "default_action": "import-separately-and-run-diagnostics",
+        "hosts_native": True,
+        "controls": (
+            "Import as a separate source section so it can be removed quickly.",
+            "Run DNS Bypass Diagnostics after import to check browser policy and proxy signals.",
+            "Do not treat hosts import as proof that apps cannot use DoH, DoT, DoQ, VPN, Tor, or proxy paths.",
+        ),
+    },
+    {
+        "id": "bypass-full-review",
+        "label": "Full bypass-service review",
+        "description": "Broad DoH/VPN/TOR/proxy feed for high-control environments that accept breakage risk.",
+        "source_ids": ("hagezi-doh-vpn-proxy-adblock",),
+        "risk": "high",
+        "default_action": "lint-triage-and-import-only-if-policy-requires",
+        "hosts_native": True,
+        "controls": (
+            "Run adblock lint before hosts conversion.",
+            "Use false-positive triage and source overlap review before scheduling.",
+            "Expect privacy tools and enterprise remote-access services to be affected.",
+        ),
+    },
+    {
+        "id": "router-firewall-handoff",
+        "label": "Router/firewall handoff",
+        "description": "Domain, RPZ, and IP feeds for resolver, router, or firewall policy outside the hosts file.",
+        "source_ids": (
+            "hagezi-doh-vpn-proxy-domains",
+            "hagezi-doh-vpn-proxy-rpz",
+            "hagezi-doh-ips",
+        ),
+        "risk": "high",
+        "default_action": "configure-downstream-policy-with-rollback",
+        "hosts_native": False,
+        "controls": (
+            "Redirect or block outbound TCP/UDP 53 except from the approved resolver.",
+            "Block DoT/DoQ on TCP/UDP 853 where policy allows.",
+            "Use firewall/IP controls for direct resolver IP bypasses because hosts cannot block IP literals.",
+        ),
+    },
+)
+ENCRYPTED_DNS_BYPASS_PACK_ALIASES = {
+    "doh": "doh-hosts-review",
+    "hosts": "doh-hosts-review",
+    "full": "bypass-full-review",
+    "bypass": "bypass-full-review",
+    "firewall": "router-firewall-handoff",
+    "router": "router-firewall-handoff",
+    "network": "router-firewall-handoff",
+}
 
 
 def normalize_export_format(export_format: str) -> str:
@@ -6401,6 +6525,135 @@ def format_cname_cloaking_plan(plan: dict) -> str:
         lines.append(f"- {control}")
     lines.extend(["", "Warnings:"])
     for warning in plan.get("warnings") or CNAME_CLOAKING_WARNINGS:
+        lines.append(f"- {warning}")
+    references = plan.get("references") or []
+    if references:
+        lines.extend(["", "Roadmap source IDs:", f"- {', '.join(references)}"])
+    return "\n".join(lines)
+
+
+def normalize_encrypted_dns_bypass_pack_id(pack_id: str) -> str:
+    normalized = (pack_id or "").strip().lower().replace("_", "-")
+    return ENCRYPTED_DNS_BYPASS_PACK_ALIASES.get(normalized, normalized)
+
+
+def list_encrypted_dns_bypass_sources() -> list[dict]:
+    return [dict(source) for source in ENCRYPTED_DNS_BYPASS_SOURCES]
+
+
+def list_encrypted_dns_bypass_packs() -> list[dict]:
+    return [dict(pack) for pack in ENCRYPTED_DNS_BYPASS_PACKS]
+
+
+def find_encrypted_dns_bypass_pack(pack_id: str) -> dict:
+    normalized = normalize_encrypted_dns_bypass_pack_id(pack_id)
+    for pack in ENCRYPTED_DNS_BYPASS_PACKS:
+        if pack["id"] == normalized:
+            return dict(pack)
+    known = ", ".join(pack["id"] for pack in ENCRYPTED_DNS_BYPASS_PACKS)
+    raise ValueError(f"Unknown encrypted DNS bypass pack: {pack_id!r}. Known packs: {known}")
+
+
+def find_encrypted_dns_bypass_source(source_id: str) -> dict:
+    normalized = (source_id or "").strip().lower().replace("_", "-")
+    for source in ENCRYPTED_DNS_BYPASS_SOURCES:
+        if source["id"] == normalized:
+            return dict(source)
+    known = ", ".join(source["id"] for source in ENCRYPTED_DNS_BYPASS_SOURCES)
+    raise ValueError(f"Unknown encrypted DNS bypass source: {source_id!r}. Known sources: {known}")
+
+
+def build_encrypted_dns_bypass_pack_plan(pack_id: str) -> dict:
+    pack = find_encrypted_dns_bypass_pack(pack_id)
+    sources = [find_encrypted_dns_bypass_source(source_id) for source_id in pack["source_ids"]]
+    references = sorted({
+        reference
+        for source in sources
+        for reference in source.get("source_ids", ())
+    })
+    return {
+        "schema": "hostsfileget.encrypted-dns-bypass-plan.v1",
+        "pack_id": pack["id"],
+        "label": pack["label"],
+        "description": pack["description"],
+        "risk": pack["risk"],
+        "default_action": pack["default_action"],
+        "hosts_native": bool(pack["hosts_native"]),
+        "source_count": len(sources),
+        "source_ids": [source["id"] for source in sources],
+        "sources": sources,
+        "explanation": {
+            "problem": "Encrypted DNS and bypass services can route lookups around the OS resolver and local hosts file.",
+            "hosts_limit": "Hosts entries cannot stop IP-literal resolver access, DoT/DoQ transport on port 853, VPNs, Tor, or proxy DNS.",
+            "hosts_fit": "Use hosts imports only for known resolver hostnames that still resolve through the OS path.",
+            "network_fit": "Use managed browser policy plus router/firewall egress rules when bypass prevention is a real requirement.",
+        },
+        "controls": list(pack.get("controls") or ()),
+        "warnings": list(ENCRYPTED_DNS_BYPASS_WARNINGS),
+        "references": references,
+    }
+
+
+def format_encrypted_dns_bypass_catalog() -> str:
+    lines = [
+        "Encrypted DNS bypass packs",
+        "",
+        "This catalog separates hosts-reviewable resolver hostname feeds from DNS/router/firewall handoffs.",
+        "",
+        "Supported packs:",
+    ]
+    for pack in ENCRYPTED_DNS_BYPASS_PACKS:
+        source_count = len(pack.get("source_ids") or ())
+        native_text = "hosts-reviewable" if pack.get("hosts_native") else "router/firewall handoff"
+        lines.extend([
+            f"- {pack['id']}: {pack['label']}",
+            f"  Fit: {native_text}",
+            f"  Risk: {pack['risk']}",
+            f"  Sources: {source_count}",
+            f"  Default action: {pack['default_action']}",
+            f"  Description: {pack['description']}",
+        ])
+    lines.extend(["", "Sources:"])
+    for source in ENCRYPTED_DNS_BYPASS_SOURCES:
+        lines.extend([
+            f"- {source['id']}: {source['name']}",
+            f"  Type: {source['source_type']} | Format: {source['format']} | Hosts fit: {source['hosts_file_fit']}",
+            f"  Enforcement requirement: {source['enforcement_requirement']}",
+            f"  URL: {source['url']}",
+        ])
+    lines.extend(["", "Warnings:"])
+    lines.extend(f"- {warning}" for warning in ENCRYPTED_DNS_BYPASS_WARNINGS)
+    return "\n".join(lines)
+
+
+def format_encrypted_dns_bypass_pack_plan(plan: dict) -> str:
+    explanation = plan.get("explanation") or {}
+    lines = [
+        "Encrypted DNS Bypass Pack Plan",
+        f"Pack: {plan.get('pack_id')} - {plan.get('label')}",
+        f"Risk: {plan.get('risk')}",
+        f"Hosts-native: {'yes' if plan.get('hosts_native') else 'no'}",
+        f"Default action: {plan.get('default_action')}",
+        f"Sources: {int(plan.get('source_count') or 0):,}",
+        "",
+        "Explanation:",
+        f"- Problem: {explanation.get('problem')}",
+        f"- Hosts limit: {explanation.get('hosts_limit')}",
+        f"- Hosts fit: {explanation.get('hosts_fit')}",
+        f"- Network fit: {explanation.get('network_fit')}",
+        "",
+        "Source URLs:",
+    ]
+    for source in plan.get("sources") or []:
+        lines.append(
+            f"- {source.get('id')}: {source.get('url')} "
+            f"({source.get('source_type')}, {source.get('format')}, hosts={source.get('hosts_file_fit')})"
+        )
+    lines.extend(["", "Controls:"])
+    for control in plan.get("controls") or []:
+        lines.append(f"- {control}")
+    lines.extend(["", "Warnings:"])
+    for warning in plan.get("warnings") or ENCRYPTED_DNS_BYPASS_WARNINGS:
         lines.append(f"- {warning}")
     references = plan.get("references") or []
     if references:
@@ -9523,6 +9776,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="NRD / DGA Threat Feed Packs...", command=self.show_threat_feed_packs)
         tools_menu.add_command(label="CNAME Cloaking Workflow...", command=self.show_cname_cloaking_workflow)
         tools_menu.add_command(label="DNS Bypass Diagnostics...", command=self.show_dns_bypass_diagnostics)
+        tools_menu.add_command(label="Encrypted DNS Bypass Packs...", command=self.show_encrypted_dns_bypass_packs)
         tools_menu.add_command(label="DNS Interoperability Pack...", command=self.show_dns_integration_pack)
         tools_menu.add_command(label="Cloud DNS Adapters...", command=self.show_cloud_dns_adapters)
         tools_menu.add_command(label="Sources Report...", command=self.show_sources_report)
@@ -10555,6 +10809,16 @@ class HostsFileEditor:
             format_cname_cloaking_catalog(),
             tone="warning",
             width=940,
+            height=720,
+        )
+
+    def show_encrypted_dns_bypass_packs(self):
+        self._show_text_report_dialog(
+            "Encrypted DNS bypass packs",
+            "Review resolver-bypass feeds and the router/firewall controls needed beyond the hosts file.",
+            format_encrypted_dns_bypass_catalog(),
+            tone="warning",
+            width=960,
             height=720,
         )
 
@@ -14832,6 +15096,26 @@ def _cli_cname_cloaking_plan(pack_id: str, output_path: str) -> int:
     return 0
 
 
+def _cli_encrypted_dns_bypass_list() -> int:
+    _cli_print(format_encrypted_dns_bypass_catalog())
+    return 0
+
+
+def _cli_encrypted_dns_bypass_plan(pack_id: str, output_path: str) -> int:
+    try:
+        plan = build_encrypted_dns_bypass_pack_plan(pack_id)
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        write_text_file_atomic(output_path, json.dumps(plan, indent=2))
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Encrypted DNS bypass plan failed: {exc}")
+        return 2
+    _cli_print(format_encrypted_dns_bypass_pack_plan(plan))
+    _cli_print(f"Wrote encrypted DNS bypass plan to {output_path}")
+    return 0
+
+
 def _cli_adblock_lint(input_path: str, output_path: str | None = None) -> int:
     try:
         lines = read_text_file_lines(input_path)
@@ -15173,6 +15457,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--threat-feed-plan",
         "--cname-cloaking-list",
         "--cname-cloaking-plan",
+        "--encrypted-dns-bypass-list",
+        "--encrypted-dns-bypass-plan",
         "--adblock-lint",
         "--adblock-lint-output",
         "--adblock-quarantine",
@@ -15206,6 +15492,7 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--cloud-log-import=",
         "--threat-feed-plan=",
         "--cname-cloaking-plan=",
+        "--encrypted-dns-bypass-plan=",
         "--adblock-lint=",
         "--adblock-lint-output=",
         "--adblock-quarantine=",
@@ -15279,6 +15566,13 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         nargs=2,
         metavar=("PACK", "OUTPUT"),
         help="Write a local JSON plan for a CNAME cloaking PACK to OUTPUT. No DNS lookups or remote writes are performed.",
+    )
+    parser.add_argument("--encrypted-dns-bypass-list", action="store_true", help="List guarded encrypted-DNS bypass source/workflow packs.")
+    parser.add_argument(
+        "--encrypted-dns-bypass-plan",
+        nargs=2,
+        metavar=("PACK", "OUTPUT"),
+        help="Write a local JSON plan for an encrypted-DNS bypass PACK to OUTPUT. No firewall or remote writes are performed.",
     )
     parser.add_argument("--adblock-lint", metavar="INPUT", help="Lint INPUT for browser-only or unsafe adblock rules without launching the GUI.")
     parser.add_argument("--adblock-lint-output", metavar="PATH", help="Write the detailed adblock syntax lint JSON report to PATH.")
@@ -15379,6 +15673,10 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         return _cli_cname_cloaking_list()
     if args.cname_cloaking_plan:
         return _cli_cname_cloaking_plan(args.cname_cloaking_plan[0], args.cname_cloaking_plan[1])
+    if args.encrypted_dns_bypass_list:
+        return _cli_encrypted_dns_bypass_list()
+    if args.encrypted_dns_bypass_plan:
+        return _cli_encrypted_dns_bypass_plan(args.encrypted_dns_bypass_plan[0], args.encrypted_dns_bypass_plan[1])
     if args.adblock_lint or args.adblock_lint_output:
         if not args.adblock_lint:
             parser.error("--adblock-lint-output requires --adblock-lint INPUT")
