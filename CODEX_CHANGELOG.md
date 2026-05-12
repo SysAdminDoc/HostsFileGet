@@ -99,6 +99,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F051 complete. Next roadmap item: F045 source adapter plugin interface.
 - Completed F045: added manifest-only source adapter plugin loading, GUI/CLI catalog reporting, batch-import integration, docs, and regression tests for plugin validation, merge behavior, skipped manifest reporting, and CLI routing.
 - Updated `ROADMAP.md` to mark F045 complete. Next roadmap item: F046 local REST facade with bearer auth.
+- Completed F046: added opt-in loopback-only bearer-auth local REST server, read-only status and clean-preview endpoints, CLI startup flags, docs, and regression tests for auth, loopback rejection, clean-preview behavior, live HTTP responses, and CLI routing.
+- Updated `ROADMAP.md` to mark F046 complete. Next roadmap item: F052 Winget and Chocolatey manifests.
 
 ## Scope
 

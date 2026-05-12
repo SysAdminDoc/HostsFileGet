@@ -33,6 +33,9 @@ import glob
 import unicodedata
 import importlib
 import shlex
+import http.server
+import socketserver
+import secrets
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback path
@@ -106,6 +109,11 @@ SOURCE_ADAPTER_PLUGIN_SCHEMA = "hostsfileget.source-adapter-plugin.v1"
 SOURCE_ADAPTER_PLUGIN_DIRNAME = "source_adapters"
 SOURCE_ADAPTER_PLUGIN_MAX_SOURCES = 200
 SOURCE_ADAPTER_PLUGIN_MAX_PLUGINS = 50
+LOCAL_API_SCHEMA = "hostsfileget.local-api.v1"
+LOCAL_API_DEFAULT_HOST = "127.0.0.1"
+LOCAL_API_DEFAULT_PORT = 8765
+LOCAL_API_MAX_BODY_BYTES = 512 * 1024
+LOCAL_API_MIN_TOKEN_LENGTH = 16
 I18N_CATALOG_SCHEMA_VERSION = 1
 DEFAULT_LOCALE = "en-US"
 I18N_CATALOG_RELATIVE_PATH = os.path.join("data", "i18n", f"{DEFAULT_LOCALE}.json")
@@ -11406,6 +11414,206 @@ def format_relative_time(iso_timestamp: str, now: float | None = None) -> str:
     years = int(delta_seconds // (86400 * 365))
     return f"{years} year{'s' if years != 1 else ''} ago"
 
+
+def is_loopback_api_host(host: str) -> bool:
+    host = str(host or "").strip().strip("[]").lower()
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def sanitize_local_api_token(token: str) -> str:
+    token = str(token or "").strip()
+    if len(token) < LOCAL_API_MIN_TOKEN_LENGTH:
+        raise ValueError(f"Local API bearer token must be at least {LOCAL_API_MIN_TOKEN_LENGTH} characters.")
+    if _contains_control_chars(token):
+        raise ValueError("Local API bearer token contains control characters.")
+    return token
+
+
+def local_api_authorization_valid(headers, expected_token: str) -> bool:
+    try:
+        expected = sanitize_local_api_token(expected_token)
+    except ValueError:
+        return False
+    header_value = ""
+    if headers is not None:
+        try:
+            header_value = headers.get("Authorization", "")
+        except AttributeError:
+            header_value = ""
+    prefix = "Bearer "
+    if not isinstance(header_value, str) or not header_value.startswith(prefix):
+        return False
+    supplied = header_value[len(prefix):].strip()
+    return secrets.compare_digest(supplied, expected)
+
+
+def build_local_api_status_payload(hosts_path: str | None = None) -> dict:
+    return {
+        "schema": LOCAL_API_SCHEMA,
+        "app": APP_NAME,
+        "version": APP_VERSION,
+        "hosts_path": hosts_path or _default_hosts_file_path(),
+        "loopback_only": True,
+        "auth": "bearer",
+        "write_endpoints_enabled": False,
+        "endpoints": [
+            {"method": "GET", "path": "/v1/status", "writes_hosts": False},
+            {"method": "POST", "path": "/v1/clean-preview", "writes_hosts": False},
+        ],
+    }
+
+
+def _local_api_lines_from_payload(payload: dict) -> list[str]:
+    if "lines" in payload:
+        lines = payload.get("lines")
+        if not isinstance(lines, list):
+            raise ValueError("lines must be a list of strings.")
+        return [str(line).rstrip("\r\n") for line in lines]
+    text = payload.get("text", "")
+    if not isinstance(text, str):
+        raise ValueError("text must be a string when lines is not supplied.")
+    return text.splitlines()
+
+
+def _local_api_whitelist_set(payload: dict) -> set[str]:
+    whitelist = payload.get("whitelist", "")
+    if isinstance(whitelist, list):
+        whitelist_lines = [str(line) for line in whitelist]
+    elif isinstance(whitelist, str):
+        whitelist_lines = whitelist.splitlines()
+    elif whitelist in (None, ""):
+        whitelist_lines = []
+    else:
+        raise ValueError("whitelist must be a string or list of strings.")
+    whitelist_set: set[str] = set()
+    for line in whitelist_lines:
+        _entries, domains, _transformed = normalize_line_to_hosts_entries(line)
+        whitelist_set.update(domain.lstrip(".") for domain in domains)
+    return whitelist_set
+
+
+def build_local_api_clean_preview_payload(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("Request body must be a JSON object.")
+    lines = _local_api_lines_from_payload(payload)
+    whitelist_set = _local_api_whitelist_set(payload)
+    pinned = set(sanitize_pinned_domains(payload.get("pinned_domains", [])))
+    cleaned, stats = _get_canonical_cleaned_output_and_stats(lines, whitelist_set, pinned)
+    return {
+        "schema": LOCAL_API_SCHEMA,
+        "operation": "clean-preview",
+        "writes_hosts": False,
+        "input_line_count": len(lines),
+        "cleaned_line_count": len(cleaned),
+        "stats": stats,
+        "cleaned_lines": cleaned,
+    }
+
+
+class LocalApiServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
+class LocalApiRequestHandler(http.server.BaseHTTPRequestHandler):
+    server_version = f"{APP_SLUG}LocalAPI/{APP_VERSION}"
+
+    def log_message(self, _format, *_args):  # pragma: no cover - avoids noisy CLI tests
+        return
+
+    def _send_json(self, status_code: int, payload: dict, extra_headers: dict | None = None) -> None:
+        raw = json.dumps(payload, indent=2).encode("utf-8")
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Cache-Control", "no-store")
+        for key, value in (extra_headers or {}).items():
+            self.send_header(str(key), str(value))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def _send_error_json(self, status_code: int, message: str) -> None:
+        self._send_json(status_code, {"schema": LOCAL_API_SCHEMA, "error": message})
+
+    def _authorized(self) -> bool:
+        token = getattr(self.server, "auth_token", "")
+        if local_api_authorization_valid(self.headers, token):
+            return True
+        self._send_json(
+            401,
+            {"schema": LOCAL_API_SCHEMA, "error": "Missing or invalid bearer token."},
+            {"WWW-Authenticate": "Bearer"},
+        )
+        return False
+
+    def _read_json_payload(self) -> dict:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            raise ValueError("Invalid Content-Length.")
+        if length < 0 or length > LOCAL_API_MAX_BODY_BYTES:
+            raise ValueError(f"Request body exceeds {LOCAL_API_MAX_BODY_BYTES} byte limit.")
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Invalid JSON body: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("Request body must be a JSON object.")
+        return payload
+
+    def do_GET(self):
+        if not self._authorized():
+            return
+        path = urllib.parse.urlparse(self.path).path
+        if path == "/v1/status":
+            self._send_json(200, build_local_api_status_payload(getattr(self.server, "hosts_path", None)))
+            return
+        self._send_error_json(404, "Unknown endpoint.")
+
+    def do_POST(self):
+        if not self._authorized():
+            return
+        path = urllib.parse.urlparse(self.path).path
+        if path != "/v1/clean-preview":
+            self._send_error_json(404, "Unknown endpoint.")
+            return
+        try:
+            payload = self._read_json_payload()
+            response = build_local_api_clean_preview_payload(payload)
+        except ValueError as exc:
+            self._send_error_json(400, str(exc))
+            return
+        self._send_json(200, response)
+
+
+def create_local_api_server(
+    host: str = LOCAL_API_DEFAULT_HOST,
+    port: int = LOCAL_API_DEFAULT_PORT,
+    token: str = "",
+    hosts_path: str | None = None,
+):
+    host = str(host or LOCAL_API_DEFAULT_HOST).strip()
+    if not is_loopback_api_host(host):
+        raise ValueError("Local API host must be loopback-only: localhost, 127.0.0.1, or ::1.")
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        raise ValueError("Local API port must be an integer.")
+    if port < 0 or port > 65535:
+        raise ValueError("Local API port must be between 0 and 65535.")
+    sanitized_token = sanitize_local_api_token(token)
+    server = LocalApiServer((host, port), LocalApiRequestHandler)
+    server.auth_token = sanitized_token
+    server.hosts_path = hosts_path or _default_hosts_file_path()
+    return server
+
+
 # -------------------------------- Main App -----------------------------------
 class HostsFileEditor:
     HOSTS_FILE_PATH = _default_hosts_file_path()
@@ -19365,6 +19573,27 @@ def _cli_source_health(output_path: str | None, timeout: float, workers: int, fa
     return 0
 
 
+def _cli_api_serve(host: str, port: int, token: str | None) -> int:
+    token = token or os.environ.get("HOSTSFILEGET_API_TOKEN", "")
+    try:
+        server = create_local_api_server(host=host, port=port, token=token)
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Local API server failed to start: {exc}")
+        return 2
+    actual_host, actual_port = server.server_address[:2]
+    _cli_print(
+        f"Local API listening on http://{actual_host}:{actual_port} "
+        "with bearer auth; press Ctrl+C to stop."
+    )
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        _cli_print("Local API stopped.")
+    finally:
+        server.server_close()
+    return 0
+
+
 def _cli_integration_list() -> int:
     _cli_print(format_dns_integration_pack_report())
     return 0
@@ -20013,6 +20242,10 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--source-health-timeout",
         "--source-health-workers",
         "--source-health-fail-on-unhealthy",
+        "--api-serve",
+        "--api-host",
+        "--api-port",
+        "--api-token",
         "--silent",
         "-h",
         "--help",
@@ -20055,6 +20288,9 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--source-health-output=",
         "--source-health-timeout=",
         "--source-health-workers=",
+        "--api-host=",
+        "--api-port=",
+        "--api-token=",
     )
     if not any(arg in cli_flags or any(arg.startswith(prefix) for prefix in cli_prefixes) for arg in argv):
         return None
@@ -20181,6 +20417,10 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--source-health-timeout", type=float, default=SOURCE_HEALTH_TIMEOUT_SECONDS, help="Per-source network timeout in seconds.")
     parser.add_argument("--source-health-workers", type=int, default=SOURCE_HEALTH_DEFAULT_WORKERS, help="Parallel source-health worker count.")
     parser.add_argument("--source-health-fail-on-unhealthy", action="store_true", help="Return a non-zero exit code when any source fails.")
+    parser.add_argument("--api-serve", action="store_true", help="Start the opt-in loopback-only local REST API with bearer auth.")
+    parser.add_argument("--api-host", default=LOCAL_API_DEFAULT_HOST, metavar="HOST", help="Loopback host for --api-serve; defaults to 127.0.0.1.")
+    parser.add_argument("--api-port", type=int, default=LOCAL_API_DEFAULT_PORT, metavar="PORT", help="Port for --api-serve; use 0 for an ephemeral test port.")
+    parser.add_argument("--api-token", metavar="TOKEN", help="Bearer token for --api-serve. Defaults to HOSTSFILEGET_API_TOKEN.")
     parser.add_argument(
         "--silent", action="store_true",
         help="Suppress stderr progress. Progress is logged to %%LOCALAPPDATA%%\\HostsFileGet\\cli.log instead. Designed for Task Scheduler runs.",
@@ -20315,6 +20555,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
             args.source_health_workers,
             args.source_health_fail_on_unhealthy,
         )
+    if args.api_serve:
+        return _cli_api_serve(args.api_host, args.api_port, args.api_token)
     return None
 
 

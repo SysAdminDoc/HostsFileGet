@@ -7,6 +7,8 @@ import os
 import queue
 import threading
 import unittest
+import urllib.request
+import urllib.error
 from unittest import mock
 
 import datetime
@@ -38,6 +40,8 @@ from hosts_editor import (
     build_filter_builder_report,
     build_idn_homograph_report,
     build_i18n_catalog_report,
+    build_local_api_clean_preview_payload,
+    build_local_api_status_payload,
     build_entry_provenance_report,
     build_pinned_export_payload,
     build_provenance_log_report,
@@ -61,6 +65,7 @@ from hosts_editor import (
     classify_source_freshness,
     collect_recent_windows_dns_client_queries,
     collect_dns_bypass_policy_snapshot,
+    create_local_api_server,
     contrast_ratio,
     dns_bypass_policy_status,
     parse_cloud_dns_log_export,
@@ -192,6 +197,7 @@ from hosts_editor import (
     load_source_adapter_plugin_catalog,
     load_i18n_catalog,
     list_git_history_snapshots,
+    local_api_authorization_valid,
     merge_source_adapter_plugin_sources,
     migrate_config_snapshot,
     normalize_locale_code,
@@ -211,6 +217,7 @@ from hosts_editor import (
     remove_watch_expression,
     resolve_import_fetch_worker_count,
     resolve_saved_state_hashes,
+    sanitize_local_api_token,
     rewrite_block_sink_ip,
     sanitize_config_snapshot,
     sanitize_cli_activity_event,
@@ -831,6 +838,75 @@ class HostsEditorLogicTests(unittest.TestCase):
         self.assertEqual(catalog["plugins"][0]["id"], "good-pack")
         self.assertEqual(len(catalog["errors"]), 1)
         self.assertIn("invalid URL", catalog["errors"][0]["error"])
+
+    def test_local_api_auth_and_clean_preview_are_read_only(self):
+        token = "0123456789abcdef"
+        self.assertEqual(sanitize_local_api_token(f" {token} "), token)
+        self.assertTrue(local_api_authorization_valid({"Authorization": f"Bearer {token}"}, token))
+        self.assertFalse(local_api_authorization_valid({"Authorization": "Bearer wrong"}, token))
+
+        status = build_local_api_status_payload("C:\\Windows\\System32\\drivers\\etc\\hosts")
+        self.assertFalse(status["write_endpoints_enabled"])
+        self.assertEqual(status["endpoints"][0]["path"], "/v1/status")
+
+        preview = build_local_api_clean_preview_payload({
+            "lines": [
+                "0.0.0.0 ads.example",
+                "0.0.0.0 ads.example",
+                "0.0.0.0 keep.example",
+            ],
+            "whitelist": ["keep.example"],
+        })
+
+        self.assertFalse(preview["writes_hosts"])
+        self.assertIn("0.0.0.0 ads.example", preview["cleaned_lines"])
+        self.assertNotIn("0.0.0.0 keep.example", preview["cleaned_lines"])
+        self.assertGreaterEqual(preview["stats"]["removed_duplicates"], 1)
+
+    def test_local_api_server_requires_bearer_and_serves_preview(self):
+        token = "0123456789abcdef"
+        server = create_local_api_server(host="127.0.0.1", port=0, token=token)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            host, port = server.server_address[:2]
+            base_url = f"http://{host}:{port}"
+            with self.assertRaises(urllib.error.HTTPError) as denied:
+                urllib.request.urlopen(f"{base_url}/v1/status", timeout=5)
+            self.assertEqual(denied.exception.code, 401)
+
+            status_request = urllib.request.Request(
+                f"{base_url}/v1/status",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            with urllib.request.urlopen(status_request, timeout=5) as response:
+                status = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(status["schema"], "hostsfileget.local-api.v1")
+            self.assertFalse(status["write_endpoints_enabled"])
+
+            body = json.dumps({"text": "0.0.0.0 api.example\n0.0.0.0 api.example\n"}).encode("utf-8")
+            preview_request = urllib.request.Request(
+                f"{base_url}/v1/clean-preview",
+                data=body,
+                method="POST",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+            )
+            with urllib.request.urlopen(preview_request, timeout=5) as response:
+                preview = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(preview["cleaned_lines"].count("0.0.0.0 api.example"), 1)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_local_api_server_rejects_non_loopback_hosts_and_short_tokens(self):
+        with self.assertRaises(ValueError):
+            create_local_api_server(host="0.0.0.0", port=0, token="0123456789abcdef")
+        with self.assertRaises(ValueError):
+            create_local_api_server(host="127.0.0.1", port=0, token="short")
 
     def test_source_bundle_catalog_sanitizes_manifest_references(self):
         manifest = {
@@ -2531,6 +2607,18 @@ profile:
         with mock.patch.object(hosts_editor, "_cli_source_adapter_list", return_value=0) as mocked_adapters:
             self.assertEqual(hosts_editor._handle_cli_args(["--source-adapter-list", "plugins"]), 0)
             mocked_adapters.assert_called_once_with(["plugins"])
+
+        with mock.patch.object(hosts_editor, "_cli_api_serve", return_value=0) as mocked_api:
+            self.assertEqual(
+                hosts_editor._handle_cli_args([
+                    "--api-serve",
+                    "--api-host", "127.0.0.1",
+                    "--api-port", "0",
+                    "--api-token", "0123456789abcdef",
+                ]),
+                0,
+            )
+            mocked_api.assert_called_once_with("127.0.0.1", 0, "0123456789abcdef")
 
     def test_handle_cli_args_routes_cloud_dns_flags(self):
         with mock.patch.object(hosts_editor, "_cli_cloud_adapter_list", return_value=0) as mocked_list:

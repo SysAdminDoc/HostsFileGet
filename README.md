@@ -75,6 +75,7 @@ It is designed for people who work with large blocklists, external feed imports,
 - Operational utilities:
   - DNS cache flush
   - DNS bypass diagnostics for browser encrypted-DNS and proxy signals
+  - opt-in loopback-only local REST API with bearer auth for read-only status and clean-preview automation
   - backup restore preview
   - optional local Git history snapshot/status/restore commands
   - emergency DNS recovery helper
@@ -250,6 +251,13 @@ python hosts_editor.py --source-adapter-list
 python hosts_editor.py --source-adapter-list .\source-adapters
 ```
 
+Start the optional loopback-only REST facade:
+
+```powershell
+$env:HOSTSFILEGET_API_TOKEN = "replace-with-at-least-16-random-chars"
+python hosts_editor.py --api-serve
+```
+
 Generate guarded cloud-DNS replay plans or extract blocked domains from cloud DNS CSV log exports:
 
 ```powershell
@@ -364,6 +372,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - False-positive triage: `docs/false-positive-triage.md`
 - Entry provenance: `docs/entry-provenance.md`
 - Provenance log filters/export: `docs/provenance-log.md`
+- Local REST API: `docs/local-rest-api.md`
 - Windows DNS Client snapshot: `docs/windows-dns-client.md`
 - DNS bypass diagnostics: `docs/dns-bypass-diagnostics.md`
 - Migration imports: `docs/migration-imports.md`
