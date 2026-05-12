@@ -28,6 +28,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-build.txt
+          python -m pip install -r requirements-security.txt
 
       - name: Compile Python sources
         shell: pwsh
@@ -57,12 +58,61 @@ jobs:
         shell: pwsh
         run: python -m PyInstaller --clean --noconfirm HostsFileGet.spec
 
+      - name: Sign executable when signing certificate is configured
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PFX_BASE64 }}
+          WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERTIFICATE_PFX_BASE64)) {
+            "No signing certificate configured; leaving HostsFileGet.exe unsigned."
+            exit 0
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD)) {
+            throw "WINDOWS_SIGNING_CERTIFICATE_PASSWORD is required when WINDOWS_SIGNING_CERTIFICATE_PFX_BASE64 is set."
+          }
+
+          $certPath = Join-Path $env:RUNNER_TEMP "hostsfileget-signing-cert.pfx"
+          [System.IO.File]::WriteAllBytes(
+            $certPath,
+            [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_PFX_BASE64)
+          )
+
+          $windowsKitsBin = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+          $signtool = Get-ChildItem $windowsKitsBin -Recurse -Filter signtool.exe |
+            Where-Object { $_.FullName -match "\\x64\\signtool\.exe$" } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+
+          if (-not $signtool) {
+            throw "signtool.exe was not found in the Windows SDK."
+          }
+
+          & $signtool.FullName sign `
+            /fd SHA256 `
+            /td SHA256 `
+            /tr http://timestamp.digicert.com `
+            /f $certPath `
+            /p $env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD `
+            dist\HostsFileGet.exe
+
+          Remove-Item -LiteralPath $certPath -Force
+
+      - name: Record Authenticode status
+        shell: pwsh
+        run: Get-AuthenticodeSignature dist\HostsFileGet.exe | Format-List
+
       - name: Generate checksums
         shell: pwsh
         run: |
           $exe = Resolve-Path "dist\HostsFileGet.exe"
           $hash = Get-FileHash -Algorithm SHA256 $exe
           "$($hash.Hash)  HostsFileGet.exe" | Set-Content -Encoding ascii "dist\HostsFileGet.exe.sha256"
+
+      - name: Generate SBOM and audit dependencies
+        shell: pwsh
+        run: python -m pip_audit -r requirements-build.txt --strict --format cyclonedx-json --output dist\HostsFileGet.sbom.cdx.json
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -71,6 +121,7 @@ jobs:
           path: |
             dist/HostsFileGet.exe
             dist/HostsFileGet.exe.sha256
+            dist/HostsFileGet.sbom.cdx.json
           if-no-files-found: error
 
       - name: Publish GitHub release assets
@@ -80,7 +131,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = $env:GITHUB_REF_NAME
-          $assets = @("dist\HostsFileGet.exe", "dist\HostsFileGet.exe.sha256")
+          $assets = @(
+            "dist\HostsFileGet.exe",
+            "dist\HostsFileGet.exe.sha256",
+            "dist\HostsFileGet.sbom.cdx.json"
+          )
 
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
