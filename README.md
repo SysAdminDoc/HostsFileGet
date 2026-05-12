@@ -65,6 +65,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - versioned JSON config migration
   - profile-ready schema mirror for future named whitelist/source/pin sets
   - declarative YAML/TOML/JSON profile plan, apply, and export commands
+  - CLI profile list/import/apply/export commands that never write the hosts file
   - versioned English string catalog foundation for future localization
 
 ## Supported Input Shapes
@@ -178,6 +179,15 @@ python hosts_editor.py --history-snapshot
 python hosts_editor.py --history-restore 1a2b3c4d5e6f
 ```
 
+Manage saved profiles from the CLI without writing the system hosts file:
+
+```powershell
+python hosts_editor.py --profile-list
+python hosts_editor.py --profile-import .\work-profile.yaml
+python hosts_editor.py --profile-apply work
+python hosts_editor.py --profile-export work .\work-profile.toml
+```
+
 Run the deterministic large-file benchmark with:
 
 ```powershell
@@ -197,6 +207,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Large-file benchmark harness: `benchmarks/large_file_benchmark.py`
 - Architecture map: `ARCHITECTURE.md`
 - Declarative profile files: `docs/declarative-config.md`
+- CLI profile management: `docs/cli-profiles.md`
 - Optional Git history: `docs/git-history.md`
 - Troubleshooting and hosts-file limits: `TROUBLESHOOTING.md`
 - Config schema: `docs/config-schema.md`
