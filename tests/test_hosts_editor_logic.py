@@ -100,9 +100,12 @@ from hosts_editor import (
     build_cname_cloaking_plan,
     build_encrypted_dns_bypass_pack_plan,
     build_dns_rebinding_report,
+    build_profile_quick_switch_report,
+    build_profile_tray_availability_report,
     build_safesearch_template_plan,
     build_threat_feed_pack_plan,
     apply_profile_activation_schedule,
+    apply_profile_quick_switch,
     evaluate_profile_activation_schedule,
     export_lines_as_format,
     export_lines_as_bytes,
@@ -136,6 +139,8 @@ from hosts_editor import (
     format_safesearch_template_catalog,
     format_safesearch_template_plan,
     format_profile_activation_schedule_report,
+    format_profile_quick_switch_report,
+    format_profile_tray_availability_report,
     format_portable_bundle_export_summary,
     format_scheduler_activity_report,
     format_source_trust_badges,
@@ -1585,6 +1590,88 @@ url = "https://example.com/hosts.txt"
         self.assertIn("  default  Default", summary)
         self.assertIn("* work  Work", summary)
         self.assertIn("pins=1", summary)
+
+    def test_profile_quick_switch_report_lists_profiles_and_target(self):
+        report = build_profile_quick_switch_report(
+            {
+                "active_profile_id": "default",
+                "profiles": [
+                    {"id": "default", "name": "Default", "whitelist": "default.example"},
+                    {
+                        "id": "kids",
+                        "name": "Kids",
+                        "whitelist": ["kids.example", "school.example"],
+                        "custom_sources": [{"name": "Feed", "url": "https://example.com/hosts.txt"}],
+                        "pinned_domains": ["pin.example"],
+                        "preferred_block_sink": "127.0.0.1",
+                    },
+                ],
+            },
+            os.getcwd(),
+            "kids",
+        )
+        rendered = format_profile_quick_switch_report(report)
+
+        self.assertEqual(report["schema"], "hostsfileget.profile-quick-switch.v1")
+        self.assertEqual(report["profile_count"], 2)
+        self.assertEqual(report["target_profile_id"], "kids")
+        self.assertTrue(report["target_found"])
+        self.assertTrue(report["switch_required"])
+        self.assertFalse(report["will_write_hosts_file"])
+        kids_row = [profile for profile in report["profiles"] if profile["id"] == "kids"][0]
+        self.assertEqual(kids_row["whitelist_count"], 2)
+        self.assertEqual(kids_row["source_count"], 1)
+        self.assertEqual(kids_row["pinned_count"], 1)
+        self.assertIn("Hosts-file write: no", rendered)
+        self.assertIn("* default", rendered)
+
+    def test_apply_profile_quick_switch_updates_config_only(self):
+        config = {
+            "whitelist": "default.example",
+            "profiles": [
+                {"id": "default", "name": "Default", "whitelist": "default.example"},
+                {"id": "kids", "name": "Kids", "whitelist": "kids.example", "preferred_block_sink": "::"},
+            ],
+            "active_profile_id": "default",
+        }
+
+        applied, report = apply_profile_quick_switch(config, "kids", os.getcwd())
+
+        self.assertTrue(report["switch_required"])
+        self.assertFalse(report["will_write_hosts_file"])
+        self.assertEqual(applied["active_profile_id"], "kids")
+        self.assertEqual(applied["whitelist"], "kids.example")
+        self.assertEqual(applied["preferred_block_sink"], "::")
+        with self.assertRaises(ValueError):
+            apply_profile_quick_switch(config, "missing", os.getcwd())
+
+    def test_profile_tray_availability_reports_missing_optional_dependency(self):
+        def missing_importer(module_name):
+            raise ImportError(f"missing {module_name}")
+
+        report = build_profile_tray_availability_report(importer=missing_importer)
+        rendered = format_profile_tray_availability_report(report)
+
+        self.assertFalse(report["available"])
+        self.assertEqual(len(report["missing"]), 3)
+        self.assertIn("pystray", report["install_hint"])
+        self.assertIn("Available: no", rendered)
+        self.assertIn("PIL.Image", rendered)
+
+    def test_profile_tray_availability_reports_available_with_fake_modules(self):
+        seen_modules = []
+
+        def fake_importer(module_name):
+            seen_modules.append(module_name)
+            return object()
+
+        report = build_profile_tray_availability_report(importer=fake_importer)
+        rendered = format_profile_tray_availability_report(report)
+
+        self.assertTrue(report["available"])
+        self.assertEqual(seen_modules, ["pystray", "PIL.Image", "PIL.ImageDraw"])
+        self.assertEqual(report["missing"], [])
+        self.assertIn("Available: yes", rendered)
 
     def test_cli_declarative_config_apply_and_export_use_app_config_only(self):
         import tempfile

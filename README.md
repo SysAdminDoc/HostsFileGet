@@ -78,6 +78,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - declarative YAML/TOML/JSON profile plan, apply, and export commands
   - CLI profile list/import/apply/export commands that never write the hosts file
   - guarded time-bound profile activation commands that switch app config only
+  - GUI profile quick switching, plus optional tray quick switching when `pystray` and Pillow are installed
   - scheduled-update activity reports backed by bounded silent-run logs
   - managed portable bundle config export and config-location reporting
   - versioned English string catalog foundation for future localization
@@ -212,6 +213,8 @@ python hosts_editor.py --profile-schedule-add kids 16:00 20:00 --profile-schedul
 python hosts_editor.py --profile-schedule-apply
 ```
 
+Switch saved profiles from the GUI with **Tools > Profile Quick Switch...**. **Tools > Start Tray Quick Switch...** enables an optional tray menu when `pystray` and Pillow are installed; both paths update app config only and never write the system hosts file.
+
 Inspect scheduled-update status and recent silent-run activity with:
 
 ```powershell
@@ -318,6 +321,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Architecture map: `ARCHITECTURE.md`
 - Declarative profile files: `docs/declarative-config.md`
 - CLI profile management: `docs/cli-profiles.md`
+- Profile quick switch: `docs/profile-quick-switch.md`
 - Optional Git history: `docs/git-history.md`
 - Scheduler activity report: `docs/scheduler-activity.md`
 - Portable bundle config: `docs/portable-config.md`

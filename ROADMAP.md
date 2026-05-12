@@ -1,7 +1,7 @@
 # HostsFileGet Roadmap
 
 Version: 2026-05-12 roadmap execution update
-Repo state basis: `main` through F040 implementation plus external research current to 2026-05-12
+Repo state basis: `main` through F041 implementation plus external research current to 2026-05-12
 Scope: Windows-first desktop hosts-file editor, importer, cleaner, diagnostics, and safe writer
 
 This document supersedes the earlier broad idea dump. Useful shipped history has been preserved as baseline context, but the forward roadmap is now source-backed and tiered. Every active candidate cites at least one source ID from the appendix.
@@ -60,6 +60,7 @@ Non-negotiables:
 - [x] F038 - DNS rebinding protection checks (`docs/dns-rebinding.md`, trusted-suffix report, GUI/CLI JSON output)
 - [x] F039 - SafeSearch and restricted-mode templates (`docs/safesearch-restricted-mode.md`, hosts-vs-DNS template plans, GUI/CLI JSON output)
 - [x] F040 - Time-bound profile activation (`docs/profile-activation-schedule.md`, config-only schedule add/list/apply CLI)
+- [x] F041 - Tray quick switch (`docs/profile-quick-switch.md`, GUI quick switch, optional tray menu, opt-in PyInstaller tray-module bundling)
 
 ## State Of The Repo
 
@@ -68,8 +69,8 @@ Non-negotiables:
 - Language and runtime: Python 3.x, Tkinter desktop UI, Windows-first assumptions, PowerShell launcher.
 - Entry points: `hosts_editor.py` for GUI and CLI, `PythonLauncher.ps1` for elevated launch/bootstrap, `HostsFileGet.spec` for PyInstaller.
 - Packaging: PyInstaller one-file Windows EXE with `uac_admin=True`; build artifacts exist locally under `build/` and `dist/` but are not tracked.
-- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 243 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation, migration importer fixtures, export-format fixtures, DNS integration fixtures, cloud DNS adapter fixtures, adblock syntax lint/quarantine fixtures, rule tier fixtures, IDN/homograph fixtures, threat-feed pack fixtures, CNAME cloaking workflow fixtures, encrypted-DNS bypass pack fixtures, DNS rebinding report fixtures, SafeSearch/restricted-mode template fixtures, profile activation schedule fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, NextDNS/Control D CSV logs, and find/replace.
-- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/cloud-dns-adapters.md`, `docs/adblock-lint.md`, `docs/rule-tiers.md`, `docs/idn-homograph.md`, `docs/threat-feed-packs.md`, `docs/cname-cloaking.md`, `docs/encrypted-dns-bypass.md`, `docs/dns-rebinding.md`, `docs/safesearch-restricted-mode.md`, `docs/profile-activation-schedule.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `LICENSE`, and this roadmap.
+- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 247 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation, migration importer fixtures, export-format fixtures, DNS integration fixtures, cloud DNS adapter fixtures, adblock syntax lint/quarantine fixtures, rule tier fixtures, IDN/homograph fixtures, threat-feed pack fixtures, CNAME cloaking workflow fixtures, encrypted-DNS bypass pack fixtures, DNS rebinding report fixtures, SafeSearch/restricted-mode template fixtures, profile activation schedule fixtures, profile quick-switch/tray dependency fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, NextDNS/Control D CSV logs, and find/replace.
+- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/cloud-dns-adapters.md`, `docs/adblock-lint.md`, `docs/rule-tiers.md`, `docs/idn-homograph.md`, `docs/threat-feed-packs.md`, `docs/cname-cloaking.md`, `docs/encrypted-dns-bypass.md`, `docs/dns-rebinding.md`, `docs/safesearch-restricted-mode.md`, `docs/profile-activation-schedule.md`, `docs/profile-quick-switch.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `LICENSE`, and this roadmap.
 - License: MIT.
 
 ### Product Reality
@@ -94,6 +95,7 @@ HostsFileGet already provides:
 - `--dns-rebinding-report`, `--dns-rebinding-output`, and `--dns-rebinding-trusted-suffix` expose static DNS rebinding-sensitive hosts mapping reports without live DNS queries or resolver policy changes.
 - `--safesearch-template-list` and `--safesearch-template-plan` expose guarded SafeSearch and restricted-mode plans that separate hosts-reviewable provider targets from DNS CNAME handoffs.
 - `--profile-schedule-list`, `--profile-schedule-add`, `--profile-schedule-apply`, and `--profile-schedule-at` expose guarded time-bound profile activation that switches app config only and never writes the system hosts file.
+- **Tools > Profile Quick Switch...** and optional **Tools > Start Tray Quick Switch...** expose config-only saved-profile switching without writing the system hosts file.
 - Optional local Git-backed history commands for snapshot, status, and admin-gated rollback with normal `.bak` backup creation.
 - Live stats, category hints, source report, health scan, DNS flush, domain check, find/replace, cleanup commands, import-section removal, backup diff, pinned domains, and export formats.
 
@@ -315,12 +317,13 @@ Legend:
 17. Completed - Rule tier warnings: F033.
 18. Completed - IDN, threat feed, CNAME, encrypted-DNS bypass, DNS rebinding, and SafeSearch/restricted-mode security reviews: F034, F035, F036, F037, F038, F039.
 19. Completed - Time-bound profile activation: F040.
+20. Completed - Tray quick switch: F041.
 
 Rationale: these items reduce maintenance risk, make the current product more trustworthy, and create the internal contracts needed for the larger profile/integration work.
 
 ### Next
 
-1. Profile UX and faster large-scale operations: F041, F042, F043, F047, F048, F049, F050, F051.
+1. Profile UX and faster large-scale operations: F042, F043, F047, F048, F049, F050, F051.
 2. Packaging, plugin, collaboration growth: F045, F046, F052, F053, F054, F055.
 3. Recovery spike: F044.
 

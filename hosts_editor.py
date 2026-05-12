@@ -31,6 +31,7 @@ import datetime
 import argparse
 import glob
 import unicodedata
+import importlib
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback path
@@ -38,7 +39,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback path
 
 APP_NAME = "Hosts File Get"
 APP_SLUG = "HostsFileGet"
-APP_VERSION = "2.18.0"
+APP_VERSION = "2.19.0"
 CONFIG_FILENAME = "hosts_editor_config.json"
 CONFIG_SCHEMA_VERSION = 4
 PROFILE_SCHEMA_VERSION = 1
@@ -4917,6 +4918,167 @@ def format_profile_list_summary(config: dict, default_last_open_dir: str | None 
     return "\n".join(lines)
 
 
+def build_profile_quick_switch_report(
+    config: dict,
+    default_last_open_dir: str | None = None,
+    target_profile_id: str | None = None,
+) -> dict:
+    default_home = default_last_open_dir or os.path.expanduser("~")
+    sanitized = sanitize_config_snapshot(config, default_home)
+    active_id = sanitized.get("active_profile_id", DEFAULT_PROFILE_ID)
+    profile_rows = []
+    profile_ids = set()
+    for profile in sanitized.get("profiles", []):
+        whitelist, pinned_domains, custom_sources = _declarative_profile_lists(profile)
+        profile_id = profile["id"]
+        profile_ids.add(profile_id)
+        profile_rows.append({
+            "id": profile_id,
+            "name": profile["name"],
+            "active": profile_id == active_id,
+            "whitelist_count": len(whitelist),
+            "source_count": len(custom_sources),
+            "pinned_count": len(pinned_domains),
+            "preferred_block_sink": profile["preferred_block_sink"],
+        })
+
+    warnings: list[str] = []
+    target_id = ""
+    target_found = False
+    if target_profile_id is not None:
+        target_id = _sanitize_profile_id_strict(target_profile_id)
+        if not target_id:
+            warnings.append(f"Invalid profile id: {target_profile_id}")
+        elif target_id in profile_ids:
+            target_found = True
+        else:
+            warnings.append(f"Profile not found: {target_profile_id}")
+
+    return {
+        "schema": "hostsfileget.profile-quick-switch.v1",
+        "active_profile_id": active_id,
+        "target_profile_id": target_id,
+        "target_found": target_found,
+        "switch_required": bool(target_found and target_id != active_id),
+        "will_write_hosts_file": False,
+        "profiles": profile_rows,
+        "profile_count": len(profile_rows),
+        "warnings": warnings,
+    }
+
+
+def apply_profile_quick_switch(
+    config: dict,
+    profile_id: str,
+    default_last_open_dir: str | None = None,
+) -> tuple[dict, dict]:
+    default_home = default_last_open_dir or os.path.expanduser("~")
+    report = build_profile_quick_switch_report(config, default_home, profile_id)
+    if not report["target_found"]:
+        raise ValueError(f"profile not found: {profile_id}")
+    snapshot = sanitize_config_snapshot(config, default_home)
+    if report["switch_required"]:
+        snapshot = set_active_profile_in_config(snapshot, report["target_profile_id"], default_home)
+    return snapshot, report
+
+
+def format_profile_quick_switch_report(report: dict) -> str:
+    lines = [
+        "Profile Quick Switch",
+        f"Active profile: {report.get('active_profile_id', DEFAULT_PROFILE_ID)}",
+        f"Profiles: {report.get('profile_count', 0)}",
+        "Hosts-file write: no",
+    ]
+    target_id = report.get("target_profile_id") or ""
+    if target_id:
+        lines.append(f"Target profile: {target_id}")
+        lines.append(f"Config switch required: {'yes' if report.get('switch_required') else 'no'}")
+
+    warnings = report.get("warnings") or []
+    if warnings:
+        lines.append("")
+        lines.append("Warnings:")
+        lines.extend(f"- {warning}" for warning in warnings)
+
+    lines.append("")
+    lines.append("Saved profiles:")
+    profiles = report.get("profiles") or []
+    if not profiles:
+        lines.append("- None configured.")
+    for profile in profiles:
+        marker = "*" if profile.get("active") else " "
+        lines.append(
+            f"{marker} {profile.get('id')}  {profile.get('name')}  "
+            f"whitelist={profile.get('whitelist_count', 0)} "
+            f"sources={profile.get('source_count', 0)} "
+            f"pins={profile.get('pinned_count', 0)} "
+            f"sink={profile.get('preferred_block_sink', '0.0.0.0')}"
+        )
+    return "\n".join(lines)
+
+
+def build_profile_tray_availability_report(importer=None) -> dict:
+    importer = importer or importlib.import_module
+    required_modules = [
+        ("pystray", "pystray"),
+        ("Pillow Image", "PIL.Image"),
+        ("Pillow ImageDraw", "PIL.ImageDraw"),
+    ]
+    missing = []
+    for label, module_name in required_modules:
+        try:
+            importer(module_name)
+        except Exception as exc:
+            missing.append({
+                "package": label,
+                "module": module_name,
+                "error": str(exc) or exc.__class__.__name__,
+            })
+
+    available = not missing
+    return {
+        "schema": "hostsfileget.profile-tray-availability.v1",
+        "available": available,
+        "required_modules": [module_name for _, module_name in required_modules],
+        "missing": missing,
+        "install_hint": "" if available else "python -m pip install pystray Pillow",
+        "message": (
+            "Optional tray quick switch support is available."
+            if available
+            else "Optional tray quick switch support requires pystray and Pillow."
+        ),
+    }
+
+
+def load_optional_profile_tray_modules() -> tuple[dict | None, dict]:
+    report = build_profile_tray_availability_report()
+    if not report["available"]:
+        return None, report
+    modules = {
+        "pystray": importlib.import_module("pystray"),
+        "Image": importlib.import_module("PIL.Image"),
+        "ImageDraw": importlib.import_module("PIL.ImageDraw"),
+    }
+    return modules, report
+
+
+def format_profile_tray_availability_report(report: dict) -> str:
+    lines = [
+        "Profile Tray Quick Switch",
+        f"Available: {'yes' if report.get('available') else 'no'}",
+        report.get("message", ""),
+    ]
+    if report.get("install_hint"):
+        lines.append(f"Install hint: {report['install_hint']}")
+    missing = report.get("missing") or []
+    if missing:
+        lines.append("")
+        lines.append("Missing modules:")
+        for item in missing:
+            lines.append(f"- {item.get('module')} ({item.get('package')}): {item.get('error')}")
+    return "\n".join(lines)
+
+
 def format_declarative_profile_summary(profile: dict, action: str | None = None) -> str:
     sanitized = sanitize_profile_snapshot(
         profile,
@@ -9463,6 +9625,9 @@ class HostsFileEditor:
         self.profile_activation_schedule_version = PROFILE_ACTIVATION_SCHEDULE_VERSION
         self.profile_activation_fallback_id = DEFAULT_PROFILE_ID
         self.profile_activation_schedule: list[dict] = []
+        self._tray_icon = None
+        self._tray_thread = None
+        self._tray_modules = None
         # Auto-refresh stale sources on launch (opt-in, off by default).
         self._update_on_launch = False
         # Lock the hosts file with the Windows "read-only" attribute after a
@@ -10919,6 +11084,8 @@ class HostsFileEditor:
         tools_menu.add_command(label="DNS Rebinding Protection Check...", command=self.show_dns_rebinding_report)
         tools_menu.add_command(label="SafeSearch / Restricted Mode Templates...", command=self.show_safesearch_templates)
         tools_menu.add_command(label="Profile Activation Schedule...", command=self.show_profile_activation_schedule)
+        tools_menu.add_command(label="Profile Quick Switch...", command=self.show_profile_quick_switch)
+        tools_menu.add_command(label="Start Tray Quick Switch...", command=self.start_profile_tray_quick_switch)
         tools_menu.add_command(label="DNS Interoperability Pack...", command=self.show_dns_integration_pack)
         tools_menu.add_command(label="Cloud DNS Adapters...", command=self.show_cloud_dns_adapters)
         tools_menu.add_command(label="Sources Report...", command=self.show_sources_report)
@@ -11250,6 +11417,10 @@ class HostsFileEditor:
             # Never block shutdown because of a config save failure - the
             # user is trying to exit and the error is non-recoverable at
             # this point.
+            pass
+        try:
+            self.stop_profile_tray_quick_switch()
+        except Exception:
             pass
         self.root.destroy()
 
@@ -11996,6 +12167,357 @@ class HostsFileEditor:
             width=960,
             height=740,
         )
+
+    def _build_current_profile_config_snapshot(self):
+        try:
+            whitelist_text = self.whitelist_text_area.get('1.0', tk.END).strip()
+        except tk.TclError:
+            whitelist_text = getattr(self, "_last_saved_whitelist_text", "")
+
+        current_profile_fields = {
+            "whitelist": whitelist_text,
+            "custom_sources": getattr(self, "custom_sources", []),
+            "pinned_domains": sorted(getattr(self, "pinned_domains", set())),
+            "preferred_block_sink": getattr(self, "_preferred_block_sink", "0.0.0.0"),
+        }
+        profiles, active_profile_id = update_active_profile_snapshot(
+            getattr(self, "profiles", []),
+            getattr(self, "active_profile_id", DEFAULT_PROFILE_ID),
+            current_profile_fields,
+        )
+
+        return sanitize_config_snapshot({
+            "config_version": CONFIG_SCHEMA_VERSION,
+            "whitelist": whitelist_text,
+            "custom_sources": getattr(self, "custom_sources", []),
+            "last_applied_raw_hash": getattr(self, "_last_applied_raw_hash", None),
+            "last_applied_cleaned_hash": getattr(self, "_last_applied_cleaned_hash", None),
+            "last_open_dir": getattr(self, "last_open_dir", os.path.expanduser("~")),
+            "source_last_fetched": getattr(self, "source_last_fetched", {}),
+            "source_cache_metadata": getattr(self, "source_cache_metadata", {}),
+            "preferred_block_sink": getattr(self, "_preferred_block_sink", "0.0.0.0"),
+            "backup_retention": getattr(self, "_backup_retention", BACKUP_RETENTION),
+            "has_completed_first_run": getattr(self, "_has_completed_first_run", False),
+            "pinned_domains": sorted(getattr(self, "pinned_domains", set())),
+            "update_on_launch": getattr(self, "_update_on_launch", False),
+            "lock_after_save": getattr(self, "_lock_after_save", False),
+            "profile_schema_version": PROFILE_SCHEMA_VERSION,
+            "active_profile_id": active_profile_id,
+            "profiles": profiles,
+            "profile_activation_schedule_version": getattr(
+                self,
+                "profile_activation_schedule_version",
+                PROFILE_ACTIVATION_SCHEDULE_VERSION,
+            ),
+            "profile_activation_fallback_id": getattr(
+                self,
+                "profile_activation_fallback_id",
+                active_profile_id,
+            ),
+            "profile_activation_schedule": getattr(self, "profile_activation_schedule", []),
+        }, getattr(self, "last_open_dir", os.path.expanduser("~")))
+
+    def _apply_profile_config_snapshot_to_runtime(self, config: dict):
+        sanitized_config = sanitize_config_snapshot(config, self.last_open_dir)
+        self.custom_sources = sanitized_config["custom_sources"]
+        self._last_applied_raw_hash = sanitized_config["last_applied_raw_hash"]
+        self._last_applied_cleaned_hash = sanitized_config["last_applied_cleaned_hash"]
+        self._last_saved_whitelist_text = sanitized_config["whitelist"]
+        self.last_open_dir = sanitized_config["last_open_dir"]
+        self.source_last_fetched = sanitized_config.get("source_last_fetched", {})
+        self.source_cache_metadata = sanitized_config.get("source_cache_metadata", {})
+        self._preferred_block_sink = sanitized_config.get("preferred_block_sink", "0.0.0.0")
+        self._backup_retention = sanitized_config.get("backup_retention", BACKUP_RETENTION)
+        self._has_completed_first_run = sanitized_config.get("has_completed_first_run", False)
+        self.pinned_domains = set(sanitized_config.get("pinned_domains", []))
+        self.profile_schema_version = sanitized_config.get("profile_schema_version", PROFILE_SCHEMA_VERSION)
+        self.active_profile_id = sanitized_config.get("active_profile_id", DEFAULT_PROFILE_ID)
+        self.profiles = sanitized_config.get("profiles", [build_default_profile_snapshot(sanitized_config)])
+        self.profile_activation_schedule_version = sanitized_config.get(
+            "profile_activation_schedule_version",
+            PROFILE_ACTIVATION_SCHEDULE_VERSION,
+        )
+        self.profile_activation_fallback_id = sanitized_config.get(
+            "profile_activation_fallback_id",
+            self.active_profile_id,
+        )
+        self.profile_activation_schedule = sanitized_config.get("profile_activation_schedule", [])
+
+        try:
+            self.whitelist_text_area.delete('1.0', tk.END)
+            self.whitelist_text_area.insert('1.0', sanitized_config["whitelist"])
+            self.whitelist_text_area.edit_modified(False)
+        except tk.TclError:
+            pass
+
+        try:
+            self._rebuild_custom_source_buttons()
+            self._update_whitelist_summary()
+            self._update_save_button_state()
+        except tk.TclError:
+            pass
+
+    def activate_profile_quick_switch(self, profile_id: str, *, source: str = "dialog") -> bool:
+        if self._block_during_import("Profile Quick Switch"):
+            return False
+        try:
+            if self._has_unsaved_changes():
+                self._show_notice_dialog(
+                    "Save editor changes before switching profiles",
+                    "Profile switching changes whitelist, source, pin, and block-sink settings in app config. Save or reload the current editor contents before switching.",
+                    tone="warning",
+                    action_text="Close",
+                )
+                self.update_status("Profile switch blocked: unsaved editor changes are pending.", is_error=True)
+                return False
+        except tk.TclError:
+            return False
+
+        try:
+            current_config = self._build_current_profile_config_snapshot()
+            next_config, report = apply_profile_quick_switch(current_config, profile_id, self.last_open_dir)
+            if not report["switch_required"]:
+                self.update_status(f"Profile '{report['target_profile_id']}' is already active.")
+                return True
+
+            next_config["last_applied_raw_hash"] = None
+            next_config["last_applied_cleaned_hash"] = None
+            next_config = sanitize_config_snapshot(next_config, self.last_open_dir)
+            self._write_config_payload(next_config)
+            self._apply_profile_config_snapshot_to_runtime(next_config)
+        except (OSError, ValueError) as exc:
+            self._show_notice_dialog(
+                "Profile switch failed",
+                "The selected profile could not be activated in app config.",
+                tone="error",
+                details=str(exc),
+            )
+            self.update_status(f"Profile switch failed: {exc}", is_error=True)
+            return False
+
+        active_name = report["target_profile_id"]
+        for profile in next_config.get("profiles", []):
+            if profile.get("id") == report["target_profile_id"]:
+                active_name = profile.get("name") or active_name
+                break
+        self.update_status(f"Activated profile '{active_name}' from {source}. Hosts file unchanged.")
+        self._refresh_profile_tray_menu()
+        return True
+
+    def show_profile_quick_switch(self):
+        if self._block_during_import("Profile Quick Switch"):
+            return
+        try:
+            report = build_profile_quick_switch_report(
+                self._build_current_profile_config_snapshot(),
+                self.last_open_dir,
+            )
+        except tk.TclError:
+            return
+
+        dialog = tk.Toplevel(self.root)
+        self._configure_modal_window(
+            dialog,
+            title="Profile Quick Switch",
+            size="720x560",
+            min_size=(620, 460),
+        )
+        intro, _ = self._create_sidebar_card(
+            dialog,
+            "Profile quick switch",
+            "Activate a saved app-config profile without writing the system hosts file.",
+            accent=PALETTE["blue"],
+        )
+        ttk.Label(
+            intro,
+            text=f"Active profile: {report.get('active_profile_id', DEFAULT_PROFILE_ID)}",
+            style="SectionBody.TLabel",
+            wraplength=620,
+            justify="left",
+        ).pack(anchor="w")
+
+        body = ttk.Frame(dialog, padding=(20, 0, 20, 12))
+        body.pack(fill="both", expand=True)
+        body.grid_columnconfigure(0, weight=1)
+        body.grid_rowconfigure(0, weight=1)
+
+        listbox = tk.Listbox(
+            body,
+            height=8,
+            bg=PALETTE["surface"],
+            fg=PALETTE["text"],
+            selectbackground=PALETTE["blue"],
+            selectforeground="#0b1020",
+            activestyle="none",
+            borderwidth=0,
+            highlightthickness=1,
+            highlightbackground=PALETTE["overlay0"],
+            font=self.default_font,
+        )
+        listbox.grid(row=0, column=0, sticky="nsew")
+        profiles = report.get("profiles", [])
+        active_index = 0
+        for index, profile in enumerate(profiles):
+            marker = "*" if profile.get("active") else " "
+            label = (
+                f"{marker} {profile.get('id')}  {profile.get('name')}  "
+                f"whitelist={profile.get('whitelist_count', 0)} "
+                f"sources={profile.get('source_count', 0)} "
+                f"pins={profile.get('pinned_count', 0)}"
+            )
+            listbox.insert(tk.END, label)
+            if profile.get("active"):
+                active_index = index
+        if profiles:
+            listbox.selection_set(active_index)
+            listbox.see(active_index)
+
+        details = scrolledtext.ScrolledText(body, wrap=tk.WORD, height=10)
+        self._style_code_surface(details, font_spec=self.mono_small_font)
+        details.grid(row=1, column=0, sticky="nsew", pady=(12, 0))
+        details.insert(tk.END, format_profile_quick_switch_report(report))
+        details.configure(state="disabled")
+
+        footer = ttk.Frame(dialog)
+        footer.pack(fill="x", padx=20, pady=(0, 20))
+
+        def selected_profile_id():
+            selection = listbox.curselection()
+            if not selection:
+                return None
+            index = int(selection[0])
+            if index < 0 or index >= len(profiles):
+                return None
+            return profiles[index]["id"]
+
+        def activate_selected():
+            selected_id = selected_profile_id()
+            if not selected_id:
+                self.update_status("Select a profile to activate.", is_error=True)
+                return
+            if self.activate_profile_quick_switch(selected_id, source="quick switch"):
+                dialog.destroy()
+
+        ttk.Button(footer, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
+        ttk.Button(footer, text="Activate", command=activate_selected, style="Action.TButton").pack(side="right", padx=(0, 8))
+        ttk.Button(
+            footer,
+            text="Start Tray Icon",
+            command=self.start_profile_tray_quick_switch,
+            style="Secondary.TButton",
+        ).pack(side="left")
+        dialog.grab_set()
+
+    def _create_profile_tray_image(self, Image, ImageDraw):
+        image = Image.new("RGBA", (64, 64), (11, 16, 32, 255))
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((10, 10, 54, 54), fill=(59, 130, 246, 255))
+        draw.rectangle((18, 18, 46, 26), fill=(245, 247, 250, 255))
+        draw.rectangle((18, 30, 46, 38), fill=(245, 247, 250, 255))
+        draw.rectangle((18, 42, 38, 50), fill=(245, 247, 250, 255))
+        return image
+
+    def _show_main_window_from_tray(self):
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.focus_force()
+        except tk.TclError:
+            pass
+
+    def _build_profile_tray_menu(self):
+        modules = getattr(self, "_tray_modules", None)
+        if not modules:
+            return None
+        pystray = modules["pystray"]
+        report = build_profile_quick_switch_report(
+            self._build_current_profile_config_snapshot(),
+            self.last_open_dir,
+        )
+        items = []
+        for profile in report.get("profiles", []):
+            label = f"{'* ' if profile.get('active') else ''}{profile.get('name')} ({profile.get('id')})"
+            profile_id = profile["id"]
+
+            def activate_from_tray(_icon, _item, selected_id=profile_id):
+                self._safe_after(
+                    0,
+                    lambda selected_id=selected_id: self.activate_profile_quick_switch(
+                        selected_id,
+                        source="tray quick switch",
+                    ),
+                )
+
+            items.append(pystray.MenuItem(label, activate_from_tray))
+
+        if items and hasattr(pystray.Menu, "SEPARATOR"):
+            items.append(pystray.Menu.SEPARATOR)
+        items.append(pystray.MenuItem("Open HostsFileGet", lambda _icon, _item: self._safe_after(0, self._show_main_window_from_tray)))
+        items.append(pystray.MenuItem("Stop tray icon", lambda _icon, _item: self._safe_after(0, self.stop_profile_tray_quick_switch)))
+        return pystray.Menu(*items)
+
+    def _refresh_profile_tray_menu(self):
+        icon = getattr(self, "_tray_icon", None)
+        if not icon:
+            return
+        try:
+            icon.menu = self._build_profile_tray_menu()
+            update_menu = getattr(icon, "update_menu", None)
+            if callable(update_menu):
+                update_menu()
+        except Exception:
+            pass
+
+    def start_profile_tray_quick_switch(self):
+        if getattr(self, "_tray_icon", None):
+            self.update_status("Profile tray quick switch is already running.")
+            return
+
+        modules, report = load_optional_profile_tray_modules()
+        if modules is None:
+            self._show_notice_dialog(
+                "Tray quick switch is optional",
+                "Tk does not provide a native tray icon. Install the optional pystray and Pillow packages to enable the tray quick-switch menu.",
+                tone="warning",
+                details=format_profile_tray_availability_report(report),
+                width=700,
+            )
+            self.update_status("Tray quick switch unavailable: optional dependencies are missing.", is_error=True)
+            return
+
+        self._tray_modules = modules
+        pystray = modules["pystray"]
+        image = self._create_profile_tray_image(modules["Image"], modules["ImageDraw"])
+        icon = pystray.Icon(
+            "HostsFileGet",
+            image,
+            APP_NAME,
+            self._build_profile_tray_menu(),
+        )
+        self._tray_icon = icon
+
+        def run_icon():
+            try:
+                icon.run()
+            finally:
+                if getattr(self, "_tray_icon", None) is icon:
+                    self._tray_icon = None
+
+        self._tray_thread = threading.Thread(target=run_icon, name="HostsFileGetTray", daemon=True)
+        self._tray_thread.start()
+        self.update_status("Profile tray quick switch started. Hosts file remains unchanged.")
+
+    def stop_profile_tray_quick_switch(self):
+        icon = getattr(self, "_tray_icon", None)
+        self._tray_icon = None
+        self._tray_thread = None
+        if not icon:
+            return
+        try:
+            icon.stop()
+        except Exception:
+            pass
+        self.update_status("Profile tray quick switch stopped.")
 
     def show_profile_activation_schedule(self):
         try:
