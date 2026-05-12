@@ -60,6 +60,11 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added `benchmarks/large_file_benchmark.py` with deterministic large hosts fixtures, parser/cleaner/domain-extraction/category timing, human-readable output, JSON output, and optional local clean-time budgets.
 - Added benchmark smoke coverage that avoids hardware-dependent timing assertions while keeping the harness wired into normal test discovery.
 
+**Accessibility audit**
+- Added **Tools > Accessibility Audit...** with tracked contrast checks, font assumptions, and screen-reader/high-contrast release notes.
+- Added pure WCAG-style contrast helpers plus regression coverage so tracked palette pairs fail in the normal test suite when contrast regresses.
+- Documented the manual Windows high-contrast, screen-reader, keyboard-only, and font-scaling checks in `docs/accessibility.md`.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

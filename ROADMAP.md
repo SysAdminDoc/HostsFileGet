@@ -39,7 +39,7 @@ Non-negotiables:
 - [x] F017 - Property-based parser/fuzzer tests (deterministic parser invariant and clean-idempotence fuzzers)
 - [x] F018 - GUI smoke tests (`tests/test_gui_smoke.py`, patched startup/modal coverage)
 - [x] F019 - Large-file benchmark suite (`benchmarks/large_file_benchmark.py`, docs, smoke coverage)
-- [ ] F020 - High-contrast, screen-reader, and font audit
+- [x] F020 - High-contrast, screen-reader, and font audit (`docs/accessibility.md`, Tools audit report, contrast regression coverage)
 - [ ] F021 - i18n string catalog foundation
 - [ ] F022 - Importers for SwitchHosts, Gas Mask, HostsFileEditor archives
 - [ ] F023 - RPZ, Unbound, Privoxy, compressed-hosts exports
@@ -52,7 +52,7 @@ Non-negotiables:
 - Language and runtime: Python 3.x, Tkinter desktop UI, Windows-first assumptions, PowerShell launcher.
 - Entry points: `hosts_editor.py` for GUI and CLI, `PythonLauncher.ps1` for elevated launch/bootstrap, `HostsFileGet.spec` for PyInstaller.
 - Packaging: PyInstaller one-file Windows EXE with `uac_admin=True`; build artifacts exist locally under `build/` and `dist/` but are not tracked.
-- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 160 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, and find/replace.
+- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 162 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, and find/replace.
 - Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `LICENSE`, and this roadmap.
 - License: MIT.
 

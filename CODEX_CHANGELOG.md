@@ -41,6 +41,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F018 complete. Next roadmap item: F019 large-file benchmark suite.
 - Completed F019: added deterministic large-file benchmark generation/timing/reporting, docs, CI compilation coverage, a smoke test without timing assertions, and a local 5,000-line sample run.
 - Updated `ROADMAP.md` to mark F019 complete. Next roadmap item: F020 high-contrast, screen-reader, and font audit.
+- Completed F020: added a local accessibility audit report, tracked contrast-pair helpers, safer high-contrast button/warning foregrounds, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F020 complete. Next roadmap item: F021 i18n string catalog foundation.
 
 ## Scope
 

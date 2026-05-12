@@ -160,6 +160,8 @@ Run the deterministic large-file benchmark with:
 python benchmarks\large_file_benchmark.py --entries 100000 --repeats 3 --json-output benchmark-report.json
 ```
 
+Open the local accessibility audit from **Tools > Accessibility Audit...**. It reports tracked contrast pairs, font assumptions, and the manual Windows screen-reader/high-contrast checklist.
+
 ## Repository Notes
 
 - Main application: `hosts_editor.py`
@@ -180,6 +182,7 @@ python benchmarks\large_file_benchmark.py --entries 100000 --repeats 3 --json-ou
 - Entry provenance: `docs/entry-provenance.md`
 - Windows DNS Client snapshot: `docs/windows-dns-client.md`
 - DNS bypass diagnostics: `docs/dns-bypass-diagnostics.md`
+- Accessibility audit: `docs/accessibility.md`
 - Sourced implementation plan: `ROADMAP.md`
 - Release build notes: `docs/release.md`
 - Codex handoff notes: `CODEX_CHANGELOG.md`
