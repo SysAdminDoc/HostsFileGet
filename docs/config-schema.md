@@ -82,6 +82,20 @@ Every sanitized config contains at least one profile:
 
 Profile IDs are lowercase slugs containing letters, numbers, `_`, and `-`, up to 64 characters. Duplicate IDs are deterministically suffixed (`work`, `work-2`, and so on). The sanitizer also accepts a mapping shape (`"profiles": {"work": {...}}`) and emits the canonical array shape.
 
+## Declarative Profile Files
+
+The app's internal config remains JSON, but automation can now use a smaller source-of-truth profile file documented in `docs/declarative-config.md`.
+
+Supported CLI actions:
+
+```powershell
+python hosts_editor.py --config-plan .\profile.yaml
+python hosts_editor.py --config-apply .\profile.toml
+python hosts_editor.py --config-export .\profile.yaml
+```
+
+Declarative files use schema `hostsfileget.declarative.v1` and contain one profile. Applying one creates or replaces that named profile, makes it active, and mirrors the profile's runtime fields to the top-level config. It preserves operational metadata such as source freshness, cache metadata, backup settings, and saved-state hashes.
+
 ## Source Cache Metadata
 
 Schema `2` adds `source_cache_metadata` for conditional source refreshes. The cached body lives under `source_cache\` beside the active config location; the config stores only metadata and a SHA-256 hash.

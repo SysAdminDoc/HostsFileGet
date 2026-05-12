@@ -51,6 +51,7 @@ It is not a DNS server, browser ad blocker, cloud filtering service, or endpoint
 | `docs/dns-bypass-diagnostics.md` | Browser encrypted-DNS/proxy bypass diagnostic behavior and limits |
 | `docs/migration-imports.md` | SwitchHosts, Gas Mask, and HostsFileEditor archive import behavior and limits |
 | `docs/export-formats.md` | Cleaned-output export adapters for hosts, DNS, proxy, and compressed formats |
+| `docs/declarative-config.md` | YAML/TOML/JSON profile source-of-truth CLI behavior |
 | `docs/accessibility.md` | Contrast audit, font assumptions, and manual Windows accessibility release checks |
 | `docs/i18n.md` | String catalog schema, fallback behavior, and localization guardrails |
 | `CLAUDE.md` | Compact architecture and gotchas snapshot for agents |
@@ -98,7 +99,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - File IO helpers: `decode_text_bytes`, `read_text_file_lines`, `write_text_file_atomic`.
 - Transactional hosts enable/disable helpers: `disable_hosts_file_transactionally`, `enable_hosts_file_transactionally`.
 - Download guards: `read_http_body_limited`, `decode_downloaded_lines`, `looks_like_html_document`.
-- Config sanitation: `sanitize_custom_sources`, `sanitize_config_snapshot`, `sanitize_profile_snapshot`, `sanitize_profiles_snapshot`, `update_active_profile_snapshot`, `resolve_saved_state_hashes`.
+- Config sanitation and declarative profiles: `sanitize_custom_sources`, `sanitize_config_snapshot`, `sanitize_profile_snapshot`, `sanitize_profiles_snapshot`, `update_active_profile_snapshot`, `parse_declarative_config_text`, `format_declarative_config_payload`, `apply_declarative_profile_to_config`, `resolve_saved_state_hashes`.
 - Source catalog loading: `sanitize_source_manifest`, `load_blocklist_sources_manifest`.
 - i18n catalog loading: `normalize_locale_code`, `sanitize_i18n_catalog`, `load_i18n_catalog`, `translate_message`, `build_i18n_catalog_report`.
 - Source response caching: `fetch_source_with_cache`, `sanitize_source_cache_metadata`, `build_source_request_headers`.
@@ -155,6 +156,9 @@ The CLI functions live near the bottom of `hosts_editor.py` and intentionally sh
 - `_cli_enable`
 - `_cli_apply`
 - `_cli_update`
+- `_cli_config_plan`
+- `_cli_config_apply`
+- `_cli_config_export`
 - `_cli_source_health`
 - `_handle_cli_args`
 

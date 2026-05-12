@@ -63,6 +63,7 @@ It is designed for people who work with large blocklists, external feed imports,
 - Configuration:
   - versioned JSON config migration
   - profile-ready schema mirror for future named whitelist/source/pin sets
+  - declarative YAML/TOML/JSON profile plan, apply, and export commands
   - versioned English string catalog foundation for future localization
 
 ## Supported Input Shapes
@@ -160,6 +161,14 @@ Run a non-admin curated source health report with:
 python hosts_editor.py --source-health --source-health-output source-health-report.json
 ```
 
+Plan, apply, or export a declarative profile file without writing the system hosts file:
+
+```powershell
+python hosts_editor.py --config-plan .\profile.yaml
+python hosts_editor.py --config-apply .\profile.toml
+python hosts_editor.py --config-export .\profile.yaml
+```
+
 Run the deterministic large-file benchmark with:
 
 ```powershell
@@ -178,6 +187,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Golden cleaned-output fixtures: `tests/golden_cleaned/`
 - Large-file benchmark harness: `benchmarks/large_file_benchmark.py`
 - Architecture map: `ARCHITECTURE.md`
+- Declarative profile files: `docs/declarative-config.md`
 - Troubleshooting and hosts-file limits: `TROUBLESHOOTING.md`
 - Config schema: `docs/config-schema.md`
 - Curated source manifest: `docs/source-manifest.md`
