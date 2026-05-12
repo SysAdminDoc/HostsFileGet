@@ -3431,7 +3431,12 @@ def format_declarative_config_payload(profile: dict, format_hint: str) -> str:
     raise ValueError(f"unsupported declarative config format: {fmt}")  # pragma: no cover
 
 
-def apply_declarative_profile_to_config(config: dict, profile: dict, default_last_open_dir: str) -> dict:
+def upsert_profile_in_config(
+    config: dict,
+    profile: dict,
+    default_last_open_dir: str,
+    activate: bool = False,
+) -> dict:
     snapshot = sanitize_config_snapshot(config, default_last_open_dir)
     target = sanitize_profile_snapshot(
         profile,
@@ -3448,15 +3453,29 @@ def apply_declarative_profile_to_config(config: dict, profile: dict, default_las
     if not replaced:
         profiles.append(target)
 
-    snapshot.update({
-        "whitelist": target["whitelist"],
-        "custom_sources": target["custom_sources"],
-        "pinned_domains": target["pinned_domains"],
-        "preferred_block_sink": target["preferred_block_sink"],
-        "active_profile_id": target["id"],
-        "profiles": profiles,
-    })
+    snapshot["profiles"] = profiles
+    if activate or snapshot.get("active_profile_id") == target["id"]:
+        snapshot.update({
+            "whitelist": target["whitelist"],
+            "custom_sources": target["custom_sources"],
+            "pinned_domains": target["pinned_domains"],
+            "preferred_block_sink": target["preferred_block_sink"],
+            "active_profile_id": target["id"],
+        })
     return sanitize_config_snapshot(snapshot, default_last_open_dir)
+
+
+def apply_declarative_profile_to_config(config: dict, profile: dict, default_last_open_dir: str) -> dict:
+    return upsert_profile_in_config(config, profile, default_last_open_dir, activate=True)
+
+
+def find_profile_snapshot(config: dict, profile_id: str, default_last_open_dir: str | None = None) -> dict:
+    sanitized = sanitize_config_snapshot(config, default_last_open_dir or os.path.expanduser("~"))
+    safe_id = sanitize_profile_id(profile_id, "")
+    for profile in sanitized.get("profiles", []):
+        if profile.get("id") == safe_id:
+            return sanitize_profile_snapshot(profile, fallback_id=safe_id)
+    raise ValueError(f"profile not found: {profile_id}")
 
 
 def find_active_profile_snapshot(config: dict) -> dict:
@@ -3466,6 +3485,33 @@ def find_active_profile_snapshot(config: dict) -> dict:
         if profile.get("id") == active_id:
             return sanitize_profile_snapshot(profile, fallback_id=active_id)
     return build_default_profile_snapshot(sanitized)
+
+
+def set_active_profile_in_config(config: dict, profile_id: str, default_last_open_dir: str) -> dict:
+    snapshot = sanitize_config_snapshot(config, default_last_open_dir)
+    profile = find_profile_snapshot(snapshot, profile_id, default_last_open_dir)
+    snapshot.update({
+        "whitelist": profile["whitelist"],
+        "custom_sources": profile["custom_sources"],
+        "pinned_domains": profile["pinned_domains"],
+        "preferred_block_sink": profile["preferred_block_sink"],
+        "active_profile_id": profile["id"],
+    })
+    return sanitize_config_snapshot(snapshot, default_last_open_dir)
+
+
+def format_profile_list_summary(config: dict, default_last_open_dir: str | None = None) -> str:
+    sanitized = sanitize_config_snapshot(config, default_last_open_dir or os.path.expanduser("~"))
+    active_id = sanitized.get("active_profile_id", DEFAULT_PROFILE_ID)
+    lines = ["Profiles:"]
+    for profile in sanitized.get("profiles", []):
+        marker = "*" if profile.get("id") == active_id else " "
+        whitelist, pinned_domains, custom_sources = _declarative_profile_lists(profile)
+        lines.append(
+            f"{marker} {profile['id']}  {profile['name']}  "
+            f"whitelist={len(whitelist)} sources={len(custom_sources)} pins={len(pinned_domains)}"
+        )
+    return "\n".join(lines)
 
 
 def format_declarative_profile_summary(profile: dict, action: str | None = None) -> str:
@@ -12392,6 +12438,71 @@ def _cli_config_export(output_path: str) -> int:
     return 0
 
 
+def _write_cli_config_payload(config_path: str, config: dict) -> None:
+    os.makedirs(os.path.dirname(config_path) or ".", exist_ok=True)
+    write_text_file_atomic(config_path, json.dumps(config, indent=2))
+
+
+def _cli_profile_list() -> int:
+    try:
+        config_path = get_primary_config_path("hosts_editor_config.json")
+        current = _read_cli_config_payload(config_path)
+        _cli_print(format_profile_list_summary(current, os.path.expanduser("~")))
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Profile list failed: {exc}")
+        return 2
+    return 0
+
+
+def _cli_profile_apply(profile_id: str) -> int:
+    try:
+        config_path = get_primary_config_path("hosts_editor_config.json")
+        current = _read_cli_config_payload(config_path)
+        config = set_active_profile_in_config(current, profile_id, os.path.expanduser("~"))
+        profile = find_active_profile_snapshot(config)
+        _write_cli_config_payload(config_path, config)
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Profile apply failed: {exc}")
+        return 2
+    _cli_print(format_declarative_profile_summary(profile, action="made active"))
+    _cli_print(f"Wrote config: {config_path}")
+    return 0
+
+
+def _cli_profile_import(source_path: str) -> int:
+    try:
+        profile = load_declarative_config_file(source_path)
+        config_path = get_primary_config_path("hosts_editor_config.json")
+        current = _read_cli_config_payload(config_path)
+        config = upsert_profile_in_config(current, profile, os.path.expanduser("~"), activate=False)
+        _write_cli_config_payload(config_path, config)
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Profile import failed: {exc}")
+        return 2
+    _cli_print(format_declarative_profile_summary(profile, action="imported without activating"))
+    _cli_print(f"Wrote config: {config_path}")
+    return 0
+
+
+def _cli_profile_export(profile_id: str, output_path: str) -> int:
+    try:
+        detect_declarative_config_format(output_path)
+        config_path = get_primary_config_path("hosts_editor_config.json")
+        current = _read_cli_config_payload(config_path)
+        profile = find_profile_snapshot(current, profile_id, os.path.expanduser("~"))
+        rendered = format_declarative_config_payload(profile, output_path)
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        write_text_file_atomic(output_path, rendered)
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Profile export failed: {exc}")
+        return 2
+    _cli_print(format_declarative_profile_summary(profile, action="exported"))
+    _cli_print(f"Wrote declarative profile: {output_path}")
+    return 0
+
+
 def _handle_cli_args(argv: list[str]) -> int | None:
     """Return an exit code when a CLI action was performed; else ``None`` to
     continue launching the GUI.
@@ -12409,6 +12520,10 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--config-plan",
         "--config-apply",
         "--config-export",
+        "--profile-list",
+        "--profile-apply",
+        "--profile-import",
+        "--profile-export",
         "--history-status",
         "--history-snapshot",
         "--history-restore",
@@ -12426,6 +12541,9 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--config-plan=",
         "--config-apply=",
         "--config-export=",
+        "--profile-apply=",
+        "--profile-import=",
+        "--profile-export=",
         "--history-restore=",
         "--source-health-output=",
         "--source-health-timeout=",
@@ -12447,6 +12565,10 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--config-plan", metavar="PATH", help="Validate a declarative YAML/TOML/JSON profile file and summarize the config change without writing.")
     parser.add_argument("--config-apply", metavar="PATH", help="Apply a declarative YAML/TOML/JSON profile file to the app config without writing the hosts file.")
     parser.add_argument("--config-export", metavar="PATH", help="Export the active app config profile as declarative YAML/TOML/JSON.")
+    parser.add_argument("--profile-list", action="store_true", help="List saved app profiles without launching the GUI.")
+    parser.add_argument("--profile-apply", metavar="ID", help="Make a saved profile active in the app config without writing the hosts file.")
+    parser.add_argument("--profile-import", metavar="PATH", help="Import a declarative profile file into the app config without activating it.")
+    parser.add_argument("--profile-export", nargs=2, metavar=("ID", "PATH"), help="Export a saved profile by ID as declarative YAML/TOML/JSON.")
     parser.add_argument("--history-status", action="store_true", help="Show optional local Git history status and recent snapshots.")
     parser.add_argument("--history-snapshot", action="store_true", help="Commit the current hosts file into the optional local Git history repository.")
     parser.add_argument("--history-restore", metavar="REF", help="Restore the hosts file from an optional local Git history commit ref after creating a normal backup.")
@@ -12486,6 +12608,14 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         return _cli_config_apply(args.config_apply)
     if args.config_export:
         return _cli_config_export(args.config_export)
+    if args.profile_list:
+        return _cli_profile_list()
+    if args.profile_apply:
+        return _cli_profile_apply(args.profile_apply)
+    if args.profile_import:
+        return _cli_profile_import(args.profile_import)
+    if args.profile_export:
+        return _cli_profile_export(args.profile_export[0], args.profile_export[1])
     if args.history_status:
         return _cli_history_status()
     if args.history_snapshot:

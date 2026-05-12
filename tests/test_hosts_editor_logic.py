@@ -71,6 +71,7 @@ from hosts_editor import (
     parse_declarative_config_text,
     load_declarative_config_text,
     apply_declarative_profile_to_config,
+    upsert_profile_in_config,
     parse_pihole_ftl_blocked_domains,
     parse_switchhosts_export_text,
     parse_windows_dns_client_events_xml,
@@ -84,6 +85,7 @@ from hosts_editor import (
     extract_blocking_domains_from_lines,
     fetch_source_with_cache,
     find_keyword_match_line_indices,
+    find_profile_snapshot,
     find_sources_containing_domain,
     format_relative_time,
     format_entry_provenance_report,
@@ -92,6 +94,7 @@ from hosts_editor import (
     format_i18n_catalog_report,
     format_declarative_config_payload,
     format_declarative_profile_summary,
+    format_profile_list_summary,
     format_git_history_status_report,
     format_source_trust_badges,
     format_source_overlap_report,
@@ -132,6 +135,7 @@ from hosts_editor import (
     summarize_clean_changes,
     summarize_source_health_results,
     translate_message,
+    set_active_profile_in_config,
     update_active_profile_snapshot,
     write_git_history_snapshot,
     write_text_file_atomic,
@@ -1349,6 +1353,56 @@ url = "https://example.com/hosts.txt"
         self.assertEqual([profile["id"] for profile in applied["profiles"]], ["default", "work"])
         self.assertEqual(applied["profiles"][1]["name"], "Work")
 
+    def test_profile_import_and_apply_are_separate_config_steps(self):
+        config = {
+            "whitelist": "default.example",
+            "profiles": [
+                {"id": "default", "name": "Default", "whitelist": "default.example"},
+            ],
+            "active_profile_id": "default",
+        }
+        work_profile = {
+            "id": "work",
+            "name": "Work",
+            "whitelist": ["work.example"],
+            "custom_sources": [{"name": "Feed", "url": "https://example.com/hosts.txt"}],
+            "preferred_block_sink": "127.0.0.1",
+        }
+
+        imported = upsert_profile_in_config(config, work_profile, os.getcwd(), activate=False)
+        applied = set_active_profile_in_config(imported, "work", os.getcwd())
+        replaced_active = upsert_profile_in_config(
+            config,
+            {"id": "default", "name": "Default", "whitelist": ["new-default.example"]},
+            os.getcwd(),
+            activate=False,
+        )
+
+        self.assertEqual(imported["active_profile_id"], "default")
+        self.assertEqual(imported["whitelist"], "default.example")
+        self.assertEqual(find_profile_snapshot(imported, "work", os.getcwd())["whitelist"], "work.example")
+        self.assertEqual(applied["active_profile_id"], "work")
+        self.assertEqual(applied["whitelist"], "work.example")
+        self.assertEqual(applied["preferred_block_sink"], "127.0.0.1")
+        self.assertEqual(replaced_active["active_profile_id"], "default")
+        self.assertEqual(replaced_active["whitelist"], "new-default.example")
+
+    def test_format_profile_list_summary_marks_active_profile(self):
+        summary = format_profile_list_summary(
+            {
+                "active_profile_id": "work",
+                "profiles": [
+                    {"id": "default", "name": "Default", "whitelist": "default.example"},
+                    {"id": "work", "name": "Work", "whitelist": ["work.example"], "pinned_domains": ["pin.example"]},
+                ],
+            },
+            os.getcwd(),
+        )
+
+        self.assertIn("  default  Default", summary)
+        self.assertIn("* work  Work", summary)
+        self.assertIn("pins=1", summary)
+
     def test_cli_declarative_config_apply_and_export_use_app_config_only(self):
         import tempfile
         from pathlib import Path
@@ -1386,6 +1440,54 @@ profile:
             exported = parse_declarative_config_text(export_path.read_text(encoding="utf-8"), "toml")
             self.assertEqual(exported["id"], "work")
             self.assertEqual(exported["custom_sources"], [{"name": "Feed", "url": "https://example.com/hosts.txt"}])
+
+    def test_cli_profile_import_apply_and_export_are_explicit_steps(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "hosts_editor_config.json"
+            source_path = Path(tmpdir) / "profile.yaml"
+            export_path = Path(tmpdir) / "profile.json"
+            config_path.write_text(
+                json.dumps({
+                    "whitelist": "default.example",
+                    "profiles": [{"id": "default", "name": "Default", "whitelist": "default.example"}],
+                    "active_profile_id": "default",
+                }),
+                encoding="utf-8",
+            )
+            source_path.write_text(
+                """
+schema: "hostsfileget.declarative.v1"
+profile:
+  id: "work"
+  name: "Work"
+  whitelist:
+    - "work.example"
+  custom_sources: []
+  pinned_domains: []
+""",
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(hosts_editor, "get_primary_config_path", return_value=str(config_path)):
+                self.assertEqual(hosts_editor._cli_profile_import(str(source_path)), 0)
+                imported = json.loads(config_path.read_text(encoding="utf-8"))
+                self.assertEqual(imported["active_profile_id"], "default")
+                self.assertEqual(imported["whitelist"], "default.example")
+
+                self.assertEqual(hosts_editor._cli_profile_apply("work"), 0)
+                applied = json.loads(config_path.read_text(encoding="utf-8"))
+                self.assertEqual(applied["active_profile_id"], "work")
+                self.assertEqual(applied["whitelist"], "work.example")
+
+                self.assertEqual(hosts_editor._cli_profile_list(), 0)
+                self.assertEqual(hosts_editor._cli_profile_export("work", str(export_path)), 0)
+
+            exported = parse_declarative_config_text(export_path.read_text(encoding="utf-8"), "json")
+            self.assertEqual(exported["id"], "work")
+            self.assertEqual(exported["whitelist"], "work.example")
 
     def test_sanitize_config_snapshot_rejects_non_sha256_hashes(self):
         payload = sanitize_config_snapshot(

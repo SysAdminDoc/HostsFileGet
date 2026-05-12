@@ -88,6 +88,11 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added optional local Git-backed hosts history with `--history-status`, `--history-snapshot`, and `--history-restore`.
 - History snapshots are stored in a local app-data repository and include hosts content plus metadata; duplicate content does not create duplicate commits.
 - Restores require Administrator privileges, refuse disabled-hosts state, and create the normal `.bak` safety backup before writing.
+
+**CLI profiles**
+- Added `--profile-list`, `--profile-import`, `--profile-apply`, and `--profile-export` for explicit saved-profile automation.
+- Profile import now stages a declarative profile without activating it; profile apply switches the active runtime config without writing the system hosts file.
+- Profile export can write any saved profile as declarative YAML/TOML/JSON.
 - Documented format semantics and source references in `docs/export-formats.md`.
 
 ## [v2.17.0] - 2026-04-18

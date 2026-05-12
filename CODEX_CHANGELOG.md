@@ -53,6 +53,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F025 complete. Next roadmap item: F026 Git-backed history and rollback.
 - Completed F026: added optional local Git-backed hosts snapshots, status reporting, admin-gated restore with normal backups, docs, and regression tests.
 - Updated `ROADMAP.md` to mark F026 complete. Next roadmap item: F027 CLI profile apply/export/import.
+- Completed F027: added explicit `--profile-list`, `--profile-import`, `--profile-apply`, and `--profile-export` commands, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F027 complete. Next roadmap item: F028 scheduler hardening and activity report.
 
 ## Scope
 
