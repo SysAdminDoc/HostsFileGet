@@ -26,7 +26,7 @@ Non-negotiables:
 - [x] F004 - Code signing, checksums, SBOM, dependency advisory scan (`requirements-security.txt`, optional signing hook, release SBOM/checksum assets, CI advisory scan)
 - [x] F005 - Versioned config schema and migrator tests (`CONFIG_SCHEMA_VERSION`, `migrate_config_snapshot`, `docs/config-schema.md`)
 - [x] F006 - External curated source manifest (`data/blocklist_sources.json`, manifest validation, launcher/release bundling)
-- [ ] F007 - Source health checker
+- [x] F007 - Source health checker (`--source-health`, JSON report, scheduled workflow artifact)
 - [ ] F008 - ETag/Last-Modified cache
 - [ ] F009 - Source trust badges
 - [ ] F010 - False-positive triage flow
@@ -266,7 +266,7 @@ Legend:
 
 1. Completed - Documentation and architecture baseline: F001, F024.
 2. Completed - CI and release hygiene: F002, F003, F004.
-3. In progress - Config and source-data foundations: completed F005-F006; next F007-F009.
+3. In progress - Config and source-data foundations: completed F005-F007; next F008-F009.
 4. Explainability and diagnostics: F010, F011, F012, F013, F014.
 5. Profile groundwork and migrations: F015, F022, F023.
 6. Quality gates: F016, F017, F018, F019.
