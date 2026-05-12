@@ -41,6 +41,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - ETag / Last-Modified refresh cache with cached-body fallback
   - source trust badges for transport, upstream report path, local freshness, cache integrity, and catalog/license caveats
   - source overlap matrix for fetched feeds
+  - local Filter Builder with recent query history across editor lines, fetched sources, and curated source metadata
   - batch import with filtering and progress
   - custom persistent sources
   - pfSense DNSBL log import

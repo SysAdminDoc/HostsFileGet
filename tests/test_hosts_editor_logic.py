@@ -32,6 +32,7 @@ from hosts_editor import (
     build_accessibility_audit_report,
     build_adblock_syntax_report,
     build_false_positive_triage_report,
+    build_filter_builder_report,
     build_idn_homograph_report,
     build_i18n_catalog_report,
     build_entry_provenance_report,
@@ -75,9 +76,12 @@ from hosts_editor import (
     enable_hosts_file_transactionally,
     discover_import_sections,
     fuzzy_score,
+    format_filter_builder_report,
     parse_adguard_home_querylog,
     parse_nextdns_log_csv,
     parse_gas_mask_archive_path,
+    record_filter_query_history,
+    sanitize_filter_query_history,
     parse_hostsfileeditor_archive_path,
     parse_declarative_config_text,
     parse_schtasks_query_output,
@@ -4542,6 +4546,77 @@ profile:
         self.assertTrue(falsy["update_on_launch"])
         default = sanitize_config_snapshot({}, os.path.expanduser("~"))
         self.assertFalse(default["update_on_launch"])
+
+    # ---- v2.21: filter builder and query history ----
+    def test_sanitize_filter_query_history_dedupes_and_caps(self):
+        history = sanitize_filter_query_history(
+            [
+                " domain:ads.example ",
+                "DOMAIN:ADS.example",
+                "line:foo\nbar",
+                "",
+                None,
+                "source:hagezi",
+            ],
+            max_items=3,
+        )
+        self.assertEqual(history, ["domain:ads.example", "line:foo bar", "source:hagezi"])
+
+    def test_record_filter_query_history_promotes_recent_query(self):
+        history = record_filter_query_history(
+            ["line:ads", "source:hagezi", "domain:old.example"],
+            " SOURCE:hagezi ",
+            max_items=3,
+        )
+        self.assertEqual(history, ["SOURCE:hagezi", "line:ads", "domain:old.example"])
+
+    def test_sanitize_config_snapshot_persists_filter_query_history(self):
+        snapshot = sanitize_config_snapshot(
+            {"filter_query_history": ["line:ads", "LINE:ads", "history:foo\tbar"]},
+            os.path.expanduser("~"),
+        )
+        self.assertEqual(snapshot["filter_query_history"], ["line:ads", "history:foo bar"])
+
+    def test_build_filter_builder_report_matches_editor_sources_and_history(self):
+        report = build_filter_builder_report(
+            "domain:example.com source:hagezi",
+            editor_lines=[
+                "0.0.0.0 ads.example.com",
+                "127.0.0.1 localhost",
+                "# comment",
+            ],
+            source_corpus={
+                "hagezi": {
+                    "name": "HaGeZi Pro",
+                    "url": "https://example.test/hagezi.txt",
+                    "text": "0.0.0.0 ads.example.com\n0.0.0.0 tracker.example",
+                }
+            },
+            blocklist_sources={
+                "Ads and trackers": [
+                    ("HaGeZi Pro", "https://example.test/hagezi.txt", "privacy and tracker source")
+                ]
+            },
+            query_history=["domain:ads.example.com", "source:oisd"],
+        )
+        self.assertEqual(report["domain_terms"], ["example.com"])
+        self.assertEqual(report["editor_match_count"], 1)
+        self.assertEqual(report["editor_matches"][0]["line_no"], 1)
+        self.assertGreaterEqual(report["source_match_count"], 1)
+        self.assertTrue(any(item["name"] == "HaGeZi Pro" for item in report["source_matches"]))
+        self.assertIn("domain:ads.example.com", report["history_matches"])
+
+    def test_format_filter_builder_report_lists_sections(self):
+        report = build_filter_builder_report(
+            "line:ads",
+            editor_lines=["0.0.0.0 ads.example"],
+            query_history=["line:ads tracker"],
+        )
+        text = format_filter_builder_report(report)
+        self.assertIn("Filter Builder", text)
+        self.assertIn("Editor matches: 1", text)
+        self.assertIn("Source matches: 0", text)
+        self.assertIn("Boundary: local report only", text)
 
 
 if __name__ == "__main__":
