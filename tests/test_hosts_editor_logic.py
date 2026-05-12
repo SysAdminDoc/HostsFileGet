@@ -24,6 +24,8 @@ from hosts_editor import (
     STALE_FRESH_HOURS,
     STALE_WARN_HOURS,
     append_provenance_event,
+    add_domain_to_whitelist_text,
+    build_false_positive_triage_report,
     build_pinned_export_payload,
     build_source_health_report,
     build_source_request_headers,
@@ -58,6 +60,7 @@ from hosts_editor import (
     find_keyword_match_line_indices,
     find_sources_containing_domain,
     format_relative_time,
+    format_false_positive_triage_report,
     format_source_trust_badges,
     build_schtasks_create_command,
     get_source_cache_body_path,
@@ -68,9 +71,11 @@ from hosts_editor import (
     normalize_scheduler_start_time,
     normalize_line_to_hosts_entries,
     normalize_custom_source_url,
+    normalize_false_positive_domain,
     read_http_body_limited,
     read_text_file_lines,
     remove_import_section,
+    remove_false_positive_matches_from_lines,
     remove_lines_by_indices,
     resolve_saved_state_hashes,
     rewrite_block_sink_ip,
@@ -539,6 +544,70 @@ class HostsEditorLogicTests(unittest.TestCase):
             source_trust_report_url("https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/ultimate.txt"),
             "https://github.com/hagezi/dns-blocklists/issues",
         )
+
+    def test_false_positive_triage_reports_block_whitelist_pin_and_sources(self):
+        report = build_false_positive_triage_report(
+            "ads.example",
+            [
+                "0.0.0.0 ads.example",
+                "0.0.0.0 sub.ads.example tracker.example",
+                "192.168.1.10 ads.example",
+            ],
+            whitelist_set={"example"},
+            pinned_domains={"ads.example"},
+            source_corpus={
+                "one": {"name": "Example Source", "text": "0.0.0.0 ads.example\n"},
+            },
+        )
+
+        self.assertTrue(report["valid"])
+        self.assertEqual(report["domain"], "ads.example")
+        self.assertTrue(report["on_whitelist"])
+        self.assertTrue(report["is_pinned"])
+        self.assertEqual(len(report["blocked_on_lines"]), 2)
+        self.assertEqual(report["source_matches"], ["Example Source"])
+        action_ids = {action["id"] for action in report["recommended_actions"]}
+        self.assertIn("remove_matching_lines", action_ids)
+        self.assertIn("unpin_domain", action_ids)
+        formatted = format_false_positive_triage_report(
+            report,
+            not_yet_fetched_count=2,
+            source_issue_urls={"Example Source": "https://github.com/owner/repo/issues"},
+        )
+        self.assertIn("BLOCKED in current editor", formatted)
+        self.assertIn("Whitelist: YES", formatted)
+        self.assertIn("report: https://github.com/owner/repo/issues", formatted)
+
+    def test_false_positive_triage_rejects_single_label_domains(self):
+        domain, error = normalize_false_positive_domain("localhost")
+
+        self.assertEqual(domain, "")
+        self.assertIn("multi-label domain", error)
+
+    def test_add_domain_to_whitelist_text_appends_and_dedupes_coverage(self):
+        text, added = add_domain_to_whitelist_text("# keep\nexample.com\n", "ads.example.com")
+
+        self.assertFalse(added)
+        self.assertEqual(text, "# keep\nexample.com\n")
+
+        text, added = add_domain_to_whitelist_text("# keep\n", "ads.example.com")
+
+        self.assertTrue(added)
+        self.assertEqual(text, "# keep\nads.example.com\n")
+
+    def test_remove_false_positive_matches_removes_only_blocking_lines(self):
+        lines = [
+            "0.0.0.0 ads.example",
+            "127.0.0.1 sub.ads.example tracker.example",
+            "192.168.1.10 ads.example",
+            "# 0.0.0.0 ads.example",
+        ]
+
+        new_lines, removed = remove_false_positive_matches_from_lines(lines, "ads.example")
+
+        self.assertEqual(new_lines, ["192.168.1.10 ads.example", "# 0.0.0.0 ads.example"])
+        self.assertEqual(len(removed), 2)
+        self.assertEqual(removed[1]["matched_domains"], ["sub.ads.example"])
 
     def test_source_cache_metadata_sanitizes_headers_and_hashes(self):
         good_hash = "a" * 64

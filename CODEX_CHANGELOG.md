@@ -21,6 +21,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F008 complete. Next roadmap item: F009 source trust badges.
 - Completed F009: added deterministic source trust badge helpers, source catalog/batch/saved/preview UI display, upstream issue-path derivation, badge criteria docs, and regression tests for GitHub/jsDelivr/HTTP/broad-scope cases.
 - Updated `ROADMAP.md` to mark F009 complete. Next roadmap item: F010 false-positive triage flow.
+- Completed F010: expanded Check Domain into a false-positive triage flow with pure report helpers, whitelist/pin/source attribution state, previewed line removal, report copying, upstream issue-path opening, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F010 complete. Next roadmap item: F011 source overlap matrix.
 
 ## Scope
 

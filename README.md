@@ -47,6 +47,7 @@ It is designed for people who work with large blocklists, external feed imports,
 - Search and cleanup:
   - find / next / previous navigation
   - remove matching entries with selection + preview
+  - false-positive triage for whitelist, pin, source-match, and upstream report decisions
 - Operational utilities:
   - DNS cache flush
   - backup restore preview
@@ -156,6 +157,8 @@ python hosts_editor.py --source-health --source-health-output source-health-repo
 - Config schema: `docs/config-schema.md`
 - Curated source manifest: `docs/source-manifest.md`
 - Source health checks: `docs/source-health.md`
+- Source trust badges: `docs/source-trust.md`
+- False-positive triage: `docs/false-positive-triage.md`
 - Sourced implementation plan: `ROADMAP.md`
 - Release build notes: `docs/release.md`
 - Codex handoff notes: `CODEX_CHANGELOG.md`
