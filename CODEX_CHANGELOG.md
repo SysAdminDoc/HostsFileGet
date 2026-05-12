@@ -49,6 +49,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F022 complete. Next roadmap item: F023 RPZ, Unbound, Privoxy, and compressed-hosts exports.
 - Completed F023: expanded Export Cleaned with RPZ, Unbound, Privoxy, gzip-compressed hosts, and bzip2-compressed hosts outputs; added a shared export domain record layer, atomic binary writes, docs, and regression tests.
 - Updated `ROADMAP.md` to mark F023 complete. Next roadmap item: F025 declarative YAML/TOML source of truth.
+- Completed F025: added dependency-free declarative YAML/TOML/JSON profile parsing, config merge/export helpers, `--config-plan`, `--config-apply`, `--config-export`, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F025 complete. Next roadmap item: F026 Git-backed history and rollback.
 
 ## Scope
 

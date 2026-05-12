@@ -68,6 +68,9 @@ from hosts_editor import (
     parse_adguard_home_querylog,
     parse_gas_mask_archive_path,
     parse_hostsfileeditor_archive_path,
+    parse_declarative_config_text,
+    load_declarative_config_text,
+    apply_declarative_profile_to_config,
     parse_pihole_ftl_blocked_domains,
     parse_switchhosts_export_text,
     parse_windows_dns_client_events_xml,
@@ -84,6 +87,8 @@ from hosts_editor import (
     format_false_positive_triage_report,
     format_accessibility_audit_report,
     format_i18n_catalog_report,
+    format_declarative_config_payload,
+    format_declarative_profile_summary,
     format_source_trust_badges,
     format_source_overlap_report,
     format_dns_bypass_diagnostics,
@@ -1243,6 +1248,137 @@ class HostsEditorLogicTests(unittest.TestCase):
         self.assertEqual(updated[1]["custom_sources"], [{"name": "Feed", "url": "https://example.com/hosts.txt"}])
         self.assertEqual(updated[1]["pinned_domains"], ["pinned.example"])
         self.assertEqual(updated[1]["preferred_block_sink"], "::")
+
+    def test_parse_declarative_config_yaml_sanitizes_profile_payload(self):
+        profile = parse_declarative_config_text(
+            """
+schema: "hostsfileget.declarative.v1"
+profile:
+  id: "Work_Profile"
+  name: "Work Profile"
+  preferred_block_sink: "127.0.0.1"
+  whitelist:
+    - "safe.example"
+    - "also-safe.example"
+  pinned_domains:
+    - "Pinned.Example"
+    - "not a domain"
+  custom_sources:
+    - name: "Example Feed"
+      url: "https://example.com/hosts.txt"
+""",
+            "yaml",
+        )
+
+        self.assertEqual(profile["id"], "work_profile")
+        self.assertEqual(profile["name"], "Work Profile")
+        self.assertEqual(profile["whitelist"], "safe.example\nalso-safe.example")
+        self.assertEqual(profile["pinned_domains"], ["pinned.example"])
+        self.assertEqual(profile["custom_sources"], [{"name": "Example Feed", "url": "https://example.com/hosts.txt"}])
+        self.assertEqual(profile["preferred_block_sink"], "127.0.0.1")
+
+    def test_declarative_config_toml_round_trips_active_profile_shape(self):
+        profile = parse_declarative_config_text(
+            """
+schema = "hostsfileget.declarative.v1"
+
+[profile]
+id = "work"
+name = "Work"
+preferred_block_sink = "::1"
+whitelist = ["safe.example", "also-safe.example"]
+pinned_domains = ["Pinned.Example"]
+
+[[profile.custom_sources]]
+name = "Feed"
+url = "https://example.com/hosts.txt"
+""",
+            "toml",
+        )
+
+        rendered = format_declarative_config_payload(profile, "profile.toml")
+        round_trip = parse_declarative_config_text(rendered, "toml")
+
+        self.assertEqual(round_trip["id"], "work")
+        self.assertEqual(round_trip["whitelist"], "safe.example\nalso-safe.example")
+        self.assertEqual(round_trip["pinned_domains"], ["pinned.example"])
+        self.assertIn("[[profile.custom_sources]]", rendered)
+
+    def test_apply_declarative_profile_to_config_preserves_operational_metadata(self):
+        stamp = datetime.datetime.now().isoformat(timespec="seconds")
+        config = {
+            "whitelist": "old.example",
+            "profiles": [
+                {"id": "default", "name": "Default", "whitelist": "old.example"},
+                {"id": "work", "name": "Old Work", "whitelist": "old-work.example"},
+            ],
+            "active_profile_id": "default",
+            "source_last_fetched": {"https://example.com/hosts.txt": stamp},
+            "source_cache_metadata": {
+                "https://example.com/hosts.txt": {
+                    "cache_key": "a" * 64,
+                    "content_sha256": "b" * 64,
+                    "bytes": 12,
+                }
+            },
+        }
+        profile = {
+            "id": "work",
+            "name": "Work",
+            "whitelist": ["safe.example"],
+            "custom_sources": [{"name": "Feed", "url": "https://example.com/hosts.txt"}],
+            "pinned_domains": ["Pinned.Example"],
+            "preferred_block_sink": "::",
+        }
+
+        applied = apply_declarative_profile_to_config(config, profile, os.getcwd())
+
+        self.assertEqual(applied["active_profile_id"], "work")
+        self.assertEqual(applied["whitelist"], "safe.example")
+        self.assertEqual(applied["custom_sources"], [{"name": "Feed", "url": "https://example.com/hosts.txt"}])
+        self.assertEqual(applied["pinned_domains"], ["pinned.example"])
+        self.assertEqual(applied["preferred_block_sink"], "::")
+        self.assertEqual(applied["source_last_fetched"], {"https://example.com/hosts.txt": stamp})
+        self.assertEqual([profile["id"] for profile in applied["profiles"]], ["default", "work"])
+        self.assertEqual(applied["profiles"][1]["name"], "Work")
+
+    def test_cli_declarative_config_apply_and_export_use_app_config_only(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "hosts_editor_config.json"
+            source_path = Path(tmpdir) / "profile.yaml"
+            export_path = Path(tmpdir) / "profile.toml"
+            config_path.write_text(json.dumps({"whitelist": "old.example"}), encoding="utf-8")
+            source_path.write_text(
+                """
+schema: "hostsfileget.declarative.v1"
+profile:
+  id: "work"
+  name: "Work"
+  preferred_block_sink: "0.0.0.0"
+  whitelist:
+    - "safe.example"
+  pinned_domains: []
+  custom_sources:
+    - name: "Feed"
+      url: "https://example.com/hosts.txt"
+""",
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(hosts_editor, "get_primary_config_path", return_value=str(config_path)):
+                self.assertEqual(hosts_editor._cli_config_apply(str(source_path)), 0)
+                written = json.loads(config_path.read_text(encoding="utf-8"))
+                self.assertEqual(written["active_profile_id"], "work")
+                self.assertEqual(written["whitelist"], "safe.example")
+
+                self.assertEqual(hosts_editor._cli_config_export(str(export_path)), 0)
+
+            exported = parse_declarative_config_text(export_path.read_text(encoding="utf-8"), "toml")
+            self.assertEqual(exported["id"], "work")
+            self.assertEqual(exported["custom_sources"], [{"name": "Feed", "url": "https://example.com/hosts.txt"}])
 
     def test_sanitize_config_snapshot_rejects_non_sha256_hashes(self):
         payload = sanitize_config_snapshot(

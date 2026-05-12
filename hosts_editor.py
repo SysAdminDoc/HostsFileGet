@@ -29,6 +29,10 @@ import pathlib
 import datetime
 import argparse
 import glob
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback path
+    tomllib = None
 
 APP_NAME = "Hosts File Get"
 APP_SLUG = "HostsFileGet"
@@ -37,6 +41,14 @@ CONFIG_SCHEMA_VERSION = 3
 PROFILE_SCHEMA_VERSION = 1
 DEFAULT_PROFILE_ID = "default"
 PROFILE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+DECLARATIVE_CONFIG_SCHEMA = "hostsfileget.declarative.v1"
+DECLARATIVE_CONFIG_FORMATS = {"json", "yaml", "toml"}
+DECLARATIVE_CONFIG_EXTENSION_FORMATS = {
+    ".json": "json",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".toml": "toml",
+}
 SOURCE_MANIFEST_SCHEMA_VERSION = 1
 SOURCE_MANIFEST_RELATIVE_PATH = os.path.join("data", "blocklist_sources.json")
 I18N_CATALOG_SCHEMA_VERSION = 1
@@ -2838,6 +2850,359 @@ def update_active_profile_snapshot(
         break
 
     return sanitized_profiles, active_id
+
+
+def detect_declarative_config_format(path_or_hint: str) -> str:
+    hint = str(path_or_hint or "").strip().lower()
+    if not hint:
+        raise ValueError("declarative config format is required")
+    if hint in DECLARATIVE_CONFIG_FORMATS:
+        return hint
+    suffix = pathlib.Path(hint).suffix.lower()
+    detected = DECLARATIVE_CONFIG_EXTENSION_FORMATS.get(suffix)
+    if detected:
+        return detected
+    raise ValueError("supported declarative config formats are .json, .yaml, .yml, and .toml")
+
+
+def _parse_declarative_scalar(value: str):
+    value = value.strip()
+    if value == "":
+        return ""
+    if value == "[]":
+        return []
+    if value in {"true", "false"}:
+        return value == "true"
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        if value[0] == '"':
+            try:
+                return json.loads(value)
+            except ValueError:
+                return value[1:-1]
+        return value[1:-1].replace("''", "'")
+    return value
+
+
+def _parse_declarative_key_value(text: str) -> tuple[str, object]:
+    if ":" not in text:
+        raise ValueError(f"invalid declarative YAML line: {text}")
+    key, value = text.split(":", 1)
+    key = key.strip()
+    if not key:
+        raise ValueError("declarative YAML key cannot be empty")
+    return key, _parse_declarative_scalar(value)
+
+
+def parse_declarative_yaml_text(text: str) -> dict:
+    """Parse the supported no-dependency YAML subset for profile source-of-truth files.
+
+    The parser is intentionally narrow: top-level scalars, a ``profile`` mapping,
+    scalar profile fields, list fields, and ``custom_sources`` objects.
+    """
+    payload: dict = {}
+    profile: dict | None = None
+    current_list: str | None = None
+    current_source: dict | None = None
+
+    for raw_line in text.splitlines():
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+        if "\t" in raw_line:
+            raise ValueError("declarative YAML must use spaces for indentation")
+
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        stripped = raw_line.strip()
+        if indent == 0:
+            current_list = None
+            current_source = None
+            if stripped == "profile:":
+                profile = {}
+                payload["profile"] = profile
+                continue
+            key, value = _parse_declarative_key_value(stripped)
+            payload[key] = value
+            continue
+
+        if profile is None:
+            raise ValueError("declarative YAML nested fields must be under profile")
+
+        if indent == 2:
+            current_source = None
+            if stripped.startswith("- "):
+                raise ValueError("profile must be a mapping, not a list")
+            key, value = _parse_declarative_key_value(stripped)
+            if value == "" and key in {"whitelist", "pinned_domains", "custom_sources"}:
+                profile[key] = []
+                current_list = key
+            else:
+                profile[key] = value
+                current_list = None
+            continue
+
+        if indent == 4:
+            if current_list in {"whitelist", "pinned_domains"} and stripped.startswith("- "):
+                profile[current_list].append(_parse_declarative_scalar(stripped[2:]))
+                continue
+            if current_list == "custom_sources" and stripped.startswith("- "):
+                source: dict = {}
+                rest = stripped[2:].strip()
+                if rest:
+                    key, value = _parse_declarative_key_value(rest)
+                    source[key] = value
+                profile["custom_sources"].append(source)
+                current_source = source
+                continue
+            raise ValueError(f"unsupported declarative YAML list entry: {stripped}")
+
+        if indent == 6 and current_list == "custom_sources" and current_source is not None:
+            key, value = _parse_declarative_key_value(stripped)
+            current_source[key] = value
+            continue
+
+        raise ValueError(f"unsupported declarative YAML indentation at line: {raw_line}")
+
+    return payload
+
+
+def _parse_toml_scalar(value: str):
+    value = value.strip()
+    if value.startswith("[") and value.endswith("]"):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, list) else value
+        except ValueError:
+            return [
+                _parse_declarative_scalar(part.strip())
+                for part in value[1:-1].split(",")
+                if part.strip()
+            ]
+    return _parse_declarative_scalar(value)
+
+
+def parse_declarative_toml_text(text: str) -> dict:
+    if tomllib is not None:
+        try:
+            return tomllib.loads(text)
+        except tomllib.TOMLDecodeError as exc:
+            raise ValueError(f"invalid declarative TOML: {exc}") from exc
+
+    payload: dict = {}
+    profile: dict | None = None
+    current_source: dict | None = None
+    section: str | None = None
+    for raw_line in text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped == "[profile]":
+            profile = payload.setdefault("profile", {})
+            section = "profile"
+            current_source = None
+            continue
+        if stripped == "[[profile.custom_sources]]":
+            profile = payload.setdefault("profile", {})
+            custom_sources = profile.setdefault("custom_sources", [])
+            current_source = {}
+            custom_sources.append(current_source)
+            section = "custom_source"
+            continue
+        if "=" not in stripped:
+            raise ValueError(f"invalid declarative TOML line: {stripped}")
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        value = _parse_toml_scalar(value)
+        if section == "profile" and profile is not None:
+            profile[key] = value
+        elif section == "custom_source" and current_source is not None:
+            current_source[key] = value
+        else:
+            payload[key] = value
+    return payload
+
+
+def load_declarative_config_text(text: str, format_hint: str) -> dict:
+    fmt = detect_declarative_config_format(format_hint)
+    if fmt == "json":
+        try:
+            payload = json.loads(text)
+        except ValueError as exc:
+            raise ValueError(f"invalid declarative JSON: {exc}") from exc
+    elif fmt == "yaml":
+        payload = parse_declarative_yaml_text(text)
+    elif fmt == "toml":
+        payload = parse_declarative_toml_text(text)
+    else:  # pragma: no cover - guarded by detect_declarative_config_format
+        raise ValueError(f"unsupported declarative config format: {fmt}")
+
+    if not isinstance(payload, dict):
+        raise ValueError("declarative config must be a mapping")
+    return payload
+
+
+def parse_declarative_config_text(text: str, format_hint: str) -> dict:
+    payload = load_declarative_config_text(text, format_hint)
+    schema = payload.get("schema")
+    if schema != DECLARATIVE_CONFIG_SCHEMA:
+        raise ValueError(f"declarative config schema must be {DECLARATIVE_CONFIG_SCHEMA}")
+    profile = payload.get("profile")
+    if not isinstance(profile, dict):
+        raise ValueError("declarative config requires a profile mapping")
+    fallback_id = sanitize_profile_id(profile.get("id"), DEFAULT_PROFILE_ID)
+    return sanitize_profile_snapshot(profile, fallback_id=fallback_id)
+
+
+def load_declarative_config_file(path: str) -> dict:
+    return parse_declarative_config_text(read_text_file_content(path), path)
+
+
+def build_declarative_config_payload(profile: dict) -> dict:
+    sanitized = sanitize_profile_snapshot(
+        profile,
+        fallback_id=sanitize_profile_id(profile.get("id"), DEFAULT_PROFILE_ID),
+    )
+    return {
+        "schema": DECLARATIVE_CONFIG_SCHEMA,
+        "profile": sanitized,
+    }
+
+
+def _declarative_profile_lists(profile: dict) -> tuple[list[str], list[str], list[dict]]:
+    whitelist = [line.strip() for line in profile.get("whitelist", "").splitlines() if line.strip()]
+    pinned_domains = list(profile.get("pinned_domains", []))
+    custom_sources = list(profile.get("custom_sources", []))
+    return whitelist, pinned_domains, custom_sources
+
+
+def _json_string(value) -> str:
+    return json.dumps(str(value), ensure_ascii=True)
+
+
+def format_declarative_config_yaml(profile: dict) -> str:
+    payload = build_declarative_config_payload(profile)
+    profile = payload["profile"]
+    whitelist, pinned_domains, custom_sources = _declarative_profile_lists(profile)
+    lines = [
+        f"schema: {_json_string(payload['schema'])}",
+        "profile:",
+        f"  id: {_json_string(profile['id'])}",
+        f"  name: {_json_string(profile['name'])}",
+        f"  preferred_block_sink: {_json_string(profile['preferred_block_sink'])}",
+    ]
+    if whitelist:
+        lines.append("  whitelist:")
+        lines.extend(f"    - {_json_string(value)}" for value in whitelist)
+    else:
+        lines.append("  whitelist: []")
+    if pinned_domains:
+        lines.append("  pinned_domains:")
+        lines.extend(f"    - {_json_string(value)}" for value in pinned_domains)
+    else:
+        lines.append("  pinned_domains: []")
+    if custom_sources:
+        lines.append("  custom_sources:")
+        for source in custom_sources:
+            lines.append(f"    - name: {_json_string(source['name'])}")
+            lines.append(f"      url: {_json_string(source['url'])}")
+    else:
+        lines.append("  custom_sources: []")
+    return "\n".join(lines) + "\n"
+
+
+def _format_toml_array(values: list[str]) -> str:
+    if not values:
+        return "[]"
+    return "[" + ", ".join(_json_string(value) for value in values) + "]"
+
+
+def format_declarative_config_toml(profile: dict) -> str:
+    payload = build_declarative_config_payload(profile)
+    profile = payload["profile"]
+    whitelist, pinned_domains, custom_sources = _declarative_profile_lists(profile)
+    lines = [
+        f"schema = {_json_string(payload['schema'])}",
+        "",
+        "[profile]",
+        f"id = {_json_string(profile['id'])}",
+        f"name = {_json_string(profile['name'])}",
+        f"preferred_block_sink = {_json_string(profile['preferred_block_sink'])}",
+        f"whitelist = {_format_toml_array(whitelist)}",
+        f"pinned_domains = {_format_toml_array(pinned_domains)}",
+    ]
+    for source in custom_sources:
+        lines.extend([
+            "",
+            "[[profile.custom_sources]]",
+            f"name = {_json_string(source['name'])}",
+            f"url = {_json_string(source['url'])}",
+        ])
+    return "\n".join(lines) + "\n"
+
+
+def format_declarative_config_payload(profile: dict, format_hint: str) -> str:
+    fmt = detect_declarative_config_format(format_hint)
+    payload = build_declarative_config_payload(profile)
+    if fmt == "json":
+        return json.dumps(payload, indent=2) + "\n"
+    if fmt == "yaml":
+        return format_declarative_config_yaml(payload["profile"])
+    if fmt == "toml":
+        return format_declarative_config_toml(payload["profile"])
+    raise ValueError(f"unsupported declarative config format: {fmt}")  # pragma: no cover
+
+
+def apply_declarative_profile_to_config(config: dict, profile: dict, default_last_open_dir: str) -> dict:
+    snapshot = sanitize_config_snapshot(config, default_last_open_dir)
+    target = sanitize_profile_snapshot(
+        profile,
+        fallback_id=sanitize_profile_id(profile.get("id"), DEFAULT_PROFILE_ID),
+    )
+    profiles: list[dict] = []
+    replaced = False
+    for existing in snapshot.get("profiles", []):
+        if existing.get("id") == target["id"]:
+            profiles.append(target)
+            replaced = True
+        else:
+            profiles.append(existing)
+    if not replaced:
+        profiles.append(target)
+
+    snapshot.update({
+        "whitelist": target["whitelist"],
+        "custom_sources": target["custom_sources"],
+        "pinned_domains": target["pinned_domains"],
+        "preferred_block_sink": target["preferred_block_sink"],
+        "active_profile_id": target["id"],
+        "profiles": profiles,
+    })
+    return sanitize_config_snapshot(snapshot, default_last_open_dir)
+
+
+def find_active_profile_snapshot(config: dict) -> dict:
+    sanitized = sanitize_config_snapshot(config, os.path.expanduser("~"))
+    active_id = sanitized.get("active_profile_id", DEFAULT_PROFILE_ID)
+    for profile in sanitized.get("profiles", []):
+        if profile.get("id") == active_id:
+            return sanitize_profile_snapshot(profile, fallback_id=active_id)
+    return build_default_profile_snapshot(sanitized)
+
+
+def format_declarative_profile_summary(profile: dict, action: str | None = None) -> str:
+    sanitized = sanitize_profile_snapshot(
+        profile,
+        fallback_id=sanitize_profile_id(profile.get("id"), DEFAULT_PROFILE_ID),
+    )
+    whitelist, pinned_domains, custom_sources = _declarative_profile_lists(sanitized)
+    lines = [
+        f"Profile: {sanitized['name']} ({sanitized['id']})",
+        f"Whitelist entries: {len(whitelist)}",
+        f"Custom sources: {len(custom_sources)}",
+        f"Pinned domains: {len(pinned_domains)}",
+        f"Preferred block sink: {sanitized['preferred_block_sink']}",
+    ]
+    if action:
+        lines.append(f"Config action: {action}")
+    return "\n".join(lines)
 
 
 def _coerce_config_schema_version(value) -> int:
@@ -11624,6 +11989,76 @@ def _cli_source_health(output_path: str | None, timeout: float, workers: int, fa
     return 0
 
 
+def _read_cli_config_payload(config_path: str) -> dict:
+    if not os.path.isfile(config_path):
+        return {}
+    try:
+        payload = json.loads(read_text_file_content(config_path))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"Config read failed: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Config read failed: root payload is not an object")
+    return payload
+
+
+def _cli_config_plan(source_path: str) -> int:
+    try:
+        profile = load_declarative_config_file(source_path)
+        config_path = get_primary_config_path("hosts_editor_config.json")
+        current = sanitize_config_snapshot(
+            _read_cli_config_payload(config_path),
+            os.path.expanduser("~"),
+        )
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Declarative config plan failed: {exc}")
+        return 2
+
+    existing_ids = {candidate["id"] for candidate in current.get("profiles", [])}
+    action = "replace existing profile" if profile["id"] in existing_ids else "add profile"
+    if current.get("active_profile_id") != profile["id"]:
+        action += " and make active"
+    _cli_print(format_declarative_profile_summary(profile, action=action))
+    _cli_print("No files were changed.")
+    return 0
+
+
+def _cli_config_apply(source_path: str) -> int:
+    try:
+        profile = load_declarative_config_file(source_path)
+        config_path = get_primary_config_path("hosts_editor_config.json")
+        current = _read_cli_config_payload(config_path)
+        config = apply_declarative_profile_to_config(current, profile, os.path.expanduser("~"))
+        os.makedirs(os.path.dirname(config_path) or ".", exist_ok=True)
+        write_text_file_atomic(config_path, json.dumps(config, indent=2))
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Declarative config apply failed: {exc}")
+        return 2
+
+    _cli_print(format_declarative_profile_summary(profile, action="applied to app config"))
+    _cli_print(f"Wrote config: {config_path}")
+    return 0
+
+
+def _cli_config_export(output_path: str) -> int:
+    try:
+        detect_declarative_config_format(output_path)
+        config_path = get_primary_config_path("hosts_editor_config.json")
+        current = _read_cli_config_payload(config_path)
+        profile = find_active_profile_snapshot(current)
+        rendered = format_declarative_config_payload(profile, output_path)
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        write_text_file_atomic(output_path, rendered)
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Declarative config export failed: {exc}")
+        return 2
+
+    _cli_print(format_declarative_profile_summary(profile, action="exported active profile"))
+    _cli_print(f"Wrote declarative config: {output_path}")
+    return 0
+
+
 def _handle_cli_args(argv: list[str]) -> int | None:
     """Return an exit code when a CLI action was performed; else ``None`` to
     continue launching the GUI.
@@ -11638,6 +12073,9 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--backup",
         "--apply",
         "--update",
+        "--config-plan",
+        "--config-apply",
+        "--config-export",
         "--source-health",
         "--source-health-output",
         "--source-health-timeout",
@@ -11649,6 +12087,9 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     }
     cli_prefixes = (
         "--apply=",
+        "--config-plan=",
+        "--config-apply=",
+        "--config-export=",
         "--source-health-output=",
         "--source-health-timeout=",
         "--source-health-workers=",
@@ -11666,6 +12107,9 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--backup", action="store_true", help="Create a timestamped backup of the current hosts file.")
     parser.add_argument("--apply", metavar="PATH", help="Overwrite the hosts file with the contents of PATH (creates backup first).")
     parser.add_argument("--update", action="store_true", help="Re-fetch every source previously imported in the GUI and apply a Cleaned Save of the merged result.")
+    parser.add_argument("--config-plan", metavar="PATH", help="Validate a declarative YAML/TOML/JSON profile file and summarize the config change without writing.")
+    parser.add_argument("--config-apply", metavar="PATH", help="Apply a declarative YAML/TOML/JSON profile file to the app config without writing the hosts file.")
+    parser.add_argument("--config-export", metavar="PATH", help="Export the active app config profile as declarative YAML/TOML/JSON.")
     parser.add_argument("--source-health", action="store_true", help="Check curated source reachability and print a summary without launching the GUI.")
     parser.add_argument("--source-health-output", metavar="PATH", help="Write detailed source-health JSON to PATH.")
     parser.add_argument("--source-health-timeout", type=float, default=SOURCE_HEALTH_TIMEOUT_SECONDS, help="Per-source network timeout in seconds.")
@@ -11696,6 +12140,12 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         return _cli_apply(hosts_path, args.apply)
     if args.update:
         return _cli_update(hosts_path)
+    if args.config_plan:
+        return _cli_config_plan(args.config_plan)
+    if args.config_apply:
+        return _cli_config_apply(args.config_apply)
+    if args.config_export:
+        return _cli_config_export(args.config_export)
     if args.source_health:
         return _cli_source_health(
             args.source_health_output,

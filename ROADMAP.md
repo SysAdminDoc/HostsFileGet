@@ -44,6 +44,7 @@ Non-negotiables:
 - [x] F022 - Importers for SwitchHosts, Gas Mask, HostsFileEditor archives (`docs/migration-imports.md`, append-only migration importers, Raw/Normalized GUI integration)
 - [x] F023 - RPZ, Unbound, Privoxy, compressed-hosts exports (`docs/export-formats.md`, shared export records, compressed binary writes)
 - [x] F024 - Limitations and troubleshooting guide (`TROUBLESHOOTING.md`)
+- [x] F025 - Declarative YAML/TOML source of truth (`docs/declarative-config.md`, CLI plan/apply/export, dependency-free profile parser)
 
 ## State Of The Repo
 
@@ -52,8 +53,8 @@ Non-negotiables:
 - Language and runtime: Python 3.x, Tkinter desktop UI, Windows-first assumptions, PowerShell launcher.
 - Entry points: `hosts_editor.py` for GUI and CLI, `PythonLauncher.ps1` for elevated launch/bootstrap, `HostsFileGet.spec` for PyInstaller.
 - Packaging: PyInstaller one-file Windows EXE with `uac_admin=True`; build artifacts exist locally under `build/` and `dist/` but are not tracked.
-- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 177 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation, migration importer fixtures, export-format fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, and find/replace.
-- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `LICENSE`, and this roadmap.
+- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, and `tests/test_benchmarks.py` contain 181 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation, migration importer fixtures, export-format fixtures, declarative config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, and find/replace.
+- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/declarative-config.md`, `LICENSE`, and this roadmap.
 - License: MIT.
 
 ### Product Reality
@@ -63,6 +64,7 @@ HostsFileGet already provides:
 - Raw and cleaned save paths with preview, backups, dry-run mode, admin detection, read-only lock support, and panic restore.
 - Curated and custom source import, manual paste import, pfSense, NextDNS CSV, Pi-hole FTL, and AdGuard Home query log importers.
 - Source freshness dots, update-on-launch, scheduled update, `--update`, `--apply`, `--backup`, `--disable`, `--enable`, `--silent`, and provenance JSONL logging.
+- Declarative profile plan/apply/export commands for YAML, TOML, and JSON source-of-truth files that update app config without writing the system hosts file.
 - Live stats, category hints, source report, health scan, DNS flush, domain check, find/replace, cleanup commands, import-section removal, backup diff, pinned domains, and export formats.
 
 ### Stated Philosophy

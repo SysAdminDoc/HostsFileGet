@@ -78,6 +78,11 @@ All notable changes to HostsFileGet will be documented in this file.
 **Export format adapters**
 - Expanded **Export Cleaned** with RPZ, Unbound, Privoxy, gzip-compressed hosts, and bzip2-compressed hosts outputs.
 - Added a stable cleaned-domain export record layer so DNS/proxy formats share dedupe and non-blocking-mapping behavior.
+
+**Declarative config**
+- Added dependency-free YAML/TOML/JSON declarative profile parsing for repo-backed whitelist/source/pin policy.
+- Added `--config-plan`, `--config-apply`, and `--config-export` so automation can review and update the app config without writing the system hosts file.
+- Documented the `hostsfileget.declarative.v1` profile schema and preservation rules for operational config metadata.
 - Documented format semantics and source references in `docs/export-formats.md`.
 
 ## [v2.17.0] - 2026-04-18
