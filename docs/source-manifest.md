@@ -77,6 +77,7 @@ Launcher-cache path:
 - Do not add mirrors that serve HTML landing pages, redirectors requiring JavaScript, or feeds with unclear redistribution terms.
 - Keep high-churn threat feeds such as NRD/DGA lists in a separate category with descriptions that call out freshness and false-positive risk.
 - Keep CNAME cloaking original-target feeds out of normal hosts-import categories unless the description explicitly marks them as DNS handoff only; only exact disguised-domain lists are hosts-reviewable.
+- Keep encrypted-DNS/VPN/Tor/proxy bypass feeds source-isolated with descriptions that warn hosts-file blocking is incomplete without router/firewall policy.
 - Source trust badges are derived from URL shape, local freshness/cache metadata, and description/category risk words. Badge meanings are documented in `docs/source-trust.md`.
 - Run the regression suite after every catalog edit.
 

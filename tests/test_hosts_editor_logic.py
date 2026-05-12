@@ -98,6 +98,7 @@ from hosts_editor import (
     build_scheduler_activity_report,
     build_scheduler_update_command,
     build_cname_cloaking_plan,
+    build_encrypted_dns_bypass_pack_plan,
     build_threat_feed_pack_plan,
     export_lines_as_format,
     export_lines_as_bytes,
@@ -125,6 +126,8 @@ from hosts_editor import (
     format_dns_integration_pack_report,
     format_cname_cloaking_catalog,
     format_cname_cloaking_plan,
+    format_encrypted_dns_bypass_catalog,
+    format_encrypted_dns_bypass_pack_plan,
     format_portable_bundle_export_summary,
     format_scheduler_activity_report,
     format_source_trust_badges,
@@ -138,6 +141,8 @@ from hosts_editor import (
     get_git_history_dir,
     list_cname_cloaking_packs,
     list_cname_cloaking_sources,
+    list_encrypted_dns_bypass_packs,
+    list_encrypted_dns_bypass_sources,
     list_cloud_dns_adapters,
     list_dns_integration_packs,
     list_threat_feed_packs,
@@ -1899,6 +1904,23 @@ profile:
             self.assertEqual(plan["source_count"], 2)
             self.assertIn("nextdns-cname-targets", plan["source_ids"])
 
+    def test_cli_encrypted_dns_bypass_plan_writes_review_file(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plan_path = Path(tmpdir) / "encrypted-dns-bypass-plan.json"
+
+            with mock.patch.object(hosts_editor, "_cli_print"):
+                self.assertEqual(hosts_editor._cli_encrypted_dns_bypass_plan("firewall", str(plan_path)), 0)
+
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            self.assertEqual(plan["schema"], "hostsfileget.encrypted-dns-bypass-plan.v1")
+            self.assertEqual(plan["pack_id"], "router-firewall-handoff")
+            self.assertFalse(plan["hosts_native"])
+            self.assertEqual(plan["source_count"], 3)
+            self.assertIn("hagezi-doh-ips", plan["source_ids"])
+
     def test_handle_cli_args_routes_integration_flags(self):
         with mock.patch.object(hosts_editor, "_cli_integration_list", return_value=0) as mocked_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--integration-list"]), 0)
@@ -1956,6 +1978,18 @@ profile:
                 0,
             )
             mocked_plan.assert_called_once_with("rpz", "plan.json")
+
+    def test_handle_cli_args_routes_encrypted_dns_bypass_flags(self):
+        with mock.patch.object(hosts_editor, "_cli_encrypted_dns_bypass_list", return_value=0) as mocked_list:
+            self.assertEqual(hosts_editor._handle_cli_args(["--encrypted-dns-bypass-list"]), 0)
+            mocked_list.assert_called_once_with()
+
+        with mock.patch.object(hosts_editor, "_cli_encrypted_dns_bypass_plan", return_value=0) as mocked_plan:
+            self.assertEqual(
+                hosts_editor._handle_cli_args(["--encrypted-dns-bypass-plan", "doh", "plan.json"]),
+                0,
+            )
+            mocked_plan.assert_called_once_with("doh", "plan.json")
 
     def test_handle_cli_args_routes_adblock_lint_flags(self):
         with mock.patch.object(hosts_editor, "_cli_adblock_lint", return_value=1) as mocked_lint:
@@ -2902,6 +2936,40 @@ profile:
 
         with self.assertRaises(ValueError):
             build_cname_cloaking_plan("unknown-cname-pack")
+
+    def test_encrypted_dns_bypass_catalog_lists_guarded_packs_and_sources(self):
+        pack_ids = {pack["id"] for pack in list_encrypted_dns_bypass_packs()}
+        source_ids = {source["id"] for source in list_encrypted_dns_bypass_sources()}
+
+        self.assertEqual(pack_ids, {"doh-hosts-review", "bypass-full-review", "router-firewall-handoff"})
+        self.assertIn("hagezi-doh-hosts", source_ids)
+        self.assertIn("hagezi-doh-ips", source_ids)
+
+        catalog = format_encrypted_dns_bypass_catalog()
+        self.assertIn("Encrypted DNS bypass packs", catalog)
+        self.assertIn("firewall-only", catalog)
+        self.assertIn("router/firewall handoff", catalog)
+        self.assertIn("Hosts files can block known resolver hostnames", catalog)
+
+    def test_build_encrypted_dns_bypass_plan_explains_firewall_boundary(self):
+        doh_plan = build_encrypted_dns_bypass_pack_plan("doh")
+        doh_rendered = format_encrypted_dns_bypass_pack_plan(doh_plan)
+
+        self.assertEqual(doh_plan["pack_id"], "doh-hosts-review")
+        self.assertTrue(doh_plan["hosts_native"])
+        self.assertEqual(doh_plan["source_ids"], ["hagezi-doh-hosts"])
+        self.assertIn("hosts/doh.txt", doh_rendered)
+        self.assertIn("S7", doh_rendered)
+
+        firewall_plan = build_encrypted_dns_bypass_pack_plan("router")
+        self.assertEqual(firewall_plan["pack_id"], "router-firewall-handoff")
+        self.assertFalse(firewall_plan["hosts_native"])
+        self.assertIn("hagezi-doh-ips", firewall_plan["source_ids"])
+        self.assertIn("cannot stop IP-literal resolver access", firewall_plan["explanation"]["hosts_limit"])
+        self.assertIn("K1", firewall_plan["references"])
+
+        with self.assertRaises(ValueError):
+            build_encrypted_dns_bypass_pack_plan("unknown-bypass-pack")
 
     def test_export_lines_as_bytes_supports_compressed_hosts(self):
         lines = ["0.0.0.0 ads.example", "# comment", "0.0.0.0 tracker.example"]

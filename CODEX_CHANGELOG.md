@@ -73,6 +73,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F035 complete. Next roadmap item: F036 CNAME cloaking source and explanation workflow.
 - Completed F036: added guarded CNAME cloaking workflow planning, AdGuard disguised-domain source entries, DNS-only CNAME target/RPZ handoff plans, GUI and CLI catalog/plan surfaces, JSON plan output, docs, and regression tests.
 - Updated `ROADMAP.md` to mark F036 complete. Next roadmap item: F037 encrypted DNS resolver bypass pack.
+- Completed F037: added guarded encrypted-DNS bypass pack planning, HaGeZi bypass source entries, router/firewall/IP handoff plans, GUI and CLI catalog/plan surfaces, JSON plan output, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F037 complete. Next roadmap item: F038 DNS rebinding protection checks.
 
 ## Scope
 
