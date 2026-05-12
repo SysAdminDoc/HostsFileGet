@@ -1,0 +1,875 @@
+{
+  "schema_version": 1,
+  "categories": [
+    {
+      "name": "Major / Unified / Aggregated",
+      "sources": [
+        {
+          "name": "HaGezi Ultimate",
+          "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/ultimate.txt",
+          "description": "Ultimate protection. Very aggressive."
+        },
+        {
+          "name": "HaGezi Pro Plus",
+          "url": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/pro.plus.txt",
+          "description": "Aggressive HaGezi Pro with extra telemetry/metrics blocking."
+        },
+        {
+          "name": "HaGezi Pro",
+          "url": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/pro.txt",
+          "description": "Balanced HaGezi tier: ads + tracking + metrics."
+        },
+        {
+          "name": "HaGezi Multi",
+          "url": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/multi.txt",
+          "description": "HaGezi Multi Pro+ + TIF + threat-intel rollup."
+        },
+        {
+          "name": "HaGezi Light",
+          "url": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/light.txt",
+          "description": "HaGezi false-positive-free starter list."
+        },
+        {
+          "name": "HaGezi TIF",
+          "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/tif.txt",
+          "description": "Threat Intelligence Feeds only."
+        },
+        {
+          "name": "1Hosts Lite",
+          "url": "https://raw.githubusercontent.com/badmojr/1Hosts/master/Lite/hosts.txt",
+          "description": "badmojr conservative ads + tracking."
+        },
+        {
+          "name": "1Hosts Pro",
+          "url": "https://raw.githubusercontent.com/badmojr/1Hosts/master/Pro/hosts.txt",
+          "description": "badmojr balanced ads/tracking/metrics."
+        },
+        {
+          "name": "1Hosts Xtra",
+          "url": "https://raw.githubusercontent.com/badmojr/1Hosts/master/Xtra/hosts.txt",
+          "description": "badmojr maximum-coverage tier; breakage risk."
+        },
+        {
+          "name": "hBlock Aggregate",
+          "url": "https://hblock.molinero.dev/hosts",
+          "description": "Auto-aggregated 50+ upstream sources, daily rebuild."
+        },
+        {
+          "name": "Ultimate Hosts Blacklist",
+          "url": "https://raw.githubusercontent.com/Ultimate-Hosts-Blacklist/Ultimate.Hosts.Blacklist/master/hosts/hosts0",
+          "description": "Mega-aggregate over 100 ads/malware/tracking lists."
+        },
+        {
+          "name": "BlockConvert Aggregate",
+          "url": "https://raw.githubusercontent.com/mkb2091/blockconvert/master/output/domains.txt",
+          "description": "Cross-validated aggregate of mainstream blocklists."
+        },
+        {
+          "name": "StevenBlack Unified",
+          "url": "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
+          "description": "Classic unified hosts list."
+        },
+        {
+          "name": "StevenBlack Data",
+          "url": "https://raw.githubusercontent.com/StevenBlack/hosts/master/data/StevenBlack/hosts",
+          "description": "StevenBlack Data Base."
+        },
+        {
+          "name": "OISD Full",
+          "url": "https://hosts.oisd.nl/",
+          "description": "Huge, false-positive free blocklist."
+        },
+        {
+          "name": "OISD DBL",
+          "url": "https://dbl.oisd.nl/",
+          "description": "OISD Domain Blocklist."
+        },
+        {
+          "name": "MVPS Hosts",
+          "url": "https://winhelp2002.mvps.org/hosts.txt",
+          "description": "Long-standing Windows hosts file."
+        },
+        {
+          "name": "SomeoneWhoCares Zero",
+          "url": "https://someonewhocares.org/hosts/zero/hosts",
+          "description": "Classic zero-based hosts file."
+        },
+        {
+          "name": "SomeoneWhoCares 127",
+          "url": "https://someonewhocares.org/hosts/hosts",
+          "description": "Classic 127.0.0.1 hosts file."
+        },
+        {
+          "name": "HOSTShield Combined",
+          "url": "https://github.com/SysAdminDoc/HOSTShield/releases/download/v.1/CombinedAll.txt",
+          "description": "Massive combined list."
+        },
+        {
+          "name": "The Great Wall",
+          "url": "https://raw.githubusercontent.com/Sekhan/TheGreatWall/master/TheGreatWall.txt",
+          "description": "Comprehensive aggregator."
+        },
+        {
+          "name": "NeoHosts Basic",
+          "url": "https://cdn.jsdelivr.net/gh/neoFelhz/neohosts@gh-pages/basic/hosts",
+          "description": "NeoHosts Basic List."
+        },
+        {
+          "name": "NeoDev Host",
+          "url": "https://raw.githubusercontent.com/neodevpro/neodevhost/master/host",
+          "description": "Actively maintained ads + tracker + malware aggregate."
+        }
+      ]
+    },
+    {
+      "name": "Ads / Tracking / Analytics",
+      "sources": [
+        {
+          "name": "Disconnect Tracking",
+          "url": "https://s3.amazonaws.com/lists.disconnect.me/simple_tracking.txt",
+          "description": "Basic tracking protection."
+        },
+        {
+          "name": "Disconnect Ads",
+          "url": "https://s3.amazonaws.com/lists.disconnect.me/simple_ad.txt",
+          "description": "Basic ad protection."
+        },
+        {
+          "name": "DevDan Ads & Tracking",
+          "url": "https://www.github.developerdan.com/hosts/lists/ads-and-tracking-extended.txt",
+          "description": "Extended protection."
+        },
+        {
+          "name": "EasyList Hosts",
+          "url": "https://v.firebog.net/hosts/Easylist.txt",
+          "description": "AdBlock EasyList converted to hosts."
+        },
+        {
+          "name": "EasyPrivacy Hosts",
+          "url": "https://v.firebog.net/hosts/Easyprivacy.txt",
+          "description": "AdBlock EasyPrivacy converted to hosts."
+        },
+        {
+          "name": "EasyList Privacy Orig",
+          "url": "https://easylist.to/easylist/easyprivacy.txt",
+          "description": "Original EasyPrivacy."
+        },
+        {
+          "name": "EasyList NoElemHide",
+          "url": "https://easylist-downloads.adblockplus.org/easylist_noelemhide.txt",
+          "description": "EasyList without element hiding."
+        },
+        {
+          "name": "Prigent Ads",
+          "url": "https://v.firebog.net/hosts/Prigent-Ads.txt",
+          "description": "Ads & trackers list."
+        },
+        {
+          "name": "W3KBL",
+          "url": "https://v.firebog.net/hosts/static/w3kbl.txt",
+          "description": "Adblock list."
+        },
+        {
+          "name": "Yoyo Ad Servers (Plain)",
+          "url": "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=0&mimetype=plaintext",
+          "description": "Classic ad server list."
+        },
+        {
+          "name": "Yoyo Ad Servers (NoHTML)",
+          "url": "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=nohtml",
+          "description": "Yoyo No HTML format."
+        },
+        {
+          "name": "Anudeep Ad Servers",
+          "url": "https://raw.githubusercontent.com/anudeepND/blacklist/master/adservers.txt",
+          "description": "Anudeep's ad server list."
+        },
+        {
+          "name": "AdAway",
+          "url": "https://adaway.org/hosts.txt",
+          "description": "Mobile ad blocker hosts."
+        },
+        {
+          "name": "AdGuard DNS",
+          "url": "https://v.firebog.net/hosts/AdguardDNS.txt",
+          "description": "AdGuard DNS filter."
+        },
+        {
+          "name": "Admiral Anti-Adblock",
+          "url": "https://v.firebog.net/hosts/Admiral.txt",
+          "description": "Blocks anti-adblock scripts."
+        },
+        {
+          "name": "YouTube Ads Blacklist",
+          "url": "https://raw.githubusercontent.com/anudeepND/youtubeadsblacklist/master/domainlist.txt",
+          "description": "Attempts to block YT ads."
+        },
+        {
+          "name": "JDlingyu Ad Wars",
+          "url": "https://raw.githubusercontent.com/jdlingyu/ad-wars/master/hosts",
+          "description": "Comprehensive Chinese ad blocklist."
+        },
+        {
+          "name": "Yhonay Antipopads",
+          "url": "https://raw.githubusercontent.com/Yhonay/antipopads/master/hosts",
+          "description": "Pop-up ads blocker."
+        },
+        {
+          "name": "Hoshsadiq NoCoin",
+          "url": "https://raw.githubusercontent.com/hoshsadiq/adblock-nocoin-list/master/hosts.txt",
+          "description": "Adblock plus NoCoin."
+        },
+        {
+          "name": "HOSTShield Ads",
+          "url": "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/AdsTrackingAnalytics.txt",
+          "description": "HOSTShield Ads & Tracking."
+        },
+        {
+          "name": "Adobe Hosts",
+          "url": "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/AdobeHosts.txt",
+          "description": "Blocks Adobe verification."
+        },
+        {
+          "name": "ShadowWhisperer Ads",
+          "url": "https://raw.githubusercontent.com/ShadowWhisperer/BlockLists/master/Lists/Ads",
+          "description": "Hand-audited ad domains, very low false positives."
+        },
+        {
+          "name": "ShadowWhisperer Tracking",
+          "url": "https://raw.githubusercontent.com/ShadowWhisperer/BlockLists/master/Lists/Tracking",
+          "description": "Hand-audited tracker/analytics list."
+        },
+        {
+          "name": "Lightswitch05 AMP Extended",
+          "url": "https://www.github.developerdan.com/hosts/lists/amp-hosts-extended.txt",
+          "description": "Google AMP cache / proxy URL blocklist."
+        },
+        {
+          "name": "Lightswitch05 FB Extended",
+          "url": "https://www.github.developerdan.com/hosts/lists/facebook-extended.txt",
+          "description": "Extended Meta/Instagram/WhatsApp tracking."
+        },
+        {
+          "name": "Lightswitch05 Tracking Aggressive",
+          "url": "https://www.github.developerdan.com/hosts/lists/tracking-aggressive-extended.txt",
+          "description": "Aggressive tracker list beyond the default extended."
+        },
+        {
+          "name": "GoodbyeAds",
+          "url": "https://raw.githubusercontent.com/jerryn70/GoodbyeAds/master/Hosts/GoodbyeAds.txt",
+          "description": "Mobile ads + YouTube/Spotify/Hulu ad sponsors."
+        },
+        {
+          "name": "AdGuard Mobile Ads (r-a-y)",
+          "url": "https://raw.githubusercontent.com/r-a-y/mobile-hosts/master/AdguardMobileAds.txt",
+          "description": "AdGuard mobile ad filter in hosts format."
+        },
+        {
+          "name": "AdGuard Mobile Spyware (r-a-y)",
+          "url": "https://raw.githubusercontent.com/r-a-y/mobile-hosts/master/AdguardMobileSpyware.txt",
+          "description": "AdGuard mobile spyware filter in hosts format."
+        },
+        {
+          "name": "CombinedPrivacyBlockLists",
+          "url": "https://raw.githubusercontent.com/bongochong/CombinedPrivacyBlockLists/master/NoFormatting/cpbl-ctld.txt",
+          "description": "Curated combined privacy aggregate, cross-TLD-checked."
+        },
+        {
+          "name": "MobileAdTrackers (jawz101)",
+          "url": "https://raw.githubusercontent.com/jawz101/MobileAdTrackers/master/hosts",
+          "description": "Mobile SDK trackers from Exodus Privacy reports."
+        },
+        {
+          "name": "DandelionSprout URL Shorteners",
+          "url": "https://raw.githubusercontent.com/DandelionSprout/adfilt/master/LegitimateURLShortener.txt",
+          "description": "URL shortener neutralizer to kill redirect tracking."
+        },
+        {
+          "name": "BlocklistProject Tracking",
+          "url": "https://blocklistproject.github.io/Lists/tracking.txt",
+          "description": "Community-maintained tracking domain list."
+        },
+        {
+          "name": "NextDNS CNAME Cloak",
+          "url": "https://raw.githubusercontent.com/nextdns/cname-cloaking-blocklist/master/domains",
+          "description": "CNAME-cloaking first-party trackers (Eulerian / Keyade / Criteo)."
+        }
+      ]
+    },
+    {
+      "name": "Telemetry / Privacy / Spyware",
+      "sources": [
+        {
+          "name": "Windows Spy Blocker",
+          "url": "https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/spy.txt",
+          "description": "Blocks Windows telemetry."
+        },
+        {
+          "name": "Windows Spy Extra",
+          "url": "https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/extra.txt",
+          "description": "WindowsSpyBlocker extra telemetry beyond the core spy list."
+        },
+        {
+          "name": "Windows Spy Update",
+          "url": "https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/update.txt",
+          "description": "Windows Update / delivery-optimization telemetry."
+        },
+        {
+          "name": "jmdugan Microsoft",
+          "url": "https://raw.githubusercontent.com/jmdugan/blocklists/master/corporations/microsoft/all",
+          "description": "Broad Microsoft corporate telemetry + services."
+        },
+        {
+          "name": "jmdugan Facebook",
+          "url": "https://raw.githubusercontent.com/jmdugan/blocklists/master/corporations/facebook/all",
+          "description": "Meta/Facebook corporate domain blocklist."
+        },
+        {
+          "name": "Frogeye 1st Party",
+          "url": "https://hostfiles.frogeye.fr/firstparty-trackers-hosts.txt",
+          "description": "First-party trackers."
+        },
+        {
+          "name": "Frogeye Multi Party",
+          "url": "https://hostfiles.frogeye.fr/multiparty-trackers-hosts.txt",
+          "description": "Multi-party trackers."
+        },
+        {
+          "name": "Matomo Referrer Spam",
+          "url": "https://raw.githubusercontent.com/matomo-org/referrer-spam-blacklist/master/spammers.txt",
+          "description": "Referrer spam blockers."
+        },
+        {
+          "name": "Piwik Referrer Spam",
+          "url": "https://raw.githubusercontent.com/piwik/referrer-spam-blacklist/master/spammers.txt",
+          "description": "Piwik spam blockers."
+        },
+        {
+          "name": "NoTrack Tracking",
+          "url": "https://gitlab.com/quidsup/notrack-blocklists/raw/master/notrack-blocklist.txt",
+          "description": "NoTrack tracking list."
+        },
+        {
+          "name": "Perflyst Android",
+          "url": "https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/android-tracking.txt",
+          "description": "Android tracking."
+        },
+        {
+          "name": "Perflyst SmartTV",
+          "url": "https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/SmartTV.txt",
+          "description": "Smart TV tracking."
+        },
+        {
+          "name": "Perflyst FireTV",
+          "url": "https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/AmazonFireTV.txt",
+          "description": "FireTV tracking."
+        },
+        {
+          "name": "Perflyst Session Replay",
+          "url": "https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/SessionReplay.txt",
+          "description": "Session-replay/heatmap vendors (Hotjar, FullStory)."
+        },
+        {
+          "name": "TrackersList All",
+          "url": "https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_all.txt",
+          "description": "Torrent trackers list."
+        }
+      ]
+    },
+    {
+      "name": "Malware / Phishing / Scam",
+      "sources": [
+        {
+          "name": "MalwareDomains",
+          "url": "https://mirror1.malwaredomains.com/files/justdomains",
+          "description": "Known malware domains."
+        },
+        {
+          "name": "NoTrack Malware",
+          "url": "https://gitlab.com/quidsup/notrack-blocklists/raw/master/notrack-malware.txt",
+          "description": "NoTrack malware list."
+        },
+        {
+          "name": "Spam404",
+          "url": "https://raw.githubusercontent.com/Spam404/lists/master/main-blacklist.txt",
+          "description": "Spam and scam sites."
+        },
+        {
+          "name": "DandelionSprout Anti-Mal",
+          "url": "https://raw.githubusercontent.com/DandelionSprout/adfilt/master/Alternate%20versions%20Anti-Malware%20List/AntiMalwareHosts.txt",
+          "description": "Anti-malware hosts."
+        },
+        {
+          "name": "Prigent Malware",
+          "url": "https://v.firebog.net/hosts/Prigent-Malware.txt",
+          "description": "Malware list."
+        },
+        {
+          "name": "Prigent Crypto",
+          "url": "https://v.firebog.net/hosts/Prigent-Crypto.txt",
+          "description": "Crypto mining domains."
+        },
+        {
+          "name": "RPiList Malware",
+          "url": "https://v.firebog.net/hosts/RPiList-Malware.txt",
+          "description": "Raspberry Pi list malware."
+        },
+        {
+          "name": "RPiList Phishing",
+          "url": "https://v.firebog.net/hosts/RPiList-Phishing.txt",
+          "description": "Raspberry Pi list phishing."
+        },
+        {
+          "name": "Phishing Army",
+          "url": "https://phishing.army/download/phishing_army_blocklist.txt",
+          "description": "Phishing Army."
+        },
+        {
+          "name": "URLHaus Malware",
+          "url": "https://urlhaus.abuse.ch/downloads/hostfile/",
+          "description": "Abuse.ch malware."
+        },
+        {
+          "name": "CyberHost Malware",
+          "url": "https://lists.cyberhost.uk/malware.txt",
+          "description": "CyberHost malware."
+        },
+        {
+          "name": "Malware Filter Phishing",
+          "url": "https://malware-filter.gitlab.io/malware-filter/phishing-filter-hosts.txt",
+          "description": "Phishing filter."
+        },
+        {
+          "name": "Scam Domains Wildcard",
+          "url": "https://raw.githubusercontent.com/jarelllama/Scam-Blocklist/main/lists/wildcard_domains/scams.txt",
+          "description": "Scam domains."
+        },
+        {
+          "name": "PhishTank Domains",
+          "url": "https://raw.githubusercontent.com/tg12/pihole-phishtank-list/master/list/phish_domains.txt",
+          "description": "PhishTank data."
+        },
+        {
+          "name": "PhishTank Data (CSV)",
+          "url": "https://data.phishtank.com/data/online-valid.csv.bz2",
+          "description": "Official PhishTank CSV (Requires Processing)."
+        },
+        {
+          "name": "DigitalSide Threat Intel",
+          "url": "https://osint.digitalside.it/Threat-Intel/lists/latestdomains.txt",
+          "description": "OSINT threat intelligence."
+        },
+        {
+          "name": "VXVault",
+          "url": "http://vxvault.net/URL_List.php",
+          "description": "VX Vault URL List."
+        },
+        {
+          "name": "CyberCrime Tracker",
+          "url": "https://cybercrime-tracker.net/all.php",
+          "description": "CyberCrime Tracker."
+        },
+        {
+          "name": "BBCan177 Feed",
+          "url": "https://gist.githubusercontent.com/BBcan177/4a8bf37c131be4803cb2/raw",
+          "description": "Threat intel feed."
+        },
+        {
+          "name": "OpenPhish",
+          "url": "https://openphish.com/feed.txt",
+          "description": "OpenPhish feed."
+        },
+        {
+          "name": "BarbBlock",
+          "url": "https://paulgb.github.io/BarbBlock/blacklists/hosts-file.txt",
+          "description": "BarbBlock hosts."
+        },
+        {
+          "name": "Bambenek DoH",
+          "url": "https://raw.githubusercontent.com/bambenek/block-doh/master/doh-hosts.txt",
+          "description": "DoH servers."
+        },
+        {
+          "name": "MinerChk",
+          "url": "https://raw.githubusercontent.com/Hestat/minerchk/master/hostslist.txt",
+          "description": "Crypto miner check."
+        },
+        {
+          "name": "Badd Boyz",
+          "url": "https://raw.githubusercontent.com/mitchellkrogza/Badd-Boyz-Hosts/master/hosts",
+          "description": "Bad domains."
+        },
+        {
+          "name": "Stamparm Maltrail",
+          "url": "https://raw.githubusercontent.com/stamparm/aux/master/maltrail-malware-domains.txt",
+          "description": "Maltrail malware."
+        },
+        {
+          "name": "Stamparm Blackbook",
+          "url": "https://raw.githubusercontent.com/stamparm/blackbook/master/blackbook.txt",
+          "description": "Blackbook."
+        },
+        {
+          "name": "Disconnect Malvertising",
+          "url": "https://s3.amazonaws.com/lists.disconnect.me/simple_malvertising.txt",
+          "description": "Disconnect Malvertising."
+        },
+        {
+          "name": "Disconnect Malware",
+          "url": "https://s3.amazonaws.com/lists.disconnect.me/simple_malware.txt",
+          "description": "Disconnect Malware."
+        },
+        {
+          "name": "AntiSocial Engineer",
+          "url": "https://theantisocialengineer.com/AntiSocial_Blacklist_Community_V1.txt",
+          "description": "Social engineering blocklist."
+        },
+        {
+          "name": "Botvrij IOC",
+          "url": "https://www.botvrij.eu/data/ioclist.domain.raw",
+          "description": "Botvrij IoCs."
+        },
+        {
+          "name": "JoeWein Domains",
+          "url": "https://www.joewein.net/dl/bl/dom-bl.txt",
+          "description": "JoeWein spam/scam."
+        },
+        {
+          "name": "JoeWein Base",
+          "url": "https://www.joewein.net/dl/bl/dom-bl-base.txt",
+          "description": "JoeWein base."
+        },
+        {
+          "name": "Toxic Domains",
+          "url": "https://www.stopforumspam.com/downloads/toxic_domains_whole.txt",
+          "description": "StopForumSpam toxic."
+        },
+        {
+          "name": "ShadowWhisperer Malware",
+          "url": "https://raw.githubusercontent.com/ShadowWhisperer/BlockLists/master/Lists/Malware",
+          "description": "Hand-audited malware domain list."
+        },
+        {
+          "name": "ShadowWhisperer Scam",
+          "url": "https://raw.githubusercontent.com/ShadowWhisperer/BlockLists/master/Lists/Scam",
+          "description": "Curated scam / fraud domain list."
+        },
+        {
+          "name": "ThreatFox abuse.ch",
+          "url": "https://threatfox.abuse.ch/downloads/hostfile/",
+          "description": "abuse.ch live malware IOC feed in hosts format."
+        },
+        {
+          "name": "CERT.pl Warning List",
+          "url": "https://hole.cert.pl/domains/domains_hosts.txt",
+          "description": "Polish national CERT phishing feed (EU-focused)."
+        },
+        {
+          "name": "Phishing Army Extended",
+          "url": "https://phishing.army/download/phishing_army_blocklist_extended.txt",
+          "description": "Extended Phishing Army feed (adds recent hits)."
+        },
+        {
+          "name": "Durable Napkin Scam",
+          "url": "https://raw.githubusercontent.com/durablenapkin/scamblocklist/master/hosts.txt",
+          "description": "Curated scam / tech-support / fake-shop blocklist."
+        },
+        {
+          "name": "GlobalAntiScamOrg",
+          "url": "https://raw.githubusercontent.com/elliotwutingfeng/GlobalAntiScamOrg-blocklist/main/global-anti-scam-org-scam-urls-pihole.txt",
+          "description": "Global Anti-Scam Org reports reformatted for Pi-hole."
+        },
+        {
+          "name": "Inversion DNS Blocklist",
+          "url": "https://raw.githubusercontent.com/elliotwutingfeng/inversion-dnsblocklist/main/inversion-dnsblocklist-pihole.txt",
+          "description": "Crowd-sourced active-phish domain feed."
+        },
+        {
+          "name": "Curbengh Phishing Filter",
+          "url": "https://raw.githubusercontent.com/curbengh/phishing-filter/master/phishing-filter-hosts.txt",
+          "description": "Aggregated phishing feed (OpenPhish, PhishTank, etc)."
+        },
+        {
+          "name": "CoinBlockerLists",
+          "url": "https://raw.githubusercontent.com/ZeroDot1/CoinBlockerLists/master/hosts",
+          "description": "ZeroDot1 comprehensive cryptominer hosts."
+        },
+        {
+          "name": "CoinBlockerLists Browser",
+          "url": "https://raw.githubusercontent.com/ZeroDot1/CoinBlockerLists/master/hosts_browser",
+          "description": "In-browser-mining subset from CoinBlockerLists."
+        },
+        {
+          "name": "BlocklistProject Fraud",
+          "url": "https://blocklistproject.github.io/Lists/fraud.txt",
+          "description": "Fraud / scam-focused subset."
+        },
+        {
+          "name": "BlocklistProject Ransomware",
+          "url": "https://blocklistproject.github.io/Lists/ransomware.txt",
+          "description": "Ransomware C2 / dropper domains."
+        },
+        {
+          "name": "NRD 14-day (xRuffKez)",
+          "url": "https://raw.githubusercontent.com/xRuffKez/NRD/main/lists/14-day/domains-only/nrd-14day.txt",
+          "description": "Newly-Registered Domains (last 14 days) - phishing defense, low FPs."
+        },
+        {
+          "name": "NRD 30-day (xRuffKez)",
+          "url": "https://raw.githubusercontent.com/xRuffKez/NRD/main/lists/30-day/domains-only/nrd-30day.txt",
+          "description": "Newly-Registered Domains (last 30 days) - broader NRD net."
+        }
+      ]
+    },
+    {
+      "name": "Spam / Abuse / Misc",
+      "sources": [
+        {
+          "name": "KAD Hosts (Polish)",
+          "url": "https://raw.githubusercontent.com/PolishFiltersTeam/KADhosts/master/KADhosts.txt",
+          "description": "Polish focused filters."
+        },
+        {
+          "name": "KAD Hosts (Azet12)",
+          "url": "https://raw.githubusercontent.com/azet12/KADhosts/master/KADhosts.txt",
+          "description": "Alternative KADHosts mirror."
+        },
+        {
+          "name": "MajkiIT Polish Adservers",
+          "url": "https://raw.githubusercontent.com/MajkiIT/polish-ads-filter/master/hosts-based-list/adservers.txt",
+          "description": "Polish ad-server hosts list."
+        },
+        {
+          "name": "Cats-Team AdRules (CN)",
+          "url": "https://raw.githubusercontent.com/Cats-Team/AdRules/main/adrules_domainset.txt",
+          "description": "Chinese-language ads / tracker aggregate."
+        },
+        {
+          "name": "Schakal (Russian)",
+          "url": "https://schakal.ru/hosts/hosts_adblock.txt",
+          "description": "Russian ad / tracker block list."
+        },
+        {
+          "name": "FadeMind Spam",
+          "url": "https://raw.githubusercontent.com/FadeMind/hosts.extras/master/add.Spam/hosts",
+          "description": "Spam hosts."
+        },
+        {
+          "name": "FadeMind Risk",
+          "url": "https://raw.githubusercontent.com/FadeMind/hosts.extras/master/add.Risk/hosts",
+          "description": "Risky hosts."
+        },
+        {
+          "name": "FadeMind Unchecky",
+          "url": "https://raw.githubusercontent.com/FadeMind/hosts.extras/master/UncheckyAds/hosts",
+          "description": "Unchecky ads."
+        },
+        {
+          "name": "FadeMind 2o7",
+          "url": "https://raw.githubusercontent.com/FadeMind/hosts.extras/master/add.2o7Net/hosts",
+          "description": "Adobe analytics."
+        },
+        {
+          "name": "BigDargon Hosts VN",
+          "url": "https://raw.githubusercontent.com/bigdargon/hostsVN/master/hosts",
+          "description": "Vietnamese hosts."
+        },
+        {
+          "name": "SNAFU Blocklist",
+          "url": "https://raw.githubusercontent.com/RooneyMcNibNug/pihole-stuff/master/SNAFU.txt",
+          "description": "Misc blocklist."
+        },
+        {
+          "name": "Public Stun",
+          "url": "http://enumer.org/public-stun.txt",
+          "description": "Public STUN servers."
+        },
+        {
+          "name": "Fritzbox List",
+          "url": "https://list.kwbt.de/fritzboxliste.txt",
+          "description": "Fritzbox specific."
+        },
+        {
+          "name": "OneOffDallas DoH",
+          "url": "https://raw.githubusercontent.com/oneoffdallas/dohservers/master/list.txt",
+          "description": "DoH servers."
+        },
+        {
+          "name": "Dawsey21 Blacklist",
+          "url": "https://raw.githubusercontent.com/Dawsey21/Lists/master/main-blacklist.txt",
+          "description": "General blacklist."
+        },
+        {
+          "name": "Vokins YHosts",
+          "url": "https://raw.githubusercontent.com/vokins/yhosts/master/hosts.txt",
+          "description": "YHosts."
+        }
+      ]
+    },
+    {
+      "name": "Category Filters (Opt-in)",
+      "sources": [
+        {
+          "name": "BlocklistProject Gambling",
+          "url": "https://blocklistproject.github.io/Lists/gambling.txt",
+          "description": "Online gambling / casino / sportsbook domains."
+        },
+        {
+          "name": "BlocklistProject Porn",
+          "url": "https://blocklistproject.github.io/Lists/porn.txt",
+          "description": "Adult content top-1M style blocklist."
+        },
+        {
+          "name": "Sinfonietta Pornography",
+          "url": "https://raw.githubusercontent.com/Sinfonietta/hostfiles/master/pornography-hosts",
+          "description": "Curated adult-content hosts, broad coverage."
+        },
+        {
+          "name": "Sinfonietta Social",
+          "url": "https://raw.githubusercontent.com/Sinfonietta/hostfiles/master/social-hosts",
+          "description": "Social media domain list (opt-in distraction blocking)."
+        },
+        {
+          "name": "Sinfonietta Gambling",
+          "url": "https://raw.githubusercontent.com/Sinfonietta/hostfiles/master/gambling-hosts",
+          "description": "Curated gambling hosts (smaller alternative)."
+        },
+        {
+          "name": "Tiuxo Porn",
+          "url": "https://raw.githubusercontent.com/tiuxo/hosts/master/porn",
+          "description": "Minimal adult-content hosts list."
+        },
+        {
+          "name": "Tiuxo Social",
+          "url": "https://raw.githubusercontent.com/tiuxo/hosts/master/social",
+          "description": "Minimal social-media hosts list."
+        },
+        {
+          "name": "RPiList Gambling",
+          "url": "https://raw.githubusercontent.com/RPiList/specials/master/Blocklisten/Gambling.txt",
+          "description": "German-maintained gambling blocklist, EU coverage."
+        },
+        {
+          "name": "RPiList Fake Science",
+          "url": "https://raw.githubusercontent.com/RPiList/specials/master/Blocklisten/Fake-Science.txt",
+          "description": "Predatory journals / junk-science publishers."
+        }
+      ]
+    },
+    {
+      "name": "Vendor / Platform",
+      "sources": [
+        {
+          "name": "Amazon Native",
+          "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.amazon.txt",
+          "description": "Block Amazon devices telemetry."
+        },
+        {
+          "name": "Apple Native",
+          "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.apple.txt",
+          "description": "Block Apple devices telemetry."
+        },
+        {
+          "name": "Huawei Native",
+          "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.huawei.txt",
+          "description": "Block Huawei devices telemetry."
+        },
+        {
+          "name": "Windows Office Native",
+          "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.winoffice.txt",
+          "description": "Block MS Office telemetry."
+        },
+        {
+          "name": "Samsung Native",
+          "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.samsung.txt",
+          "description": "Block Samsung devices telemetry."
+        },
+        {
+          "name": "TikTok Native",
+          "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.tiktok.txt",
+          "description": "Block TikTok."
+        },
+        {
+          "name": "TikTok Native Ext",
+          "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.tiktok.extended.txt",
+          "description": "Block TikTok (Extended)."
+        },
+        {
+          "name": "LG WebOS Native",
+          "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.lgwebos.txt",
+          "description": "Block LG TV telemetry."
+        },
+        {
+          "name": "Roku Native",
+          "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.roku.txt",
+          "description": "Block Roku telemetry."
+        },
+        {
+          "name": "Vivo Native",
+          "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.vivo.txt",
+          "description": "Block Vivo telemetry."
+        },
+        {
+          "name": "Oppo / Realme Native",
+          "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.oppo-realme.txt",
+          "description": "Block Oppo/Realme telemetry."
+        },
+        {
+          "name": "Xiaomi Native",
+          "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.xiaomi.txt",
+          "description": "Block Xiaomi telemetry."
+        },
+        {
+          "name": "HOSTShield Apple",
+          "url": "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/Apple.txt",
+          "description": "HOSTShield Apple."
+        },
+        {
+          "name": "HOSTShield Brave",
+          "url": "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/Brave.txt",
+          "description": "HOSTShield Brave."
+        },
+        {
+          "name": "HOSTShield Microsoft",
+          "url": "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/Microsoft.txt",
+          "description": "HOSTShield Microsoft."
+        },
+        {
+          "name": "HOSTShield TikTok",
+          "url": "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/Tiktok.txt",
+          "description": "HOSTShield TikTok."
+        },
+        {
+          "name": "HOSTShield Twitter",
+          "url": "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/Twitter.txt",
+          "description": "HOSTShield Twitter."
+        },
+        {
+          "name": "Perflyst Vivo Telemetry",
+          "url": "https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/Vivotelemetry.txt",
+          "description": "Vivo / BBK Android phone telemetry."
+        },
+        {
+          "name": "Perflyst Samsung Smart",
+          "url": "https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/SamsungSmart.txt",
+          "description": "Samsung Smart TV / Tizen telemetry & ads."
+        },
+        {
+          "name": "llacb47 Smart TV",
+          "url": "https://raw.githubusercontent.com/llacb47/mischosts/main/smart-tv",
+          "description": "Generic smart-TV telemetry (Sony/Philips/Panasonic/Vizio)."
+        },
+        {
+          "name": "llacb47 LG WebOS",
+          "url": "https://raw.githubusercontent.com/llacb47/mischosts/main/lgwebos-hosts",
+          "description": "LG WebOS smart-TV telemetry supplement."
+        },
+        {
+          "name": "llacb47 Disney",
+          "url": "https://raw.githubusercontent.com/llacb47/mischosts/main/disney-hosts",
+          "description": "Disney+ / ESPN / Hulu tracker + ad infrastructure."
+        }
+      ]
+    }
+  ]
+}

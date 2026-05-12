@@ -32,6 +32,8 @@ APP_NAME = "Hosts File Get"
 APP_SLUG = "HostsFileGet"
 APP_VERSION = "2.17.0"
 CONFIG_SCHEMA_VERSION = 1
+SOURCE_MANIFEST_SCHEMA_VERSION = 1
+SOURCE_MANIFEST_RELATIVE_PATH = os.path.join("data", "blocklist_sources.json")
 ELEVATION_ATTEMPT_FLAG = "--hostsfileget-elevation-attempted"
 
 # Hard cap for any single downloaded feed/whitelist payload (50 MB decompressed).
@@ -1529,6 +1531,11 @@ def normalize_custom_source_url(url: str) -> str:
         "",
     ))
 
+
+def _contains_control_chars(value: str) -> bool:
+    return any(ord(ch) < 32 for ch in value)
+
+
 def sanitize_custom_sources(custom_sources) -> list[dict[str, str]]:
     if not isinstance(custom_sources, list):
         return []
@@ -1549,7 +1556,7 @@ def sanitize_custom_sources(custom_sources) -> list[dict[str, str]]:
         # Reject names or URLs containing control bytes (tab, newline, ESC,
         # etc.). A legacy config with a malformed entry could otherwise
         # corrupt the import marker comments or the sidebar layout.
-        if any(ord(ch) < 32 for ch in name) or any(ord(ch) < 32 for ch in url):
+        if _contains_control_chars(name) or _contains_control_chars(url):
             continue
 
         # Cap sizes defensively; see AddSourceDialog for rationale.
@@ -1568,6 +1575,113 @@ def sanitize_custom_sources(custom_sources) -> list[dict[str, str]]:
         sanitized_sources.append({"name": name, "url": url})
 
     return sanitized_sources
+
+
+def _coerce_source_manifest_schema_version(value) -> int:
+    if isinstance(value, bool):
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def sanitize_source_manifest(manifest) -> dict[str, list[tuple[str, str, str]]]:
+    """Validate and normalize the bundled curated-source manifest."""
+    if not isinstance(manifest, dict):
+        raise ValueError("Source manifest must be a JSON object.")
+
+    version = _coerce_source_manifest_schema_version(manifest.get("schema_version"))
+    if version != SOURCE_MANIFEST_SCHEMA_VERSION:
+        raise ValueError(
+            f"Unsupported source manifest schema_version {manifest.get('schema_version')!r}; "
+            f"expected {SOURCE_MANIFEST_SCHEMA_VERSION}."
+        )
+
+    categories = manifest.get("categories")
+    if not isinstance(categories, list) or not categories:
+        raise ValueError("Source manifest must contain a non-empty categories list.")
+
+    sanitized: dict[str, list[tuple[str, str, str]]] = {}
+    seen_categories = set()
+    seen_source_names = set()
+    seen_source_urls = set()
+
+    for category_index, category_payload in enumerate(categories, start=1):
+        if not isinstance(category_payload, dict):
+            raise ValueError(f"Source manifest category {category_index} must be an object.")
+
+        category_name = str(category_payload.get("name", "")).strip()
+        if not category_name:
+            raise ValueError(f"Source manifest category {category_index} is missing a name.")
+        if len(category_name) > 120 or _contains_control_chars(category_name):
+            raise ValueError(f"Source manifest category {category_name!r} has an invalid name.")
+
+        normalized_category_name = category_name.lower()
+        if normalized_category_name in seen_categories:
+            raise ValueError(f"Source manifest category {category_name!r} is duplicated.")
+        seen_categories.add(normalized_category_name)
+
+        sources = category_payload.get("sources")
+        if not isinstance(sources, list) or not sources:
+            raise ValueError(f"Source manifest category {category_name!r} must contain sources.")
+
+        sanitized_sources: list[tuple[str, str, str]] = []
+        for source_index, source_payload in enumerate(sources, start=1):
+            if not isinstance(source_payload, dict):
+                raise ValueError(
+                    f"Source manifest entry {category_name!r} #{source_index} must be an object."
+                )
+
+            source_name = str(source_payload.get("name", "")).strip()
+            source_url = str(source_payload.get("url", "")).strip()
+            source_description = str(source_payload.get("description", "")).strip()
+
+            if not source_name or len(source_name) > 120 or _contains_control_chars(source_name):
+                raise ValueError(
+                    f"Source manifest entry {category_name!r} #{source_index} has an invalid name."
+                )
+            if (
+                not source_url
+                or len(source_url) > 2083
+                or _contains_control_chars(source_url)
+                or _parse_valid_http_source_url(source_url) is None
+            ):
+                raise ValueError(
+                    f"Source manifest entry {source_name!r} has an invalid URL."
+                )
+            if len(source_description) > 500 or _contains_control_chars(source_description):
+                raise ValueError(
+                    f"Source manifest entry {source_name!r} has an invalid description."
+                )
+
+            normalized_source_name = source_name.lower()
+            normalized_source_url = normalize_custom_source_url(source_url)
+            if normalized_source_name in seen_source_names:
+                raise ValueError(f"Source manifest entry {source_name!r} is duplicated.")
+            if normalized_source_url in seen_source_urls:
+                raise ValueError(f"Source manifest URL {source_url!r} is duplicated.")
+
+            seen_source_names.add(normalized_source_name)
+            seen_source_urls.add(normalized_source_url)
+            sanitized_sources.append((source_name, source_url, source_description))
+
+        sanitized[category_name] = sanitized_sources
+
+    return sanitized
+
+
+def load_blocklist_sources_manifest(path: str | None = None) -> dict[str, list[tuple[str, str, str]]]:
+    manifest_path = path or os.path.join(_BUNDLE_DIR, SOURCE_MANIFEST_RELATIVE_PATH)
+    try:
+        payload = json.loads(read_text_file_content(manifest_path))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Source manifest JSON is invalid: {e}") from e
+    except OSError as e:
+        raise ValueError(f"Source manifest could not be read from {manifest_path!r}: {e}") from e
+
+    return sanitize_source_manifest(payload)
+
 
 def _coerce_config_schema_version(value) -> int:
     if isinstance(value, bool):
@@ -2625,189 +2739,8 @@ class HostsFileEditor:
     SIDEBAR_WIDTH = 420
 
     # Extended Blocklist Definitions
-    BLOCKLIST_SOURCES = {
-        "Major / Unified / Aggregated": [
-            ("HaGezi Ultimate", "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/ultimate.txt", "Ultimate protection. Very aggressive."),
-            ("HaGezi Pro Plus", "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/pro.plus.txt", "Aggressive HaGezi Pro with extra telemetry/metrics blocking."),
-            ("HaGezi Pro", "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/pro.txt", "Balanced HaGezi tier: ads + tracking + metrics."),
-            ("HaGezi Multi", "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/multi.txt", "HaGezi Multi Pro+ + TIF + threat-intel rollup."),
-            ("HaGezi Light", "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/light.txt", "HaGezi false-positive-free starter list."),
-            ("HaGezi TIF", "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/tif.txt", "Threat Intelligence Feeds only."),
-            ("1Hosts Lite", "https://raw.githubusercontent.com/badmojr/1Hosts/master/Lite/hosts.txt", "badmojr conservative ads + tracking."),
-            ("1Hosts Pro", "https://raw.githubusercontent.com/badmojr/1Hosts/master/Pro/hosts.txt", "badmojr balanced ads/tracking/metrics."),
-            ("1Hosts Xtra", "https://raw.githubusercontent.com/badmojr/1Hosts/master/Xtra/hosts.txt", "badmojr maximum-coverage tier; breakage risk."),
-            ("hBlock Aggregate", "https://hblock.molinero.dev/hosts", "Auto-aggregated 50+ upstream sources, daily rebuild."),
-            ("Ultimate Hosts Blacklist", "https://raw.githubusercontent.com/Ultimate-Hosts-Blacklist/Ultimate.Hosts.Blacklist/master/hosts/hosts0", "Mega-aggregate over 100 ads/malware/tracking lists."),
-            ("BlockConvert Aggregate", "https://raw.githubusercontent.com/mkb2091/blockconvert/master/output/domains.txt", "Cross-validated aggregate of mainstream blocklists."),
-            ("StevenBlack Unified", "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts", "Classic unified hosts list."),
-            ("StevenBlack Data", "https://raw.githubusercontent.com/StevenBlack/hosts/master/data/StevenBlack/hosts", "StevenBlack Data Base."),
-            ("OISD Full", "https://hosts.oisd.nl/", "Huge, false-positive free blocklist."),
-            ("OISD DBL", "https://dbl.oisd.nl/", "OISD Domain Blocklist."),
-            ("MVPS Hosts", "https://winhelp2002.mvps.org/hosts.txt", "Long-standing Windows hosts file."),
-            ("SomeoneWhoCares Zero", "https://someonewhocares.org/hosts/zero/hosts", "Classic zero-based hosts file."),
-            ("SomeoneWhoCares 127", "https://someonewhocares.org/hosts/hosts", "Classic 127.0.0.1 hosts file."),
-            ("HOSTShield Combined", "https://github.com/SysAdminDoc/HOSTShield/releases/download/v.1/CombinedAll.txt", "Massive combined list."),
-            ("The Great Wall", "https://raw.githubusercontent.com/Sekhan/TheGreatWall/master/TheGreatWall.txt", "Comprehensive aggregator."),
-            ("NeoHosts Basic", "https://cdn.jsdelivr.net/gh/neoFelhz/neohosts@gh-pages/basic/hosts", "NeoHosts Basic List."),
-            ("NeoDev Host", "https://raw.githubusercontent.com/neodevpro/neodevhost/master/host", "Actively maintained ads + tracker + malware aggregate."),
-        ],
-        "Ads / Tracking / Analytics": [
-            ("Disconnect Tracking", "https://s3.amazonaws.com/lists.disconnect.me/simple_tracking.txt", "Basic tracking protection."),
-            ("Disconnect Ads", "https://s3.amazonaws.com/lists.disconnect.me/simple_ad.txt", "Basic ad protection."),
-            ("DevDan Ads & Tracking", "https://www.github.developerdan.com/hosts/lists/ads-and-tracking-extended.txt", "Extended protection."),
-            ("EasyList Hosts", "https://v.firebog.net/hosts/Easylist.txt", "AdBlock EasyList converted to hosts."),
-            ("EasyPrivacy Hosts", "https://v.firebog.net/hosts/Easyprivacy.txt", "AdBlock EasyPrivacy converted to hosts."),
-            ("EasyList Privacy Orig", "https://easylist.to/easylist/easyprivacy.txt", "Original EasyPrivacy."),
-            ("EasyList NoElemHide", "https://easylist-downloads.adblockplus.org/easylist_noelemhide.txt", "EasyList without element hiding."),
-            ("Prigent Ads", "https://v.firebog.net/hosts/Prigent-Ads.txt", "Ads & trackers list."),
-            ("W3KBL", "https://v.firebog.net/hosts/static/w3kbl.txt", "Adblock list."),
-            ("Yoyo Ad Servers (Plain)", "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=0&mimetype=plaintext", "Classic ad server list."),
-            ("Yoyo Ad Servers (NoHTML)", "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=nohtml", "Yoyo No HTML format."),
-            ("Anudeep Ad Servers", "https://raw.githubusercontent.com/anudeepND/blacklist/master/adservers.txt", "Anudeep's ad server list."),
-            ("AdAway", "https://adaway.org/hosts.txt", "Mobile ad blocker hosts."),
-            ("AdGuard DNS", "https://v.firebog.net/hosts/AdguardDNS.txt", "AdGuard DNS filter."),
-            ("Admiral Anti-Adblock", "https://v.firebog.net/hosts/Admiral.txt", "Blocks anti-adblock scripts."),
-            ("YouTube Ads Blacklist", "https://raw.githubusercontent.com/anudeepND/youtubeadsblacklist/master/domainlist.txt", "Attempts to block YT ads."),
-            ("JDlingyu Ad Wars", "https://raw.githubusercontent.com/jdlingyu/ad-wars/master/hosts", "Comprehensive Chinese ad blocklist."),
-            ("Yhonay Antipopads", "https://raw.githubusercontent.com/Yhonay/antipopads/master/hosts", "Pop-up ads blocker."),
-            ("Hoshsadiq NoCoin", "https://raw.githubusercontent.com/hoshsadiq/adblock-nocoin-list/master/hosts.txt", "Adblock plus NoCoin."),
-            ("HOSTShield Ads", "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/AdsTrackingAnalytics.txt", "HOSTShield Ads & Tracking."),
-            ("Adobe Hosts", "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/AdobeHosts.txt", "Blocks Adobe verification."),
-            ("ShadowWhisperer Ads", "https://raw.githubusercontent.com/ShadowWhisperer/BlockLists/master/Lists/Ads", "Hand-audited ad domains, very low false positives."),
-            ("ShadowWhisperer Tracking", "https://raw.githubusercontent.com/ShadowWhisperer/BlockLists/master/Lists/Tracking", "Hand-audited tracker/analytics list."),
-            ("Lightswitch05 AMP Extended", "https://www.github.developerdan.com/hosts/lists/amp-hosts-extended.txt", "Google AMP cache / proxy URL blocklist."),
-            ("Lightswitch05 FB Extended", "https://www.github.developerdan.com/hosts/lists/facebook-extended.txt", "Extended Meta/Instagram/WhatsApp tracking."),
-            ("Lightswitch05 Tracking Aggressive", "https://www.github.developerdan.com/hosts/lists/tracking-aggressive-extended.txt", "Aggressive tracker list beyond the default extended."),
-            ("GoodbyeAds", "https://raw.githubusercontent.com/jerryn70/GoodbyeAds/master/Hosts/GoodbyeAds.txt", "Mobile ads + YouTube/Spotify/Hulu ad sponsors."),
-            ("AdGuard Mobile Ads (r-a-y)", "https://raw.githubusercontent.com/r-a-y/mobile-hosts/master/AdguardMobileAds.txt", "AdGuard mobile ad filter in hosts format."),
-            ("AdGuard Mobile Spyware (r-a-y)", "https://raw.githubusercontent.com/r-a-y/mobile-hosts/master/AdguardMobileSpyware.txt", "AdGuard mobile spyware filter in hosts format."),
-            ("CombinedPrivacyBlockLists", "https://raw.githubusercontent.com/bongochong/CombinedPrivacyBlockLists/master/NoFormatting/cpbl-ctld.txt", "Curated combined privacy aggregate, cross-TLD-checked."),
-            ("MobileAdTrackers (jawz101)", "https://raw.githubusercontent.com/jawz101/MobileAdTrackers/master/hosts", "Mobile SDK trackers from Exodus Privacy reports."),
-            ("DandelionSprout URL Shorteners", "https://raw.githubusercontent.com/DandelionSprout/adfilt/master/LegitimateURLShortener.txt", "URL shortener neutralizer to kill redirect tracking."),
-            ("BlocklistProject Tracking", "https://blocklistproject.github.io/Lists/tracking.txt", "Community-maintained tracking domain list."),
-            ("NextDNS CNAME Cloak", "https://raw.githubusercontent.com/nextdns/cname-cloaking-blocklist/master/domains", "CNAME-cloaking first-party trackers (Eulerian / Keyade / Criteo)."),
-        ],
-        "Telemetry / Privacy / Spyware": [
-            ("Windows Spy Blocker", "https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/spy.txt", "Blocks Windows telemetry."),
-            ("Windows Spy Extra", "https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/extra.txt", "WindowsSpyBlocker extra telemetry beyond the core spy list."),
-            ("Windows Spy Update", "https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/update.txt", "Windows Update / delivery-optimization telemetry."),
-            ("jmdugan Microsoft", "https://raw.githubusercontent.com/jmdugan/blocklists/master/corporations/microsoft/all", "Broad Microsoft corporate telemetry + services."),
-            ("jmdugan Facebook", "https://raw.githubusercontent.com/jmdugan/blocklists/master/corporations/facebook/all", "Meta/Facebook corporate domain blocklist."),
-            ("Frogeye 1st Party", "https://hostfiles.frogeye.fr/firstparty-trackers-hosts.txt", "First-party trackers."),
-            ("Frogeye Multi Party", "https://hostfiles.frogeye.fr/multiparty-trackers-hosts.txt", "Multi-party trackers."),
-            ("Matomo Referrer Spam", "https://raw.githubusercontent.com/matomo-org/referrer-spam-blacklist/master/spammers.txt", "Referrer spam blockers."),
-            ("Piwik Referrer Spam", "https://raw.githubusercontent.com/piwik/referrer-spam-blacklist/master/spammers.txt", "Piwik spam blockers."),
-            ("NoTrack Tracking", "https://gitlab.com/quidsup/notrack-blocklists/raw/master/notrack-blocklist.txt", "NoTrack tracking list."),
-            ("Perflyst Android", "https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/android-tracking.txt", "Android tracking."),
-            ("Perflyst SmartTV", "https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/SmartTV.txt", "Smart TV tracking."),
-            ("Perflyst FireTV", "https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/AmazonFireTV.txt", "FireTV tracking."),
-            ("Perflyst Session Replay", "https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/SessionReplay.txt", "Session-replay/heatmap vendors (Hotjar, FullStory)."),
-            ("TrackersList All", "https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_all.txt", "Torrent trackers list."),
-        ],
-        "Malware / Phishing / Scam": [
-            ("MalwareDomains", "https://mirror1.malwaredomains.com/files/justdomains", "Known malware domains."),
-            ("NoTrack Malware", "https://gitlab.com/quidsup/notrack-blocklists/raw/master/notrack-malware.txt", "NoTrack malware list."),
-            ("Spam404", "https://raw.githubusercontent.com/Spam404/lists/master/main-blacklist.txt", "Spam and scam sites."),
-            ("DandelionSprout Anti-Mal", "https://raw.githubusercontent.com/DandelionSprout/adfilt/master/Alternate%20versions%20Anti-Malware%20List/AntiMalwareHosts.txt", "Anti-malware hosts."),
-            ("Prigent Malware", "https://v.firebog.net/hosts/Prigent-Malware.txt", "Malware list."),
-            ("Prigent Crypto", "https://v.firebog.net/hosts/Prigent-Crypto.txt", "Crypto mining domains."),
-            ("RPiList Malware", "https://v.firebog.net/hosts/RPiList-Malware.txt", "Raspberry Pi list malware."),
-            ("RPiList Phishing", "https://v.firebog.net/hosts/RPiList-Phishing.txt", "Raspberry Pi list phishing."),
-            ("Phishing Army", "https://phishing.army/download/phishing_army_blocklist.txt", "Phishing Army."),
-            ("URLHaus Malware", "https://urlhaus.abuse.ch/downloads/hostfile/", "Abuse.ch malware."),
-            ("CyberHost Malware", "https://lists.cyberhost.uk/malware.txt", "CyberHost malware."),
-            ("Malware Filter Phishing", "https://malware-filter.gitlab.io/malware-filter/phishing-filter-hosts.txt", "Phishing filter."),
-            ("Scam Domains Wildcard", "https://raw.githubusercontent.com/jarelllama/Scam-Blocklist/main/lists/wildcard_domains/scams.txt", "Scam domains."),
-            ("PhishTank Domains", "https://raw.githubusercontent.com/tg12/pihole-phishtank-list/master/list/phish_domains.txt", "PhishTank data."),
-            ("PhishTank Data (CSV)", "https://data.phishtank.com/data/online-valid.csv.bz2", "Official PhishTank CSV (Requires Processing)."),
-            ("DigitalSide Threat Intel", "https://osint.digitalside.it/Threat-Intel/lists/latestdomains.txt", "OSINT threat intelligence."),
-            ("VXVault", "http://vxvault.net/URL_List.php", "VX Vault URL List."),
-            ("CyberCrime Tracker", "https://cybercrime-tracker.net/all.php", "CyberCrime Tracker."),
-            ("BBCan177 Feed", "https://gist.githubusercontent.com/BBcan177/4a8bf37c131be4803cb2/raw", "Threat intel feed."),
-            ("OpenPhish", "https://openphish.com/feed.txt", "OpenPhish feed."),
-            ("BarbBlock", "https://paulgb.github.io/BarbBlock/blacklists/hosts-file.txt", "BarbBlock hosts."),
-            ("Bambenek DoH", "https://raw.githubusercontent.com/bambenek/block-doh/master/doh-hosts.txt", "DoH servers."),
-            ("MinerChk", "https://raw.githubusercontent.com/Hestat/minerchk/master/hostslist.txt", "Crypto miner check."),
-            ("Badd Boyz", "https://raw.githubusercontent.com/mitchellkrogza/Badd-Boyz-Hosts/master/hosts", "Bad domains."),
-            ("Stamparm Maltrail", "https://raw.githubusercontent.com/stamparm/aux/master/maltrail-malware-domains.txt", "Maltrail malware."),
-            ("Stamparm Blackbook", "https://raw.githubusercontent.com/stamparm/blackbook/master/blackbook.txt", "Blackbook."),
-            ("Disconnect Malvertising", "https://s3.amazonaws.com/lists.disconnect.me/simple_malvertising.txt", "Disconnect Malvertising."),
-            ("Disconnect Malware", "https://s3.amazonaws.com/lists.disconnect.me/simple_malware.txt", "Disconnect Malware."),
-            ("AntiSocial Engineer", "https://theantisocialengineer.com/AntiSocial_Blacklist_Community_V1.txt", "Social engineering blocklist."),
-            ("Botvrij IOC", "https://www.botvrij.eu/data/ioclist.domain.raw", "Botvrij IoCs."),
-            ("JoeWein Domains", "https://www.joewein.net/dl/bl/dom-bl.txt", "JoeWein spam/scam."),
-            ("JoeWein Base", "https://www.joewein.net/dl/bl/dom-bl-base.txt", "JoeWein base."),
-            ("Toxic Domains", "https://www.stopforumspam.com/downloads/toxic_domains_whole.txt", "StopForumSpam toxic."),
-            ("ShadowWhisperer Malware", "https://raw.githubusercontent.com/ShadowWhisperer/BlockLists/master/Lists/Malware", "Hand-audited malware domain list."),
-            ("ShadowWhisperer Scam", "https://raw.githubusercontent.com/ShadowWhisperer/BlockLists/master/Lists/Scam", "Curated scam / fraud domain list."),
-            ("ThreatFox abuse.ch", "https://threatfox.abuse.ch/downloads/hostfile/", "abuse.ch live malware IOC feed in hosts format."),
-            ("CERT.pl Warning List", "https://hole.cert.pl/domains/domains_hosts.txt", "Polish national CERT phishing feed (EU-focused)."),
-            ("Phishing Army Extended", "https://phishing.army/download/phishing_army_blocklist_extended.txt", "Extended Phishing Army feed (adds recent hits)."),
-            ("Durable Napkin Scam", "https://raw.githubusercontent.com/durablenapkin/scamblocklist/master/hosts.txt", "Curated scam / tech-support / fake-shop blocklist."),
-            ("GlobalAntiScamOrg", "https://raw.githubusercontent.com/elliotwutingfeng/GlobalAntiScamOrg-blocklist/main/global-anti-scam-org-scam-urls-pihole.txt", "Global Anti-Scam Org reports reformatted for Pi-hole."),
-            ("Inversion DNS Blocklist", "https://raw.githubusercontent.com/elliotwutingfeng/inversion-dnsblocklist/main/inversion-dnsblocklist-pihole.txt", "Crowd-sourced active-phish domain feed."),
-            ("Curbengh Phishing Filter", "https://raw.githubusercontent.com/curbengh/phishing-filter/master/phishing-filter-hosts.txt", "Aggregated phishing feed (OpenPhish, PhishTank, etc)."),
-            ("CoinBlockerLists", "https://raw.githubusercontent.com/ZeroDot1/CoinBlockerLists/master/hosts", "ZeroDot1 comprehensive cryptominer hosts."),
-            ("CoinBlockerLists Browser", "https://raw.githubusercontent.com/ZeroDot1/CoinBlockerLists/master/hosts_browser", "In-browser-mining subset from CoinBlockerLists."),
-            ("BlocklistProject Fraud", "https://blocklistproject.github.io/Lists/fraud.txt", "Fraud / scam-focused subset."),
-            ("BlocklistProject Ransomware", "https://blocklistproject.github.io/Lists/ransomware.txt", "Ransomware C2 / dropper domains."),
-            ("NRD 14-day (xRuffKez)", "https://raw.githubusercontent.com/xRuffKez/NRD/main/lists/14-day/domains-only/nrd-14day.txt", "Newly-Registered Domains (last 14 days) - phishing defense, low FPs."),
-            ("NRD 30-day (xRuffKez)", "https://raw.githubusercontent.com/xRuffKez/NRD/main/lists/30-day/domains-only/nrd-30day.txt", "Newly-Registered Domains (last 30 days) - broader NRD net."),
-        ],
-        "Spam / Abuse / Misc": [
-            ("KAD Hosts (Polish)", "https://raw.githubusercontent.com/PolishFiltersTeam/KADhosts/master/KADhosts.txt", "Polish focused filters."),
-            ("KAD Hosts (Azet12)", "https://raw.githubusercontent.com/azet12/KADhosts/master/KADhosts.txt", "Alternative KADHosts mirror."),
-            ("MajkiIT Polish Adservers", "https://raw.githubusercontent.com/MajkiIT/polish-ads-filter/master/hosts-based-list/adservers.txt", "Polish ad-server hosts list."),
-            ("Cats-Team AdRules (CN)", "https://raw.githubusercontent.com/Cats-Team/AdRules/main/adrules_domainset.txt", "Chinese-language ads / tracker aggregate."),
-            ("Schakal (Russian)", "https://schakal.ru/hosts/hosts_adblock.txt", "Russian ad / tracker block list."),
-            ("FadeMind Spam", "https://raw.githubusercontent.com/FadeMind/hosts.extras/master/add.Spam/hosts", "Spam hosts."),
-            ("FadeMind Risk", "https://raw.githubusercontent.com/FadeMind/hosts.extras/master/add.Risk/hosts", "Risky hosts."),
-            ("FadeMind Unchecky", "https://raw.githubusercontent.com/FadeMind/hosts.extras/master/UncheckyAds/hosts", "Unchecky ads."),
-            ("FadeMind 2o7", "https://raw.githubusercontent.com/FadeMind/hosts.extras/master/add.2o7Net/hosts", "Adobe analytics."),
-            ("BigDargon Hosts VN", "https://raw.githubusercontent.com/bigdargon/hostsVN/master/hosts", "Vietnamese hosts."),
-            ("SNAFU Blocklist", "https://raw.githubusercontent.com/RooneyMcNibNug/pihole-stuff/master/SNAFU.txt", "Misc blocklist."),
-            ("Public Stun", "http://enumer.org/public-stun.txt", "Public STUN servers."),
-            ("Fritzbox List", "https://list.kwbt.de/fritzboxliste.txt", "Fritzbox specific."),
-            ("OneOffDallas DoH", "https://raw.githubusercontent.com/oneoffdallas/dohservers/master/list.txt", "DoH servers."),
-            ("Dawsey21 Blacklist", "https://raw.githubusercontent.com/Dawsey21/Lists/master/main-blacklist.txt", "General blacklist."),
-            ("Vokins YHosts", "https://raw.githubusercontent.com/vokins/yhosts/master/hosts.txt", "YHosts."),
-        ],
-        "Category Filters (Opt-in)": [
-            ("BlocklistProject Gambling", "https://blocklistproject.github.io/Lists/gambling.txt", "Online gambling / casino / sportsbook domains."),
-            ("BlocklistProject Porn", "https://blocklistproject.github.io/Lists/porn.txt", "Adult content top-1M style blocklist."),
-            ("Sinfonietta Pornography", "https://raw.githubusercontent.com/Sinfonietta/hostfiles/master/pornography-hosts", "Curated adult-content hosts, broad coverage."),
-            ("Sinfonietta Social", "https://raw.githubusercontent.com/Sinfonietta/hostfiles/master/social-hosts", "Social media domain list (opt-in distraction blocking)."),
-            ("Sinfonietta Gambling", "https://raw.githubusercontent.com/Sinfonietta/hostfiles/master/gambling-hosts", "Curated gambling hosts (smaller alternative)."),
-            ("Tiuxo Porn", "https://raw.githubusercontent.com/tiuxo/hosts/master/porn", "Minimal adult-content hosts list."),
-            ("Tiuxo Social", "https://raw.githubusercontent.com/tiuxo/hosts/master/social", "Minimal social-media hosts list."),
-            ("RPiList Gambling", "https://raw.githubusercontent.com/RPiList/specials/master/Blocklisten/Gambling.txt", "German-maintained gambling blocklist, EU coverage."),
-            ("RPiList Fake Science", "https://raw.githubusercontent.com/RPiList/specials/master/Blocklisten/Fake-Science.txt", "Predatory journals / junk-science publishers."),
-        ],
-        "Vendor / Platform": [
-            ("Amazon Native", "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.amazon.txt", "Block Amazon devices telemetry."),
-            ("Apple Native", "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.apple.txt", "Block Apple devices telemetry."),
-            ("Huawei Native", "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.huawei.txt", "Block Huawei devices telemetry."),
-            ("Windows Office Native", "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.winoffice.txt", "Block MS Office telemetry."),
-            ("Samsung Native", "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.samsung.txt", "Block Samsung devices telemetry."),
-            ("TikTok Native", "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.tiktok.txt", "Block TikTok."),
-            ("TikTok Native Ext", "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.tiktok.extended.txt", "Block TikTok (Extended)."),
-            ("LG WebOS Native", "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.lgwebos.txt", "Block LG TV telemetry."),
-            ("Roku Native", "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.roku.txt", "Block Roku telemetry."),
-            ("Vivo Native", "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.vivo.txt", "Block Vivo telemetry."),
-            ("Oppo / Realme Native", "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.oppo-realme.txt", "Block Oppo/Realme telemetry."),
-            ("Xiaomi Native", "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.xiaomi.txt", "Block Xiaomi telemetry."),
-            ("HOSTShield Apple", "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/Apple.txt", "HOSTShield Apple."),
-            ("HOSTShield Brave", "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/Brave.txt", "HOSTShield Brave."),
-            ("HOSTShield Microsoft", "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/Microsoft.txt", "HOSTShield Microsoft."),
-            ("HOSTShield TikTok", "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/Tiktok.txt", "HOSTShield TikTok."),
-            ("HOSTShield Twitter", "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/Twitter.txt", "HOSTShield Twitter."),
-            ("Perflyst Vivo Telemetry", "https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/Vivotelemetry.txt", "Vivo / BBK Android phone telemetry."),
-            ("Perflyst Samsung Smart", "https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/SamsungSmart.txt", "Samsung Smart TV / Tizen telemetry & ads."),
-            ("llacb47 Smart TV", "https://raw.githubusercontent.com/llacb47/mischosts/main/smart-tv", "Generic smart-TV telemetry (Sony/Philips/Panasonic/Vizio)."),
-            ("llacb47 LG WebOS", "https://raw.githubusercontent.com/llacb47/mischosts/main/lgwebos-hosts", "LG WebOS smart-TV telemetry supplement."),
-            ("llacb47 Disney", "https://raw.githubusercontent.com/llacb47/mischosts/main/disney-hosts", "Disney+ / ESPN / Hulu tracker + ad infrastructure."),
-        ]
-    }
+    # Loaded from data/blocklist_sources.json so feed URLs are auditable outside the code.
+    BLOCKLIST_SOURCES = load_blocklist_sources_manifest()
 
     def __init__(self, root):
         self.root = root

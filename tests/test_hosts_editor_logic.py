@@ -1,6 +1,7 @@
 import bz2
 import gzip
 import io
+import json
 import os
 import queue
 import threading
@@ -18,6 +19,7 @@ from hosts_editor import (
     FTL_BLOCKED_STATUS_CODES,
     HostsFileEditor,
     PROVENANCE_EVENT_KINDS,
+    SOURCE_MANIFEST_SCHEMA_VERSION,
     STALE_FRESH_HOURS,
     STALE_WARN_HOURS,
     append_provenance_event,
@@ -52,6 +54,7 @@ from hosts_editor import (
     build_schtasks_create_command,
     looks_like_domain,
     looks_like_html_document,
+    load_blocklist_sources_manifest,
     migrate_config_snapshot,
     normalize_scheduler_start_time,
     normalize_line_to_hosts_entries,
@@ -64,6 +67,7 @@ from hosts_editor import (
     rewrite_block_sink_ip,
     sanitize_config_snapshot,
     sanitize_custom_sources,
+    sanitize_source_manifest,
     sanitize_pinned_domains,
     scan_suspicious_redirects,
     strip_lines_by_category,
@@ -210,6 +214,118 @@ class HostsEditorLogicTests(unittest.TestCase):
             ]
         )
         self.assertEqual(sanitized, [{"name": "Good", "url": "https://example.com/list.txt"}])
+
+    def test_sanitize_source_manifest_accepts_valid_manifest(self):
+        manifest = {
+            "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+            "categories": [
+                {
+                    "name": "Ads",
+                    "sources": [
+                        {
+                            "name": "Example Hosts",
+                            "url": "https://example.com/hosts.txt",
+                            "description": "Small test source.",
+                        }
+                    ],
+                }
+            ],
+        }
+
+        self.assertEqual(
+            sanitize_source_manifest(manifest),
+            {"Ads": [("Example Hosts", "https://example.com/hosts.txt", "Small test source.")]},
+        )
+
+    def test_sanitize_source_manifest_rejects_unsafe_or_ambiguous_entries(self):
+        valid_source = {
+            "name": "Example Hosts",
+            "url": "https://example.com/hosts.txt",
+            "description": "Small test source.",
+        }
+        cases = [
+            {
+                "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION + 1,
+                "categories": [{"name": "Ads", "sources": [valid_source]}],
+            },
+            {
+                "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+                "categories": [
+                    {"name": "Ads", "sources": [valid_source]},
+                    {"name": "ads", "sources": [{**valid_source, "name": "Other", "url": "https://other.example/list.txt"}]},
+                ],
+            },
+            {
+                "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+                "categories": [
+                    {"name": "Ads", "sources": [{**valid_source, "name": "Bad\nName"}]},
+                ],
+            },
+            {
+                "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+                "categories": [
+                    {"name": "Ads", "sources": [{**valid_source, "url": "ftp://example.com/hosts.txt"}]},
+                ],
+            },
+            {
+                "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+                "categories": [
+                    {
+                        "name": "Ads",
+                        "sources": [
+                            valid_source,
+                            {"name": "Duplicate URL", "url": "https://example.com/hosts.txt/", "description": ""},
+                        ],
+                    }
+                ],
+            },
+        ]
+
+        for manifest in cases:
+            with self.subTest(manifest=manifest):
+                with self.assertRaises(ValueError):
+                    sanitize_source_manifest(manifest)
+
+    def test_load_blocklist_sources_manifest_reads_project_manifest(self):
+        loaded = load_blocklist_sources_manifest()
+        self.assertEqual(loaded, HostsFileEditor.BLOCKLIST_SOURCES)
+        self.assertIn("Major / Unified / Aggregated", loaded)
+        self.assertGreaterEqual(sum(len(sources) for sources in loaded.values()), 100)
+        self.assertTrue(
+            any(
+                name == "HaGezi Ultimate"
+                for sources in loaded.values()
+                for name, _url, _description in sources
+            )
+        )
+
+    def test_load_blocklist_sources_manifest_reads_explicit_path(self):
+        import tempfile
+        from pathlib import Path
+
+        manifest = {
+            "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+            "categories": [
+                {
+                    "name": "Security",
+                    "sources": [
+                        {
+                            "name": "Threat Feed",
+                            "url": "https://threats.example/hosts.txt",
+                            "description": "Threat domains.",
+                        }
+                    ],
+                }
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "blocklist_sources.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            self.assertEqual(
+                load_blocklist_sources_manifest(str(path)),
+                {"Security": [("Threat Feed", "https://threats.example/hosts.txt", "Threat domains.")]},
+            )
 
     def test_find_sources_containing_domain_accepts_structured_cache_entries(self):
         source_cache = {

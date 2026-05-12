@@ -35,7 +35,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - dry-run mode for no-write validation
   - unsaved-change prompts on reload and exit
 - Import pipeline:
-  - curated web blocklists
+  - curated web blocklists from a versioned JSON source manifest
   - batch import with filtering and progress
   - custom persistent sources
   - pfSense DNSBL log import
@@ -84,6 +84,7 @@ The launcher will:
 - reuse an existing Python 3 runtime when possible
 - install Python only if needed
 - refresh the cached `hosts_editor.py` when the download succeeds
+- refresh the cached curated source manifest beside the editor
 - fall back to the last valid cached editor copy if the network refresh fails
 - launch the editor
 
@@ -144,6 +145,7 @@ python -m unittest discover -s tests -v
 - Architecture map: `ARCHITECTURE.md`
 - Troubleshooting and hosts-file limits: `TROUBLESHOOTING.md`
 - Config schema: `docs/config-schema.md`
+- Curated source manifest: `docs/source-manifest.md`
 - Sourced implementation plan: `ROADMAP.md`
 - Release build notes: `docs/release.md`
 - Codex handoff notes: `CODEX_CHANGELOG.md`
