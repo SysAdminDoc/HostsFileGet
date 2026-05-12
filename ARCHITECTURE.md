@@ -62,6 +62,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `docs/source-overlap.md` | Source overlap matrix behavior and limits |
 | `docs/source-metrics.md` | Source freshness and compact growth history behavior |
 | `docs/false-positive-triage.md` | Check Domain triage behavior, actions, and limits |
+| `docs/virtualized-lists.md` | Paged large-list dialog behavior and constraints |
 | `docs/entry-provenance.md` | Line-level provenance/blame report behavior and limits |
 | `docs/provenance-log.md` | Provenance log filter and export behavior |
 | `docs/windows-dns-client.md` | Windows DNS Client Operational snapshot import behavior and limits |
@@ -155,6 +156,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - DNS rebinding checks: `classify_dns_rebinding_mapping`, `build_dns_rebinding_report`, `format_dns_rebinding_report`.
 - SafeSearch and restricted-mode templates: `list_safesearch_templates`, `build_safesearch_template_plan`, `format_safesearch_template_catalog`, `format_safesearch_template_plan`.
 - Cleanup/export/search helpers: `remove_lines_by_indices`, `rewrite_block_sink_ip`, `scan_suspicious_redirects`, `build_export_domain_records`, `build_dns_integration_export`, `build_cloud_dns_adapter_plan`, `format_dns_integration_pack_report`, `format_cloud_dns_adapter_catalog`, `export_lines_as_format`, `export_lines_as_bytes`, `strip_lines_by_category`.
+- Large-list helpers: `build_virtual_list_page`; `MatchRemovalDialog` uses it to page checkbox rows while preserving global selection state.
 - Source analytics: `find_sources_containing_domain`, `summarize_source_contributions`, `build_source_domain_index`, `build_source_overlap_report`, `sanitize_source_metrics_history`, `record_source_metrics_snapshot`, `build_source_metrics_report`, `format_source_metrics_report`, `build_filter_builder_report`, `format_filter_builder_report`, `sanitize_watch_expressions`, `build_watch_expression_report`, `format_watch_expression_report`, `categorize_entries_by_domain_hint`, `classify_source_freshness`.
 - Provenance and pinned-domain helpers: `append_provenance_event`, `read_provenance_events`, `build_entry_provenance_report`, `format_entry_provenance_report`, `build_provenance_log_report`, `format_provenance_log_report`, `filter_provenance_events`, `export_provenance_events`, `build_pinned_export_payload`, `parse_pinned_import_payload`, `sanitize_pinned_domains`.
 - Log importers: `parse_pihole_ftl_blocked_domains`, `parse_adguard_home_querylog`, `parse_nextdns_log_csv`, `parse_controld_activity_csv`.
@@ -175,7 +177,7 @@ Primary responsibilities:
 - Save raw/save cleaned/dry-run flows.
 - Backups, restore, compare, panic restore, hosts disable/enable.
 - Import UI, source catalog, custom sources, manual imports, DNS log imports, whitelist import.
-- Search, removal, find/replace, adblock quarantine, context menu commands.
+- Search, paged large-list removal, find/replace, adblock quarantine, context menu commands.
 - Source reports, source freshness/growth report, source bundle selector, Filter Builder, Watch Expressions, filtered provenance log view/export, entry provenance, health scan, adblock syntax lint, rule tier report, IDN/homograph report, NRD/DGA threat feed packs, CNAME cloaking workflow, encrypted-DNS bypass packs, DNS rebinding protection check, SafeSearch/restricted-mode templates, profile activation schedule report, profile quick switch and optional tray menu, false-positive triage, preferences, scheduler wizard.
 - Worker thread queue handling and safe Tk callback scheduling with `_safe_after`.
 

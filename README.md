@@ -54,7 +54,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - manual pasted list import
 - Search and cleanup:
   - find / next / previous navigation
-  - remove matching entries with selection + preview
+  - remove matching entries with paged large-list selection + preview
   - adblock syntax linting plus cosmetic/path-rule quarantine for hosts-safe reviews
   - rule tier reporting for exact, subdomain, wildcard, regex, path, exception, and browser-only rules
   - IDN/Punycode and homograph-risk reporting before trusting mixed internationalized lists
@@ -360,6 +360,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Export formats: `docs/export-formats.md`
 - Accessibility audit: `docs/accessibility.md`
 - i18n string catalog: `docs/i18n.md`
+- Virtualized large-list dialogs: `docs/virtualized-lists.md`
 - Sourced implementation plan: `ROADMAP.md`
 - Release build notes: `docs/release.md`
 - Codex handoff notes: `CODEX_CHANGELOG.md`
