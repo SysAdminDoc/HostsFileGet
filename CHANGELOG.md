@@ -52,6 +52,10 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added deterministic stdlib fuzz coverage for hosts-line parser invariants without adding a new dependency.
 - Added cleaned-output idempotence fuzzing so randomly generated batches stay stable after a second clean pass.
 
+**GUI smoke tests**
+- Added Tk smoke tests for patched main-window startup plus About and Preferences modal construction.
+- The smoke tests skip cleanly if Tk cannot create a root and patch admin/config/hosts-load startup paths to avoid system writes or elevation prompts.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**
