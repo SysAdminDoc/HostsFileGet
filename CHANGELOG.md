@@ -24,6 +24,10 @@ All notable changes to HostsFileGet will be documented in this file.
 - Expanded **Check Domain...** into a triage flow that explains current-editor blocks, whitelist coverage, pinned-domain overrides, fetched source matches, and upstream issue paths.
 - Added actions to add a checked domain to the whitelist, preview-remove matching editor lines, pin/unpin the domain, copy a report, and open the first derived report path.
 
+**Source overlap matrix**
+- Added a normalized fetched-source domain index and pairwise overlap matrix to **Sources Report**.
+- The report now shows per-source unique/overlap counts plus top overlapping source pairs with sample shared domains.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

@@ -3108,6 +3108,197 @@ def summarize_source_contributions(lines: list[str]) -> list[dict]:
     return buckets
 
 
+def extract_blocking_domains_from_lines(lines: list[str]) -> set[str]:
+    """Return normalized blocking domains from hosts/filter-style text lines."""
+    domains: set[str] = set()
+    for line in lines or []:
+        parsed, _ = parse_hosts_line_entries(line)
+        for _, domain, is_block in parsed:
+            if is_block:
+                domains.add(domain)
+    return domains
+
+
+def _dedupe_source_index_label(label: str, used: set[str], url: str = "", fallback: str = "") -> str:
+    clean = str(label or "").strip() or str(fallback or "").strip() or "Unnamed source"
+    if clean not in used:
+        used.add(clean)
+        return clean
+
+    host = ""
+    try:
+        host = urllib.parse.urlparse(url).netloc
+    except ValueError:
+        host = ""
+    if host:
+        candidate = f"{clean} ({host})"
+        if candidate not in used:
+            used.add(candidate)
+            return candidate
+
+    suffix = 2
+    while True:
+        candidate = f"{clean} #{suffix}"
+        if candidate not in used:
+            used.add(candidate)
+            return candidate
+        suffix += 1
+
+
+def build_source_domain_index(source_corpus: dict[str, object]) -> dict[str, set[str]]:
+    """Build a source-name -> blocking-domain index from cached source bodies."""
+    index: dict[str, set[str]] = {}
+    used_labels: set[str] = set()
+    for cache_key, payload in (source_corpus or {}).items():
+        if isinstance(payload, dict):
+            name = str(payload.get("name") or cache_key)
+            url = str(payload.get("url") or "")
+            text = payload.get("text", "")
+        else:
+            name = str(cache_key)
+            url = ""
+            text = payload
+        if not text:
+            continue
+        domains = extract_blocking_domains_from_lines(str(text).splitlines())
+        if not domains:
+            continue
+        label = _dedupe_source_index_label(name, used_labels, url=url, fallback=str(cache_key))
+        index[label] = domains
+    return index
+
+
+def build_source_overlap_report(
+    source_corpus: dict[str, object],
+    sample_limit: int = 5,
+    pair_limit: int = 100,
+) -> dict:
+    """Return source uniqueness and pairwise overlap stats for fetched sources."""
+    index = build_source_domain_index(source_corpus)
+    source_names = list(index.keys())
+    domain_to_sources: dict[str, set[str]] = {}
+    for source_name, domains in index.items():
+        for domain in domains:
+            domain_to_sources.setdefault(domain, set()).add(source_name)
+
+    source_rows = []
+    for source_name, domains in index.items():
+        unique_count = sum(1 for domain in domains if len(domain_to_sources.get(domain, set())) == 1)
+        overlap_count = len(domains) - unique_count
+        source_rows.append({
+            "source": source_name,
+            "domains": len(domains),
+            "unique_domains": unique_count,
+            "overlap_domains": overlap_count,
+            "overlap_percent": (100.0 * overlap_count / len(domains)) if domains else 0.0,
+        })
+    source_rows.sort(key=lambda row: (-row["domains"], row["source"].lower()))
+
+    pairs = []
+    for left_idx, left_name in enumerate(source_names):
+        left_domains = index[left_name]
+        for right_name in source_names[left_idx + 1:]:
+            right_domains = index[right_name]
+            shared = left_domains & right_domains
+            if not shared:
+                continue
+            pairs.append({
+                "source_a": left_name,
+                "source_b": right_name,
+                "shared_domains": len(shared),
+                "a_overlap_percent": 100.0 * len(shared) / len(left_domains) if left_domains else 0.0,
+                "b_overlap_percent": 100.0 * len(shared) / len(right_domains) if right_domains else 0.0,
+                "sample_domains": sorted(shared)[:max(0, sample_limit)],
+            })
+    pairs.sort(key=lambda row: (-row["shared_domains"], row["source_a"].lower(), row["source_b"].lower()))
+    if pair_limit and len(pairs) > pair_limit:
+        truncated_pairs = len(pairs) - pair_limit
+        pairs = pairs[:pair_limit]
+    else:
+        truncated_pairs = 0
+
+    return {
+        "source_count": len(source_names),
+        "total_unique_domains": len(domain_to_sources),
+        "domains_seen_in_multiple_sources": sum(1 for names in domain_to_sources.values() if len(names) > 1),
+        "source_rows": source_rows,
+        "pairs": pairs,
+        "truncated_pairs": truncated_pairs,
+    }
+
+
+def format_source_overlap_report(
+    report: dict,
+    max_sources: int = 20,
+    max_pairs: int = 30,
+) -> str:
+    """Format source overlap stats for the Sources Report dialog."""
+    source_count = int(report.get("source_count") or 0)
+    if source_count == 0:
+        return (
+            "Fetched source overlap matrix\n"
+            "(no fetched source corpus is available yet - import sources this session to build the overlap matrix)"
+        )
+    if source_count == 1:
+        return (
+            "Fetched source overlap matrix\n"
+            "(only one fetched source is indexed; import at least two sources to compare overlap)"
+        )
+
+    lines = [
+        "Fetched source overlap matrix",
+        f"Sources indexed: {source_count:,}",
+        f"Unique normalized blocking domains: {int(report.get('total_unique_domains') or 0):,}",
+        f"Domains present in 2+ sources: {int(report.get('domains_seen_in_multiple_sources') or 0):,}",
+        "",
+        "Per-source uniqueness",
+        f"{'Source':<44} {'Domains':>10} {'Unique':>10} {'Overlap':>10} {'Overlap %':>10}",
+        "-" * 90,
+    ]
+    source_rows = report.get("source_rows") or []
+    for row in source_rows[:max_sources]:
+        name = str(row.get("source", ""))[:43]
+        lines.append(
+            f"{name:<44} "
+            f"{int(row.get('domains') or 0):>10,} "
+            f"{int(row.get('unique_domains') or 0):>10,} "
+            f"{int(row.get('overlap_domains') or 0):>10,} "
+            f"{float(row.get('overlap_percent') or 0.0):>9.1f}%"
+        )
+    if len(source_rows) > max_sources:
+        lines.append(f"...and {len(source_rows) - max_sources:,} more source(s)")
+
+    lines.extend([
+        "",
+        "Top overlapping pairs",
+        f"{'Source A':<30} {'Source B':<30} {'Shared':>8} {'A %':>7} {'B %':>7}  Sample domains",
+        "-" * 110,
+    ])
+    pairs = report.get("pairs") or []
+    if not pairs:
+        lines.append("(no overlapping pairs found)")
+    for row in pairs[:max_pairs]:
+        left = str(row.get("source_a", ""))[:29]
+        right = str(row.get("source_b", ""))[:29]
+        sample = ", ".join(row.get("sample_domains") or [])
+        lines.append(
+            f"{left:<30} {right:<30} "
+            f"{int(row.get('shared_domains') or 0):>8,} "
+            f"{float(row.get('a_overlap_percent') or 0.0):>6.1f}% "
+            f"{float(row.get('b_overlap_percent') or 0.0):>6.1f}%  "
+            f"{sample}"
+        )
+    hidden_pairs = max(0, len(pairs) - max_pairs) + int(report.get("truncated_pairs") or 0)
+    if hidden_pairs:
+        lines.append(f"...and {hidden_pairs:,} more overlapping pair(s)")
+
+    lines.extend([
+        "",
+        "Matrix basis: normalized blocking domains from sources fetched during the current session.",
+    ])
+    return "\n".join(lines)
+
+
 def fuzzy_score(query: str, target: str) -> int:
     """Score a target string against a query, higher = better match.
 
@@ -6844,15 +7035,15 @@ class HostsFileEditor:
         self._configure_modal_window(
             dialog,
             title="Sources Report",
-            size="760x580",
-            min_size=(680, 520),
+            size="980x680",
+            min_size=(760, 560),
         )
 
         total_blocks = sum(b["blocking_entries"] for b in buckets)
         intro, _ = self._create_sidebar_card(
             dialog,
             "Sources report",
-            "Ranked by blocking-entry contribution so you can spot bloated, redundant, or low-value imports faster.",
+            "Ranked by blocking-entry contribution and fetched-source overlap so you can spot bloated, redundant, or low-value imports faster.",
             accent=PALETTE["accent"],
         )
         ttk.Label(
@@ -6862,7 +7053,7 @@ class HostsFileEditor:
                 f"{total_blocks:,} blocking entr{'y' if total_blocks == 1 else 'ies'} accounted for in the current editor."
             ),
             style="SectionBody.TLabel",
-            wraplength=680,
+            wraplength=860,
             justify="left",
         ).pack(anchor="w")
 
@@ -6880,6 +7071,10 @@ class HostsFileEditor:
                 share = 100.0 * b["blocking_entries"] / total_blocks
                 name = b["name"][:49]
                 body.insert(tk.END, f"{name:<50} {b['blocking_entries']:>10,} {b['total_lines']:>10,} {share:>7.1f}%\n")
+        overlap_report = build_source_overlap_report(self._source_corpus_cache)
+        body.insert(tk.END, "\n\n")
+        body.insert(tk.END, format_source_overlap_report(overlap_report))
+        body.insert(tk.END, "\n")
         body.configure(state="disabled")
 
         btn_row = ttk.Frame(dialog)

@@ -40,6 +40,7 @@ It is not a DNS server, browser ad blocker, cloud filtering service, or endpoint
 | `data/blocklist_sources.json` | Versioned curated blocklist catalog loaded at startup |
 | `docs/source-manifest.md` | Curated source manifest schema and maintenance rules |
 | `docs/source-health.md` | Source reachability checker and report format |
+| `docs/source-overlap.md` | Source overlap matrix behavior and limits |
 | `docs/false-positive-triage.md` | Check Domain triage behavior, actions, and limits |
 | `CLAUDE.md` | Compact architecture and gotchas snapshot for agents |
 | `default.txt` | Sample/default hosts content |
@@ -93,7 +94,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Source health reporting: `check_source_health_record`, `build_source_health_report`, `summarize_source_health_results`.
 - False-positive triage: `build_false_positive_triage_report`, `format_false_positive_triage_report`, `add_domain_to_whitelist_text`, `remove_false_positive_matches_from_lines`.
 - Cleanup/export/search helpers: `remove_lines_by_indices`, `rewrite_block_sink_ip`, `scan_suspicious_redirects`, `export_lines_as_format`, `strip_lines_by_category`.
-- Source analytics: `find_sources_containing_domain`, `summarize_source_contributions`, `categorize_entries_by_domain_hint`, `classify_source_freshness`.
+- Source analytics: `find_sources_containing_domain`, `summarize_source_contributions`, `build_source_domain_index`, `build_source_overlap_report`, `categorize_entries_by_domain_hint`, `classify_source_freshness`.
 - Provenance and pinned-domain helpers: `append_provenance_event`, `read_provenance_events`, `build_pinned_export_payload`, `parse_pinned_import_payload`, `sanitize_pinned_domains`.
 - Log importers: `parse_pihole_ftl_blocked_domains`, `parse_adguard_home_querylog`.
 - Bulk text transformations: `apply_find_replace`, `discover_import_sections`, `remove_import_section`.
