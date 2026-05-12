@@ -55,6 +55,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - rule tier reporting for exact, subdomain, wildcard, regex, path, exception, and browser-only rules
   - IDN/Punycode and homograph-risk reporting before trusting mixed internationalized lists
   - NRD/DGA/TIF threat feed pack planning with freshness and false-positive controls
+  - CNAME cloaking workflow planning that separates hosts-reviewable disguised domains from DNS-only CNAME target feeds
   - false-positive triage for whitelist, pin, source-match, and upstream report decisions
   - entry provenance view for import-section ownership, source matches, and local audit events
 - Export adapters:
@@ -256,6 +257,13 @@ python hosts_editor.py --threat-feed-list
 python hosts_editor.py --threat-feed-plan nrd-review .\nrd-plan.json
 ```
 
+List guarded CNAME cloaking workflows or write a local handoff plan:
+
+```powershell
+python hosts_editor.py --cname-cloaking-list
+python hosts_editor.py --cname-cloaking-plan cname-aware-dns .\cname-plan.json
+```
+
 Run the deterministic large-file benchmark with:
 
 ```powershell
@@ -285,6 +293,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Rule tier report: `docs/rule-tiers.md`
 - IDN and homograph report: `docs/idn-homograph.md`
 - NRD/DGA threat feed packs: `docs/threat-feed-packs.md`
+- CNAME cloaking workflow: `docs/cname-cloaking.md`
 - Troubleshooting and hosts-file limits: `TROUBLESHOOTING.md`
 - Config schema: `docs/config-schema.md`
 - Curated source manifest: `docs/source-manifest.md`

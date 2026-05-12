@@ -71,6 +71,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F034 complete. Next roadmap item: F035 NRD/DGA threat feed pack.
 - Completed F035: added guarded TIF/DGA/NRD threat feed pack planning, source-manifest feed entries, GUI and CLI catalog/plan surfaces, JSON plan output, docs, and regression tests.
 - Updated `ROADMAP.md` to mark F035 complete. Next roadmap item: F036 CNAME cloaking source and explanation workflow.
+- Completed F036: added guarded CNAME cloaking workflow planning, AdGuard disguised-domain source entries, DNS-only CNAME target/RPZ handoff plans, GUI and CLI catalog/plan surfaces, JSON plan output, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F036 complete. Next roadmap item: F037 encrypted DNS resolver bypass pack.
 
 ## Scope
 

@@ -97,6 +97,7 @@ from hosts_editor import (
     build_portable_bundle_readme,
     build_scheduler_activity_report,
     build_scheduler_update_command,
+    build_cname_cloaking_plan,
     build_threat_feed_pack_plan,
     export_lines_as_format,
     export_lines_as_bytes,
@@ -122,6 +123,8 @@ from hosts_editor import (
     format_config_location_report,
     format_dns_integration_export_summary,
     format_dns_integration_pack_report,
+    format_cname_cloaking_catalog,
+    format_cname_cloaking_plan,
     format_portable_bundle_export_summary,
     format_scheduler_activity_report,
     format_source_trust_badges,
@@ -133,6 +136,8 @@ from hosts_editor import (
     get_source_cache_body_path,
     get_config_root_dir,
     get_git_history_dir,
+    list_cname_cloaking_packs,
+    list_cname_cloaking_sources,
     list_cloud_dns_adapters,
     list_dns_integration_packs,
     list_threat_feed_packs,
@@ -1877,6 +1882,23 @@ profile:
             self.assertEqual(plan["freshness"]["stale_after_hours"], 6)
             self.assertIn("A1", plan["references"])
 
+    def test_cli_cname_cloaking_plan_writes_review_file(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plan_path = Path(tmpdir) / "cname-plan.json"
+
+            with mock.patch.object(hosts_editor, "_cli_print"):
+                self.assertEqual(hosts_editor._cli_cname_cloaking_plan("cname-aware", str(plan_path)), 0)
+
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            self.assertEqual(plan["schema"], "hostsfileget.cname-cloaking-plan.v1")
+            self.assertEqual(plan["pack_id"], "cname-aware-dns")
+            self.assertFalse(plan["hosts_native"])
+            self.assertEqual(plan["source_count"], 2)
+            self.assertIn("nextdns-cname-targets", plan["source_ids"])
+
     def test_handle_cli_args_routes_integration_flags(self):
         with mock.patch.object(hosts_editor, "_cli_integration_list", return_value=0) as mocked_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--integration-list"]), 0)
@@ -1922,6 +1944,18 @@ profile:
                 0,
             )
             mocked_plan.assert_called_once_with("dga-watch", "plan.json")
+
+    def test_handle_cli_args_routes_cname_cloaking_flags(self):
+        with mock.patch.object(hosts_editor, "_cli_cname_cloaking_list", return_value=0) as mocked_list:
+            self.assertEqual(hosts_editor._handle_cli_args(["--cname-cloaking-list"]), 0)
+            mocked_list.assert_called_once_with()
+
+        with mock.patch.object(hosts_editor, "_cli_cname_cloaking_plan", return_value=0) as mocked_plan:
+            self.assertEqual(
+                hosts_editor._handle_cli_args(["--cname-cloaking-plan", "rpz", "plan.json"]),
+                0,
+            )
+            mocked_plan.assert_called_once_with("rpz", "plan.json")
 
     def test_handle_cli_args_routes_adblock_lint_flags(self):
         with mock.patch.object(hosts_editor, "_cli_adblock_lint", return_value=1) as mocked_lint:
@@ -2832,6 +2866,42 @@ profile:
 
         with self.assertRaises(ValueError):
             build_threat_feed_pack_plan("unknown-threat-pack")
+
+    def test_cname_cloaking_catalog_separates_hosts_and_dns_workflows(self):
+        pack_ids = {pack["id"] for pack in list_cname_cloaking_packs()}
+        source_ids = {source["id"] for source in list_cname_cloaking_sources()}
+
+        self.assertEqual(pack_ids, {"hosts-disguised-review", "cname-aware-dns", "rpz-dns"})
+        self.assertIn("nextdns-cname-targets", source_ids)
+        self.assertIn("adguard-cname-disguised-trackers", source_ids)
+
+        catalog = format_cname_cloaking_catalog()
+        self.assertIn("CNAME cloaking workflow", catalog)
+        self.assertIn("not-native", catalog)
+        self.assertIn("review-import", catalog)
+        self.assertIn("Hosts files only match", catalog)
+
+    def test_build_cname_cloaking_plan_explains_hosts_boundary(self):
+        hosts_plan = build_cname_cloaking_plan("hosts")
+        hosts_rendered = format_cname_cloaking_plan(hosts_plan)
+
+        self.assertEqual(hosts_plan["pack_id"], "hosts-disguised-review")
+        self.assertTrue(hosts_plan["hosts_native"])
+        self.assertIn("adguard-cname-disguised-trackers", hosts_plan["source_ids"])
+        self.assertNotIn("nextdns-cname-targets", hosts_plan["source_ids"])
+        self.assertIn("Hosts limit", hosts_rendered)
+        self.assertIn("combined_disguised_trackers_justdomains.txt", hosts_rendered)
+        self.assertIn("A4", hosts_rendered)
+
+        dns_plan = build_cname_cloaking_plan("cname-aware")
+        self.assertEqual(dns_plan["pack_id"], "cname-aware-dns")
+        self.assertFalse(dns_plan["hosts_native"])
+        self.assertIn("nextdns-cname-targets", dns_plan["source_ids"])
+        self.assertIn("cannot inspect CNAME response chains", dns_plan["explanation"]["hosts_limit"])
+        self.assertIn("C1", dns_plan["references"])
+
+        with self.assertRaises(ValueError):
+            build_cname_cloaking_plan("unknown-cname-pack")
 
     def test_export_lines_as_bytes_supports_compressed_hosts(self):
         lines = ["0.0.0.0 ads.example", "# comment", "0.0.0.0 tracker.example"]

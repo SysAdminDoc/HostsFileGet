@@ -5711,6 +5711,141 @@ THREAT_FEED_PACK_ALIASES = {
     "full": "threat-full-review",
     "threat-full": "threat-full-review",
 }
+CNAME_CLOAKING_WARNINGS = (
+    "Hosts files only match the hostname being queried; they cannot inspect DNS responses or CNAME chains.",
+    "Original tracker-target lists require a CNAME-aware DNS resolver such as AdGuard Home, Technitium DNS Server, or a provider with CNAME uncloaking.",
+    "Disguised-domain lists can be imported as domain feeds, but microsites, redirects, and mail trackers can still cause user-visible breakage.",
+)
+CNAME_CLOAKING_SOURCES = (
+    {
+        "id": "nextdns-cname-targets",
+        "name": "NextDNS CNAME Cloaking Blocklist",
+        "source_type": "original-tracker-targets",
+        "format": "domains",
+        "url": "https://raw.githubusercontent.com/nextdns/cname-cloaking-blocklist/master/domains",
+        "hosts_file_fit": "not-native",
+        "resolver_requirement": "Wildcard-match CNAME chain nodes against the listed tracker target domains.",
+        "risk": "medium",
+        "description": "Original CNAME tracker targets; useful only when a DNS resolver inspects CNAME answers.",
+        "source_ids": ("C1", "O26", "A4", "A5"),
+    },
+    {
+        "id": "adguard-cname-original-trackers",
+        "name": "AdGuard CNAME Original Trackers",
+        "source_type": "original-tracker-targets",
+        "format": "adblock",
+        "url": "https://raw.githubusercontent.com/AdguardTeam/cname-trackers/master/data/combined_original_trackers.txt",
+        "hosts_file_fit": "not-native",
+        "resolver_requirement": "Software capable of scanning CNAME records before applying the rule.",
+        "risk": "medium",
+        "description": "Original tracker domains that are often disguised with CNAME records.",
+        "source_ids": ("O27", "S11", "A4", "A5"),
+    },
+    {
+        "id": "adguard-cname-disguised-trackers",
+        "name": "AdGuard CNAME Disguised Trackers",
+        "source_type": "disguised-domains",
+        "format": "domains",
+        "url": "https://raw.githubusercontent.com/AdguardTeam/cname-trackers/master/data/combined_disguised_trackers_justdomains.txt",
+        "hosts_file_fit": "review-import",
+        "resolver_requirement": "None for exact hostname blocking; CNAME-aware DNS is still better for future aliases.",
+        "risk": "medium",
+        "description": "Known first-party-looking tracker hostnames that disguise real trackers.",
+        "source_ids": ("O27", "S11", "A4", "A5"),
+    },
+    {
+        "id": "adguard-cname-disguised-ads",
+        "name": "AdGuard CNAME Disguised Ads",
+        "source_type": "disguised-domains",
+        "format": "domains",
+        "url": "https://raw.githubusercontent.com/AdguardTeam/cname-trackers/master/data/combined_disguised_ads_justdomains.txt",
+        "hosts_file_fit": "review-import",
+        "resolver_requirement": "None for exact hostname blocking; verify breakage before scheduling.",
+        "risk": "medium",
+        "description": "Known CNAME-disguised advertising hostnames.",
+        "source_ids": ("O27", "S11", "A4", "A5"),
+    },
+    {
+        "id": "adguard-cname-disguised-mail-trackers",
+        "name": "AdGuard CNAME Disguised Mail Trackers",
+        "source_type": "disguised-domains",
+        "format": "domains",
+        "url": "https://raw.githubusercontent.com/AdguardTeam/cname-trackers/master/data/combined_disguised_mail_trackers_justdomains.txt",
+        "hosts_file_fit": "review-import",
+        "resolver_requirement": "None for exact hostname blocking; mail-link tracking can affect expected click/open flows.",
+        "risk": "high",
+        "description": "Known CNAME-disguised mail tracking hostnames.",
+        "source_ids": ("O27", "S11", "A4", "A5"),
+    },
+    {
+        "id": "adguard-cname-disguised-rpz",
+        "name": "AdGuard CNAME Disguised Trackers RPZ",
+        "source_type": "disguised-rpz",
+        "format": "rpz",
+        "url": "https://raw.githubusercontent.com/AdguardTeam/cname-trackers/master/data/combined_disguised_trackers_rpz.txt",
+        "hosts_file_fit": "dns-export-only",
+        "resolver_requirement": "RPZ-capable DNS resolver.",
+        "risk": "medium",
+        "description": "RPZ form for CNAME-disguised tracker hostnames.",
+        "source_ids": ("O8", "O27", "S11", "A4", "A5"),
+    },
+)
+CNAME_CLOAKING_PACKS = (
+    {
+        "id": "hosts-disguised-review",
+        "label": "Hosts disguised-domain review",
+        "description": "Exact CNAME-disguised domains that can be reviewed and imported as normal hosts/domain feeds.",
+        "source_ids": (
+            "adguard-cname-disguised-trackers",
+            "adguard-cname-disguised-ads",
+            "adguard-cname-disguised-mail-trackers",
+        ),
+        "risk": "medium-high",
+        "default_action": "import-separately-and-triage",
+        "hosts_native": True,
+        "controls": (
+            "Import each disguised-domain feed as a separate source section.",
+            "Use false-positive triage for mail, redirect, and microsite breakage before saving cleaned output.",
+            "Prefer scheduled use only after source health and source-overlap review.",
+        ),
+    },
+    {
+        "id": "cname-aware-dns",
+        "label": "CNAME-aware DNS handoff",
+        "description": "Original tracker-target feeds for resolvers that inspect CNAME chains.",
+        "source_ids": ("nextdns-cname-targets", "adguard-cname-original-trackers"),
+        "risk": "medium",
+        "default_action": "export-or-configure-in-cname-aware-resolver",
+        "hosts_native": False,
+        "controls": (
+            "Do not import original target feeds directly into the hosts file.",
+            "Use a resolver or provider that evaluates CNAME chain nodes before blocking.",
+            "Keep query-log review local because CNAME chains can reveal browsing behavior.",
+        ),
+    },
+    {
+        "id": "rpz-dns",
+        "label": "RPZ DNS handoff",
+        "description": "RPZ-format CNAME-disguised tracker source for DNS servers that accept RPZ data.",
+        "source_ids": ("adguard-cname-disguised-rpz",),
+        "risk": "medium",
+        "default_action": "configure-in-rpz-capable-dns",
+        "hosts_native": False,
+        "controls": (
+            "Use the RPZ source in DNS infrastructure rather than reducing it to hosts rows.",
+            "Document reload/rollback steps in the downstream DNS server before enabling scheduled updates.",
+        ),
+    },
+)
+CNAME_CLOAKING_PACK_ALIASES = {
+    "hosts": "hosts-disguised-review",
+    "hosts-review": "hosts-disguised-review",
+    "disguised": "hosts-disguised-review",
+    "dns": "cname-aware-dns",
+    "cname-aware": "cname-aware-dns",
+    "nextdns": "cname-aware-dns",
+    "rpz": "rpz-dns",
+}
 
 
 def normalize_export_format(export_format: str) -> str:
@@ -6137,6 +6272,135 @@ def format_threat_feed_pack_plan(plan: dict) -> str:
         lines.append(f"- {control}")
     lines.extend(["", "Warnings:"])
     for warning in plan.get("warnings") or THREAT_FEED_PACK_WARNINGS:
+        lines.append(f"- {warning}")
+    references = plan.get("references") or []
+    if references:
+        lines.extend(["", "Roadmap source IDs:", f"- {', '.join(references)}"])
+    return "\n".join(lines)
+
+
+def normalize_cname_cloaking_pack_id(pack_id: str) -> str:
+    normalized = (pack_id or "").strip().lower().replace("_", "-")
+    return CNAME_CLOAKING_PACK_ALIASES.get(normalized, normalized)
+
+
+def list_cname_cloaking_sources() -> list[dict]:
+    return [dict(source) for source in CNAME_CLOAKING_SOURCES]
+
+
+def list_cname_cloaking_packs() -> list[dict]:
+    return [dict(pack) for pack in CNAME_CLOAKING_PACKS]
+
+
+def find_cname_cloaking_pack(pack_id: str) -> dict:
+    normalized = normalize_cname_cloaking_pack_id(pack_id)
+    for pack in CNAME_CLOAKING_PACKS:
+        if pack["id"] == normalized:
+            return dict(pack)
+    known = ", ".join(pack["id"] for pack in CNAME_CLOAKING_PACKS)
+    raise ValueError(f"Unknown CNAME cloaking pack: {pack_id!r}. Known packs: {known}")
+
+
+def find_cname_cloaking_source(source_id: str) -> dict:
+    normalized = (source_id or "").strip().lower().replace("_", "-")
+    for source in CNAME_CLOAKING_SOURCES:
+        if source["id"] == normalized:
+            return dict(source)
+    known = ", ".join(source["id"] for source in CNAME_CLOAKING_SOURCES)
+    raise ValueError(f"Unknown CNAME cloaking source: {source_id!r}. Known sources: {known}")
+
+
+def build_cname_cloaking_plan(pack_id: str) -> dict:
+    pack = find_cname_cloaking_pack(pack_id)
+    sources = [find_cname_cloaking_source(source_id) for source_id in pack["source_ids"]]
+    references = sorted({
+        reference
+        for source in sources
+        for reference in source.get("source_ids", ())
+    })
+    return {
+        "schema": "hostsfileget.cname-cloaking-plan.v1",
+        "pack_id": pack["id"],
+        "label": pack["label"],
+        "description": pack["description"],
+        "risk": pack["risk"],
+        "default_action": pack["default_action"],
+        "hosts_native": bool(pack["hosts_native"]),
+        "source_count": len(sources),
+        "source_ids": [source["id"] for source in sources],
+        "sources": sources,
+        "explanation": {
+            "problem": "CNAME cloaking maps first-party-looking hostnames to third-party trackers in DNS answers.",
+            "hosts_limit": "The Windows hosts file can only answer exact queried names and cannot inspect CNAME response chains.",
+            "hosts_fit": "Use disguised-domain feeds for exact known aliases; do not import original target feeds directly.",
+            "dns_fit": "Use CNAME-aware DNS, RPZ, or provider-side blocking when the rule must match the CNAME target instead of the queried hostname.",
+        },
+        "controls": list(pack.get("controls") or ()),
+        "warnings": list(CNAME_CLOAKING_WARNINGS),
+        "references": references,
+    }
+
+
+def format_cname_cloaking_catalog() -> str:
+    lines = [
+        "CNAME cloaking workflow",
+        "",
+        "This catalog separates hosts-importable disguised domains from original tracker-target lists that require CNAME-aware DNS.",
+        "",
+        "Supported packs:",
+    ]
+    for pack in CNAME_CLOAKING_PACKS:
+        source_count = len(pack.get("source_ids") or ())
+        native_text = "hosts-reviewable" if pack.get("hosts_native") else "DNS handoff"
+        lines.extend([
+            f"- {pack['id']}: {pack['label']}",
+            f"  Fit: {native_text}",
+            f"  Risk: {pack['risk']}",
+            f"  Sources: {source_count}",
+            f"  Default action: {pack['default_action']}",
+            f"  Description: {pack['description']}",
+        ])
+    lines.extend(["", "Sources:"])
+    for source in CNAME_CLOAKING_SOURCES:
+        lines.extend([
+            f"- {source['id']}: {source['name']}",
+            f"  Type: {source['source_type']} | Format: {source['format']} | Hosts fit: {source['hosts_file_fit']}",
+            f"  Resolver requirement: {source['resolver_requirement']}",
+            f"  URL: {source['url']}",
+        ])
+    lines.extend(["", "Warnings:"])
+    lines.extend(f"- {warning}" for warning in CNAME_CLOAKING_WARNINGS)
+    return "\n".join(lines)
+
+
+def format_cname_cloaking_plan(plan: dict) -> str:
+    explanation = plan.get("explanation") or {}
+    lines = [
+        "CNAME Cloaking Plan",
+        f"Pack: {plan.get('pack_id')} - {plan.get('label')}",
+        f"Risk: {plan.get('risk')}",
+        f"Hosts-native: {'yes' if plan.get('hosts_native') else 'no'}",
+        f"Default action: {plan.get('default_action')}",
+        f"Sources: {int(plan.get('source_count') or 0):,}",
+        "",
+        "Explanation:",
+        f"- Problem: {explanation.get('problem')}",
+        f"- Hosts limit: {explanation.get('hosts_limit')}",
+        f"- Hosts fit: {explanation.get('hosts_fit')}",
+        f"- DNS fit: {explanation.get('dns_fit')}",
+        "",
+        "Source URLs:",
+    ]
+    for source in plan.get("sources") or []:
+        lines.append(
+            f"- {source.get('id')}: {source.get('url')} "
+            f"({source.get('source_type')}, {source.get('format')}, hosts={source.get('hosts_file_fit')})"
+        )
+    lines.extend(["", "Controls:"])
+    for control in plan.get("controls") or []:
+        lines.append(f"- {control}")
+    lines.extend(["", "Warnings:"])
+    for warning in plan.get("warnings") or CNAME_CLOAKING_WARNINGS:
         lines.append(f"- {warning}")
     references = plan.get("references") or []
     if references:
@@ -9257,6 +9521,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="Rule Tier Report...", command=self.show_rule_tier_report)
         tools_menu.add_command(label="IDN / Homograph Report...", command=self.show_idn_homograph_report)
         tools_menu.add_command(label="NRD / DGA Threat Feed Packs...", command=self.show_threat_feed_packs)
+        tools_menu.add_command(label="CNAME Cloaking Workflow...", command=self.show_cname_cloaking_workflow)
         tools_menu.add_command(label="DNS Bypass Diagnostics...", command=self.show_dns_bypass_diagnostics)
         tools_menu.add_command(label="DNS Interoperability Pack...", command=self.show_dns_integration_pack)
         tools_menu.add_command(label="Cloud DNS Adapters...", command=self.show_cloud_dns_adapters)
@@ -10281,6 +10546,16 @@ class HostsFileEditor:
             tone="warning",
             width=940,
             height=700,
+        )
+
+    def show_cname_cloaking_workflow(self):
+        self._show_text_report_dialog(
+            "CNAME cloaking workflow",
+            "Explain which CNAME cloaking feeds can be imported as exact domains and which require CNAME-aware DNS.",
+            format_cname_cloaking_catalog(),
+            tone="warning",
+            width=940,
+            height=720,
         )
 
     def show_dns_integration_pack(self):
@@ -14537,6 +14812,26 @@ def _cli_threat_feed_plan(pack_id: str, output_path: str) -> int:
     return 0
 
 
+def _cli_cname_cloaking_list() -> int:
+    _cli_print(format_cname_cloaking_catalog())
+    return 0
+
+
+def _cli_cname_cloaking_plan(pack_id: str, output_path: str) -> int:
+    try:
+        plan = build_cname_cloaking_plan(pack_id)
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        write_text_file_atomic(output_path, json.dumps(plan, indent=2))
+    except (OSError, ValueError) as exc:
+        _cli_print(f"CNAME cloaking plan failed: {exc}")
+        return 2
+    _cli_print(format_cname_cloaking_plan(plan))
+    _cli_print(f"Wrote CNAME cloaking plan to {output_path}")
+    return 0
+
+
 def _cli_adblock_lint(input_path: str, output_path: str | None = None) -> int:
     try:
         lines = read_text_file_lines(input_path)
@@ -14876,6 +15171,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--cloud-log-import",
         "--threat-feed-list",
         "--threat-feed-plan",
+        "--cname-cloaking-list",
+        "--cname-cloaking-plan",
         "--adblock-lint",
         "--adblock-lint-output",
         "--adblock-quarantine",
@@ -14908,6 +15205,7 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--cloud-profile-id=",
         "--cloud-log-import=",
         "--threat-feed-plan=",
+        "--cname-cloaking-plan=",
         "--adblock-lint=",
         "--adblock-lint-output=",
         "--adblock-quarantine=",
@@ -14974,6 +15272,13 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         nargs=2,
         metavar=("PACK", "OUTPUT"),
         help="Write a local JSON plan for an NRD/DGA/TIF threat feed PACK to OUTPUT. No feeds are fetched or applied.",
+    )
+    parser.add_argument("--cname-cloaking-list", action="store_true", help="List guarded CNAME cloaking source/workflow packs.")
+    parser.add_argument(
+        "--cname-cloaking-plan",
+        nargs=2,
+        metavar=("PACK", "OUTPUT"),
+        help="Write a local JSON plan for a CNAME cloaking PACK to OUTPUT. No DNS lookups or remote writes are performed.",
     )
     parser.add_argument("--adblock-lint", metavar="INPUT", help="Lint INPUT for browser-only or unsafe adblock rules without launching the GUI.")
     parser.add_argument("--adblock-lint-output", metavar="PATH", help="Write the detailed adblock syntax lint JSON report to PATH.")
@@ -15070,6 +15375,10 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         return _cli_threat_feed_list()
     if args.threat_feed_plan:
         return _cli_threat_feed_plan(args.threat_feed_plan[0], args.threat_feed_plan[1])
+    if args.cname_cloaking_list:
+        return _cli_cname_cloaking_list()
+    if args.cname_cloaking_plan:
+        return _cli_cname_cloaking_plan(args.cname_cloaking_plan[0], args.cname_cloaking_plan[1])
     if args.adblock_lint or args.adblock_lint_output:
         if not args.adblock_lint:
             parser.error("--adblock-lint-output requires --adblock-lint INPUT")
