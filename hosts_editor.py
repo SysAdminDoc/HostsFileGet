@@ -181,6 +181,9 @@ SOURCE_CORPUS_CACHE_MAX_ENTRIES = 24
 FILTER_QUERY_HISTORY_MAX_ITEMS = 25
 FILTER_QUERY_MAX_LENGTH = 240
 FILTER_BUILDER_MATCH_LIMIT = 50
+WATCH_EXPRESSIONS_MAX_ITEMS = 50
+WATCH_EXPRESSION_NAME_MAX_LENGTH = 80
+WATCH_EXPRESSION_REPORT_MATCH_LIMIT = 10
 MIGRATION_IMPORT_MAX_FILE_BYTES = 10 * 1024 * 1024
 MIGRATION_IMPORT_MAX_TOTAL_BYTES = 50 * 1024 * 1024
 MIGRATION_IMPORT_MAX_FILES = 2_000
@@ -5413,6 +5416,7 @@ def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
     custom_sources = sanitize_custom_sources(config.get("custom_sources", []))
     source_cache_metadata = sanitize_source_cache_metadata(config.get("source_cache_metadata", {}))
     filter_query_history = sanitize_filter_query_history(config.get("filter_query_history", []))
+    watch_expressions = sanitize_watch_expressions(config.get("watch_expressions", []))
 
     preferred_sink_raw = config.get("preferred_block_sink", "0.0.0.0")
     preferred_sink = _profile_preferred_sink(preferred_sink_raw)
@@ -5458,6 +5462,7 @@ def sanitize_config_snapshot(config, default_last_open_dir: str) -> dict:
         "source_last_fetched": source_last_fetched,
         "source_cache_metadata": source_cache_metadata,
         "filter_query_history": filter_query_history,
+        "watch_expressions": watch_expressions,
         "preferred_block_sink": preferred_sink,
         "backup_retention": backup_retention,
         "has_completed_first_run": has_completed_first_run,
@@ -8657,6 +8662,95 @@ def record_filter_query_history(
     return [normalized] + [item for item in current if item.casefold() != key][: max(0, limit - 1)]
 
 
+def _normalize_watch_expression_name(value: str, fallback: str = "") -> str:
+    name = _normalize_filter_query_text(value)[:WATCH_EXPRESSION_NAME_MAX_LENGTH]
+    if name:
+        return name
+    fallback_name = _normalize_filter_query_text(fallback)[:WATCH_EXPRESSION_NAME_MAX_LENGTH]
+    return fallback_name or "Watch expression"
+
+
+def sanitize_watch_expressions(watches, max_items: int = WATCH_EXPRESSIONS_MAX_ITEMS) -> list[dict]:
+    """Return app-level watch expressions in safe, deterministic order."""
+    try:
+        limit = int(max_items)
+    except (TypeError, ValueError):
+        limit = WATCH_EXPRESSIONS_MAX_ITEMS
+    limit = max(0, min(limit, WATCH_EXPRESSIONS_MAX_ITEMS))
+    if limit == 0 or not isinstance(watches, (list, tuple)):
+        return []
+
+    sanitized: list[dict] = []
+    seen_queries: set[str] = set()
+    for item in watches:
+        if isinstance(item, str):
+            query = _normalize_filter_query_text(item)
+            name = _normalize_watch_expression_name("", query)
+            enabled = True
+        elif isinstance(item, dict):
+            query = _normalize_filter_query_text(item.get("query") or item.get("expression") or "")
+            name = _normalize_watch_expression_name(item.get("name", ""), query)
+            enabled = bool(item.get("enabled", True))
+        else:
+            continue
+        if not query:
+            continue
+        key = query.casefold()
+        if key in seen_queries:
+            continue
+        seen_queries.add(key)
+        sanitized.append({
+            "name": name,
+            "query": query,
+            "enabled": enabled,
+        })
+        if len(sanitized) >= limit:
+            break
+    return sanitized
+
+
+def upsert_watch_expression(
+    watches,
+    query: str,
+    name: str = "",
+    *,
+    enabled: bool = True,
+    index: int | None = None,
+    max_items: int = WATCH_EXPRESSIONS_MAX_ITEMS,
+) -> list[dict]:
+    """Add or replace one watch expression, deduped by query."""
+    current = sanitize_watch_expressions(watches, max_items=max_items)
+    candidate_rows = sanitize_watch_expressions([{
+        "name": name,
+        "query": query,
+        "enabled": enabled,
+    }], max_items=1)
+    if not candidate_rows:
+        return current
+    candidate = candidate_rows[0]
+
+    if isinstance(index, int) and 0 <= index < len(current):
+        current[index] = candidate
+    else:
+        current = [candidate] + [
+            item for item in current
+            if item.get("query", "").casefold() != candidate["query"].casefold()
+        ]
+    return sanitize_watch_expressions(current, max_items=max_items)
+
+
+def remove_watch_expression(watches, index: int) -> list[dict]:
+    """Remove a watch expression by display index."""
+    current = sanitize_watch_expressions(watches)
+    try:
+        idx = int(index)
+    except (TypeError, ValueError):
+        return current
+    if 0 <= idx < len(current):
+        del current[idx]
+    return current
+
+
 def parse_filter_builder_query(query: str) -> dict:
     """Parse a local filter-builder query into fielded terms.
 
@@ -8915,6 +9009,138 @@ def build_filter_builder_report(
         "warnings": warnings,
         "references": ["C4", "O7"],
     }
+
+
+def build_watch_expression_report(
+    watches,
+    editor_lines: list[str] | None = None,
+    source_corpus: dict[str, object] | None = None,
+    blocklist_sources=None,
+    *,
+    match_limit: int = WATCH_EXPRESSION_REPORT_MATCH_LIMIT,
+) -> dict:
+    """Evaluate saved watch expressions against current local state."""
+    sanitized_watches = sanitize_watch_expressions(watches)
+    rows: list[dict] = []
+    enabled_count = 0
+    triggered_count = 0
+    total_editor_matches = 0
+    total_source_matches = 0
+    for watch in sanitized_watches:
+        row = {
+            "name": watch["name"],
+            "query": watch["query"],
+            "enabled": bool(watch.get("enabled", True)),
+            "valid": True,
+            "triggered": False,
+            "editor_match_count": 0,
+            "source_match_count": 0,
+            "hit_count": 0,
+            "editor_matches": [],
+            "source_matches": [],
+            "warnings": [],
+        }
+        if not row["enabled"]:
+            row["warnings"].append("Watch is disabled.")
+            rows.append(row)
+            continue
+        enabled_count += 1
+        filter_report = build_filter_builder_report(
+            watch["query"],
+            editor_lines or [],
+            source_corpus or {},
+            blocklist_sources,
+            [],
+            match_limit=match_limit,
+        )
+        editor_count = int(filter_report.get("editor_match_count") or 0)
+        source_count = int(filter_report.get("source_match_count") or 0)
+        hit_count = editor_count + source_count
+        row.update({
+            "valid": bool(filter_report.get("valid")),
+            "triggered": hit_count > 0,
+            "editor_match_count": editor_count,
+            "source_match_count": source_count,
+            "hit_count": hit_count,
+            "editor_matches": filter_report.get("editor_matches", [])[:match_limit],
+            "source_matches": filter_report.get("source_matches", [])[:match_limit],
+            "warnings": filter_report.get("warnings", []),
+        })
+        if row["triggered"]:
+            triggered_count += 1
+        total_editor_matches += editor_count
+        total_source_matches += source_count
+        rows.append(row)
+
+    return {
+        "schema": "hostsfileget.watch-expressions.v1",
+        "watch_count": len(sanitized_watches),
+        "enabled_count": enabled_count,
+        "triggered_count": triggered_count,
+        "editor_match_count": total_editor_matches,
+        "source_match_count": total_source_matches,
+        "watches": rows,
+        "references": ["C4", "O7"],
+    }
+
+
+def format_watch_expression_report(report: dict) -> str:
+    """Render saved watch expression status for the GUI."""
+    if not report:
+        return "Watch Expressions\n(no report)"
+    lines = [
+        "Watch Expressions",
+        f"Configured: {int(report.get('watch_count') or 0):,}",
+        f"Enabled: {int(report.get('enabled_count') or 0):,}",
+        f"Triggered: {int(report.get('triggered_count') or 0):,}",
+        f"Editor matches: {int(report.get('editor_match_count') or 0):,}",
+        f"Source matches: {int(report.get('source_match_count') or 0):,}",
+        "",
+    ]
+    watches = report.get("watches") or []
+    if not watches:
+        lines.extend([
+            "No watch expressions are configured.",
+            "",
+            "Add a saved Filter Builder query to track domains, source labels, or line text over time.",
+        ])
+    for watch in watches:
+        state = "triggered" if watch.get("triggered") else "clear"
+        if not watch.get("enabled", True):
+            state = "disabled"
+        lines.append(f"- {watch.get('name')} [{state}]")
+        lines.append(f"  Query: {watch.get('query')}")
+        lines.append(
+            "  Hits: "
+            f"{int(watch.get('hit_count') or 0):,} "
+            f"(editor {int(watch.get('editor_match_count') or 0):,}, "
+            f"sources {int(watch.get('source_match_count') or 0):,})"
+        )
+        editor_matches = watch.get("editor_matches") or []
+        if editor_matches:
+            lines.append("  Editor samples:")
+            for item in editor_matches[:3]:
+                lines.append(f"    line {item.get('line_no')}: {item.get('line')}")
+        source_matches = watch.get("source_matches") or []
+        if source_matches:
+            lines.append("  Source samples:")
+            for item in source_matches[:3]:
+                domains = ", ".join(item.get("matched_domains") or [])
+                suffix = f" ({domains})" if domains else ""
+                lines.append(f"    {item.get('name')} [{item.get('kind')}]{suffix}")
+        warnings = watch.get("warnings") or []
+        if warnings:
+            lines.append("  Warnings:")
+            for warning in warnings[:3]:
+                lines.append(f"    {warning}")
+    references = report.get("references") or []
+    if references:
+        lines.extend(["", "Roadmap source IDs:", "- " + ", ".join(references)])
+    lines.extend([
+        "",
+        "Boundary: local watch report only. It reuses Filter Builder syntax and never fetches sources or writes the hosts file.",
+    ])
+    return "\n".join(lines)
 
 
 def format_filter_builder_report(report: dict) -> str:
@@ -10528,6 +10754,7 @@ class HostsFileEditor:
         self.source_last_fetched: dict[str, str] = {}
         self.source_cache_metadata: dict[str, dict] = {}
         self.filter_query_history: list[str] = []
+        self.watch_expressions: list[dict] = []
         self.source_cache_dir = get_source_cache_dir()
         self._source_metadata_dirty = False
         self._preferred_block_sink = "0.0.0.0"
@@ -12010,6 +12237,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="Cloud DNS Adapters...", command=self.show_cloud_dns_adapters)
         tools_menu.add_command(label="Source Bundle Selector...", command=self.show_source_bundle_selector)
         tools_menu.add_command(label="Filter Builder...", command=self.show_filter_builder)
+        tools_menu.add_command(label="Watch Expressions...", command=self.show_watch_expressions)
         tools_menu.add_command(label="Sources Report...", command=self.show_sources_report)
         tools_menu.add_command(label="Goto Anything...", command=self.show_goto_anything)
         tools_menu.add_command(label="Find and Replace...", command=self.show_find_replace_dialog)
@@ -12470,6 +12698,7 @@ class HostsFileEditor:
         self.source_last_fetched = sanitized_config.get("source_last_fetched", {})
         self.source_cache_metadata = sanitized_config.get("source_cache_metadata", {})
         self.filter_query_history = sanitized_config.get("filter_query_history", [])
+        self.watch_expressions = sanitized_config.get("watch_expressions", [])
         self._preferred_block_sink = sanitized_config.get("preferred_block_sink", "0.0.0.0")
         self._backup_retention = sanitized_config.get("backup_retention", BACKUP_RETENTION)
         self._has_completed_first_run = sanitized_config.get("has_completed_first_run", False)
@@ -12542,6 +12771,7 @@ class HostsFileEditor:
             "source_last_fetched": self.source_last_fetched,
             "source_cache_metadata": self.source_cache_metadata,
             "filter_query_history": getattr(self, "filter_query_history", []),
+            "watch_expressions": getattr(self, "watch_expressions", []),
             "preferred_block_sink": self._preferred_block_sink,
             "backup_retention": self._backup_retention,
             "has_completed_first_run": self._has_completed_first_run,
@@ -12573,6 +12803,7 @@ class HostsFileEditor:
             self.profile_activation_fallback_id = config["profile_activation_fallback_id"]
             self.profile_activation_schedule = config["profile_activation_schedule"]
             self.filter_query_history = config["filter_query_history"]
+            self.watch_expressions = config["watch_expressions"]
             self._source_metadata_dirty = False
             self._update_whitelist_summary()
             return True
@@ -13121,6 +13352,7 @@ class HostsFileEditor:
             "source_last_fetched": getattr(self, "source_last_fetched", {}),
             "source_cache_metadata": getattr(self, "source_cache_metadata", {}),
             "filter_query_history": getattr(self, "filter_query_history", []),
+            "watch_expressions": getattr(self, "watch_expressions", []),
             "preferred_block_sink": getattr(self, "_preferred_block_sink", "0.0.0.0"),
             "backup_retention": getattr(self, "_backup_retention", BACKUP_RETENTION),
             "has_completed_first_run": getattr(self, "_has_completed_first_run", False),
@@ -13153,6 +13385,7 @@ class HostsFileEditor:
         self.source_last_fetched = sanitized_config.get("source_last_fetched", {})
         self.source_cache_metadata = sanitized_config.get("source_cache_metadata", {})
         self.filter_query_history = sanitized_config.get("filter_query_history", [])
+        self.watch_expressions = sanitized_config.get("watch_expressions", [])
         self._preferred_block_sink = sanitized_config.get("preferred_block_sink", "0.0.0.0")
         self._backup_retention = sanitized_config.get("backup_retention", BACKUP_RETENTION)
         self._has_completed_first_run = sanitized_config.get("has_completed_first_run", False)
@@ -13660,6 +13893,238 @@ class HostsFileEditor:
 
         if initial_query:
             self._safe_after(50, run_query)
+        dialog.grab_set()
+
+    # ----------------------------- Watch Expressions -------------------------
+    def show_watch_expressions(self):
+        dialog = tk.Toplevel(self.root)
+        self._configure_modal_window(
+            dialog,
+            title="Watch Expressions",
+            size="940x720",
+            min_size=(780, 620),
+        )
+
+        intro, _ = self._create_sidebar_card(
+            dialog,
+            "Watch expressions",
+            "Save local Filter Builder queries and rerun them against the current editor plus fetched-source index.",
+            accent=PALETTE["blue"],
+        )
+        ttk.Label(
+            intro,
+            text='Examples: domain:doubleclick.net, source:hagezi line:telemetry, line:"0.0.0.0"',
+            style="SectionBody.TLabel",
+            wraplength=760,
+            justify="left",
+        ).pack(anchor="w")
+
+        body = ttk.Frame(dialog, padding=(20, 0, 20, 12))
+        body.pack(fill="both", expand=True)
+        body.grid_columnconfigure(0, weight=0)
+        body.grid_columnconfigure(1, weight=1)
+        body.grid_rowconfigure(1, weight=1)
+
+        form = ttk.Frame(body)
+        form.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        form.grid_columnconfigure(1, weight=1)
+        form.grid_columnconfigure(3, weight=3)
+        name_var = tk.StringVar()
+        query_var = tk.StringVar()
+        enabled_var = tk.BooleanVar(value=True)
+        ttk.Label(form, text="Name", style="SectionBody.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        ttk.Entry(form, textvariable=name_var, width=24).grid(row=0, column=1, sticky="ew", padx=(0, 12))
+        ttk.Label(form, text="Query", style="SectionBody.TLabel").grid(row=0, column=2, sticky="w", padx=(0, 6))
+        query_entry = ttk.Entry(form, textvariable=query_var)
+        query_entry.grid(row=0, column=3, sticky="ew", padx=(0, 12))
+        ttk.Checkbutton(form, text="Enabled", variable=enabled_var).grid(row=0, column=4, sticky="w")
+
+        list_shell = tk.Frame(
+            body,
+            bg=PALETTE["panel_alt"],
+            highlightthickness=1,
+            highlightbackground=PALETTE["border"],
+            highlightcolor=PALETTE["focus"],
+            bd=0,
+        )
+        list_shell.grid(row=1, column=0, sticky="nsew", padx=(0, 10))
+        list_inner = ttk.Frame(list_shell, style="Inset.TFrame", padding=(12, 10, 12, 12))
+        list_inner.pack(fill="both", expand=True)
+        ttk.Label(list_inner, text="Saved Watches", style="InsetTitle.TLabel").pack(anchor="w")
+        ttk.Label(
+            list_inner,
+            text="Stored in app config; disabled rows are retained but skipped.",
+            style="InsetBody.TLabel",
+            wraplength=240,
+            justify="left",
+        ).pack(anchor="w", pady=(4, 8))
+        watch_list = tk.Listbox(list_inner, height=20, width=34)
+        self._style_listbox_surface(watch_list, font_spec=self.mono_small_font)
+        watch_list.pack(fill="both", expand=True)
+
+        output = scrolledtext.ScrolledText(body, wrap=tk.WORD)
+        self._style_code_surface(output, font_spec=self.mono_small_font)
+        output.grid(row=1, column=1, sticky="nsew")
+        output.configure(state="disabled")
+
+        state = {"selected_index": None, "report": None}
+
+        def current_watches():
+            return sanitize_watch_expressions(getattr(self, "watch_expressions", []))
+
+        def write_output(text):
+            output.configure(state="normal")
+            output.delete("1.0", tk.END)
+            output.insert(tk.END, text)
+            output.configure(state="disabled")
+
+        def selected_index() -> int | None:
+            selection = watch_list.curselection()
+            if not selection:
+                return None
+            index = int(selection[0])
+            watches = current_watches()
+            if index < 0 or index >= len(watches):
+                return None
+            return index
+
+        def refresh_list(select_index_value: int | None = None):
+            watches = current_watches()
+            watch_list.delete(0, tk.END)
+            for item in watches:
+                marker = "on " if item.get("enabled", True) else "off"
+                watch_list.insert(tk.END, f"[{marker}] {item.get('name')} :: {item.get('query')}")
+            if watches:
+                if select_index_value is None:
+                    select_index_value = min(state.get("selected_index") or 0, len(watches) - 1)
+                select_index_value = max(0, min(int(select_index_value), len(watches) - 1))
+                watch_list.selection_clear(0, tk.END)
+                watch_list.selection_set(select_index_value)
+                watch_list.see(select_index_value)
+                state["selected_index"] = select_index_value
+            else:
+                state["selected_index"] = None
+
+        def populate_form(index: int | None):
+            watches = current_watches()
+            if index is None or index < 0 or index >= len(watches):
+                name_var.set("")
+                query_var.set("")
+                enabled_var.set(True)
+                state["selected_index"] = None
+                return
+            watch = watches[index]
+            name_var.set(watch.get("name", ""))
+            query_var.set(watch.get("query", ""))
+            enabled_var.set(bool(watch.get("enabled", True)))
+            state["selected_index"] = index
+
+        def on_select(_event=None):
+            populate_form(selected_index())
+            return "break"
+
+        def run_report(_event=None):
+            report = build_watch_expression_report(
+                current_watches(),
+                self.get_lines(),
+                self._source_corpus_cache,
+                self.BLOCKLIST_SOURCES,
+            )
+            state["report"] = report
+            write_output(format_watch_expression_report(report))
+            self.update_status(
+                f"Watch expressions: {report.get('triggered_count', 0):,} triggered, "
+                f"{report.get('enabled_count', 0):,} enabled."
+            )
+            return "break"
+
+        def save_expression(_event=None):
+            query = query_var.get()
+            if not _normalize_filter_query_text(query):
+                self.update_status("Enter a watch expression query before saving.", is_error=True)
+                query_entry.focus_set()
+                return "break"
+            requested_index = state.get("selected_index")
+            before = current_watches()
+            self.watch_expressions = upsert_watch_expression(
+                before,
+                query,
+                name_var.get(),
+                enabled=enabled_var.get(),
+                index=requested_index,
+            )
+            self.save_config()
+            target_key = _normalize_filter_query_text(query).casefold()
+            new_index = 0
+            for idx, item in enumerate(self.watch_expressions):
+                if item.get("query", "").casefold() == target_key:
+                    new_index = idx
+                    break
+            refresh_list(new_index)
+            populate_form(new_index)
+            run_report()
+            self.update_status(f"Saved watch expression '{self.watch_expressions[new_index]['name']}'.")
+            return "break"
+
+        def delete_expression():
+            index = selected_index()
+            if index is None:
+                self.update_status("Select a watch expression to delete.", is_error=True)
+                return
+            watches = current_watches()
+            removed_name = watches[index].get("name", "watch expression")
+            self.watch_expressions = remove_watch_expression(watches, index)
+            self.save_config()
+            refresh_list(max(0, index - 1))
+            populate_form(selected_index())
+            run_report()
+            self.update_status(f"Deleted watch expression '{removed_name}'.")
+
+        def add_new():
+            watch_list.selection_clear(0, tk.END)
+            populate_form(None)
+            query_entry.focus_set()
+
+        def copy_report():
+            try:
+                text = output.get("1.0", tk.END).strip()
+                if not text:
+                    return
+                self.root.clipboard_clear()
+                self.root.clipboard_append(text)
+                self.update_status("Copied watch expression report.")
+            except tk.TclError as exc:
+                self.update_status(f"Could not copy watch expression report: {exc}", is_error=True)
+
+        def open_in_filter_builder():
+            query = _normalize_filter_query_text(query_var.get())
+            if not query:
+                index = selected_index()
+                watches = current_watches()
+                if index is not None and 0 <= index < len(watches):
+                    query = watches[index].get("query", "")
+            if not query:
+                self.update_status("Select or enter a watch query first.", is_error=True)
+                return
+            self.show_filter_builder(query)
+
+        watch_list.bind("<<ListboxSelect>>", on_select)
+        query_entry.bind("<Return>", save_expression)
+        dialog.bind("<Control-r>", run_report)
+
+        refresh_list(0)
+        populate_form(selected_index())
+        run_report()
+
+        footer = ttk.Frame(dialog)
+        footer.pack(fill="x", padx=20, pady=(0, 20))
+        ttk.Button(footer, text="New", command=add_new, style="Secondary.TButton").pack(side="left")
+        ttk.Button(footer, text="Save Watch", command=save_expression, style="Action.TButton").pack(side="left", padx=(8, 0))
+        ttk.Button(footer, text="Delete", command=delete_expression, style="Secondary.TButton").pack(side="left", padx=(8, 0))
+        ttk.Button(footer, text="Run Report", command=run_report, style="Secondary.TButton").pack(side="left", padx=(8, 0))
+        ttk.Button(footer, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
+        ttk.Button(footer, text="Open in Filter Builder", command=open_in_filter_builder, style="Secondary.TButton").pack(side="right", padx=(0, 8))
+        ttk.Button(footer, text="Copy Report", command=copy_report, style="Secondary.TButton").pack(side="right", padx=(0, 8))
         dialog.grab_set()
 
     # ----------------------------- Check Domain ------------------------------
