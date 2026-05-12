@@ -27,6 +27,7 @@ from hosts_editor import (
     build_pinned_export_payload,
     build_source_health_report,
     build_source_request_headers,
+    build_source_trust_badges,
     categorize_entries_by_domain_hint,
     check_source_health_record,
     check_source_health_records,
@@ -57,6 +58,7 @@ from hosts_editor import (
     find_keyword_match_line_indices,
     find_sources_containing_domain,
     format_relative_time,
+    format_source_trust_badges,
     build_schtasks_create_command,
     get_source_cache_body_path,
     looks_like_domain,
@@ -78,6 +80,7 @@ from hosts_editor import (
     sanitize_source_manifest,
     sanitize_pinned_domains,
     scan_suspicious_redirects,
+    source_trust_report_url,
     strip_lines_by_category,
     summarize_clean_changes,
     summarize_source_health_results,
@@ -492,6 +495,50 @@ class HostsEditorLogicTests(unittest.TestCase):
         self.assertEqual(report["schema_version"], SOURCE_HEALTH_REPORT_SCHEMA_VERSION)
         self.assertEqual(report["summary"], {"total": 1, "healthy": 1, "warning": 0, "failed": 0})
         self.assertEqual(report["sources"][0]["category"], "Ads")
+
+    def test_source_trust_badges_explain_github_https_sources(self):
+        badges = build_source_trust_badges(
+            "Example",
+            "https://raw.githubusercontent.com/owner/repo/main/hosts.txt",
+            "Balanced host list.",
+            category="Ads",
+            source_kind="curated",
+            last_fetched="2026-05-12T12:00:00",
+        )
+        labels = [badge["label"] for badge in badges]
+
+        self.assertIn("Curated", labels)
+        self.assertIn("HTTPS", labels)
+        self.assertIn("GitHub-backed", labels)
+        self.assertIn("License untracked", labels)
+        self.assertIn("Issue path", labels)
+        self.assertIn("GitHub-backed", format_source_trust_badges(badges))
+        self.assertEqual(
+            source_trust_report_url("https://raw.githubusercontent.com/owner/repo/main/hosts.txt"),
+            "https://github.com/owner/repo/issues",
+        )
+
+    def test_source_trust_badges_flag_http_and_broad_scope(self):
+        badges = build_source_trust_badges(
+            "Aggressive Source",
+            "http://vxvault.net/URL_List.php",
+            "Maximum coverage feed. Requires Processing.",
+            category="Malware / Phishing / Scam",
+            source_kind="saved",
+        )
+        labels = [badge["label"] for badge in badges]
+
+        self.assertIn("Saved", labels)
+        self.assertIn("HTTP", labels)
+        self.assertIn("Direct host", labels)
+        self.assertIn("Report manually", labels)
+        self.assertIn("Review scope", labels)
+
+    def test_source_trust_report_url_handles_jsdelivr_github_mirror(self):
+        self.assertEqual(
+            source_trust_report_url("https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/ultimate.txt"),
+            "https://github.com/hagezi/dns-blocklists/issues",
+        )
 
     def test_source_cache_metadata_sanitizes_headers_and_hashes(self):
         good_hash = "a" * 64

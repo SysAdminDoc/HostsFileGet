@@ -19,6 +19,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F007 complete. Next roadmap item: F008 ETag/Last-Modified cache.
 - Completed F008: bumped config schema to 2, added `source_cache_metadata`, conditional ETag/Last-Modified request headers, verified cached source bodies, GUI import reuse, CLI `--update` reuse, and regression tests for 304/offline fallback.
 - Updated `ROADMAP.md` to mark F008 complete. Next roadmap item: F009 source trust badges.
+- Completed F009: added deterministic source trust badge helpers, source catalog/batch/saved/preview UI display, upstream issue-path derivation, badge criteria docs, and regression tests for GitHub/jsDelivr/HTTP/broad-scope cases.
+- Updated `ROADMAP.md` to mark F009 complete. Next roadmap item: F010 false-positive triage flow.
 
 ## Scope
 

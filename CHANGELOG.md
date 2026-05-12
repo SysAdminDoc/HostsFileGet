@@ -16,6 +16,10 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added schema-2 `source_cache_metadata` plus an on-disk source body cache for ETag / Last-Modified refreshes.
 - GUI imports and `--update` now send conditional source requests and can reuse verified cached bodies on `304 Not Modified` or temporary network failures.
 
+**Source trust badges**
+- Added deterministic trust badges to curated, saved, batch-select, and preview source surfaces.
+- Documented badge criteria for transport, repository/report-path derivation, local freshness, cache integrity, scope risk, and license caveats.
+
 ## [v2.17.0] - 2026-04-18
 
 **Live stats panel — per-category breakdown**

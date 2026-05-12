@@ -88,6 +88,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Config sanitation: `sanitize_custom_sources`, `sanitize_config_snapshot`, `resolve_saved_state_hashes`.
 - Source catalog loading: `sanitize_source_manifest`, `load_blocklist_sources_manifest`.
 - Source response caching: `fetch_source_with_cache`, `sanitize_source_cache_metadata`, `build_source_request_headers`.
+- Source trust display: `build_source_trust_badges`, `source_trust_report_url`, `format_source_trust_details`.
 - Source health reporting: `check_source_health_record`, `build_source_health_report`, `summarize_source_health_results`.
 - Cleanup/export/search helpers: `remove_lines_by_indices`, `rewrite_block_sink_ip`, `scan_suspicious_redirects`, `export_lines_as_format`, `strip_lines_by_category`.
 - Source analytics: `find_sources_containing_domain`, `summarize_source_contributions`, `categorize_entries_by_domain_hint`, `classify_source_freshness`.
@@ -161,10 +162,11 @@ Current import flow:
 
 1. User selects curated/custom/manual/log source.
 2. Curated source metadata comes from the validated bundled source manifest.
-3. Download or file parse happens with size limits and encoding guards; web sources use ETag/Last-Modified conditional requests when cached metadata exists.
-4. Source content is decoded and obvious HTML/error pages are rejected.
-5. Import mode determines whether entries are appended raw or normalized.
-6. Generated import sections are marked with sanitized source names.
+3. Source rows show locally derived trust badges before import; badges are documented in `docs/source-trust.md`.
+4. Download or file parse happens with size limits and encoding guards; web sources use ETag/Last-Modified conditional requests when cached metadata exists.
+5. Source content is decoded and obvious HTML/error pages are rejected.
+6. Import mode determines whether entries are appended raw or normalized.
+7. Generated import sections are marked with sanitized source names.
 7. UI updates stats, warnings, source freshness metadata, and unsaved state.
 
 Important invariants:

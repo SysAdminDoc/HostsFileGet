@@ -2,7 +2,7 @@
 
 HostsFileGet keeps the built-in curated blocklist catalog in `data/blocklist_sources.json`.
 
-The GUI and CLI load this file through `load_blocklist_sources_manifest(...)` at startup. This keeps source URLs reviewable as data, lets release tooling bundle the catalog explicitly, and gives future health/trust work one stable source of truth.
+The GUI and CLI load this file through `load_blocklist_sources_manifest(...)` at startup. This keeps source URLs reviewable as data, lets release tooling bundle the catalog explicitly, and gives health/trust work one stable source of truth.
 
 ## Version
 
@@ -75,6 +75,7 @@ Launcher-cache path:
 - Keep category and source names stable; saved source metadata and user support notes often refer to them.
 - Prefer HTTPS URLs.
 - Do not add mirrors that serve HTML landing pages, redirectors requiring JavaScript, or feeds with unclear redistribution terms.
+- Source trust badges are derived from URL shape, local freshness/cache metadata, and description/category risk words. Badge meanings are documented in `docs/source-trust.md`.
 - Run the regression suite after every catalog edit.
 
 ## Validation
