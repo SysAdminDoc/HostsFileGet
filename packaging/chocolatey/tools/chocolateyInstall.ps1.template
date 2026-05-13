@@ -1,0 +1,12 @@
+$ErrorActionPreference = 'Stop'
+
+$packageName = 'hostsfileget'
+$toolsDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+$installPath = Join-Path $toolsDir 'HostsFileGet.exe'
+
+Get-ChocolateyWebFile `
+  -PackageName $packageName `
+  -FileFullPath $installPath `
+  -Url64bit '{{INSTALLER_URL}}' `
+  -Checksum64 '{{SHA256}}' `
+  -ChecksumType64 'sha256'

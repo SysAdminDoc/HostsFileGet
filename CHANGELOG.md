@@ -193,6 +193,11 @@ All notable changes to HostsFileGet will be documented in this file.
 - Added read-only `GET /v1/status` and `POST /v1/clean-preview` endpoints; no API endpoint writes the hosts file in this phase.
 - Documented bind, token, endpoint, and non-goal boundaries in `docs/local-rest-api.md`.
 
+**Package manager manifests**
+- Added renderable Winget and Chocolatey manifest templates tied to the release URL and SHA-256.
+- Added `scripts/render_package_manifests.py` plus regression tests for input validation and rendered metadata.
+- Updated the release workflow to upload `HostsFileGet.package-manifests.zip` with release artifacts.
+
 **Filter Builder**
 - Added **Tools > Filter Builder...** for local fielded queries across current editor lines, fetched-source domains, curated source metadata, and recent queries.
 - Added persisted `filter_query_history` config state with sanitation, dedupe, and newest-first promotion.

@@ -10,6 +10,7 @@ HostsFileGet release builds are Windows-only until the roadmap explicitly adds a
 - PyInstaller spec: `HostsFileGet.spec`.
 - Application entry point: `hosts_editor.py`.
 - Curated source manifest: `data/blocklist_sources.json`.
+- Package manager templates: `packaging\winget\` and `packaging\chocolatey\`.
 - Launcher script: `PythonLauncher.ps1`.
 
 ## Local Build
@@ -20,7 +21,7 @@ Run from the repository root:
 python -m pip install --upgrade pip
 python -m pip install -r requirements-build.txt
 python -m pip install -r requirements-security.txt
-python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py
+python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py tests\test_gui_smoke.py tests\test_benchmarks.py tests\test_package_manifests.py benchmarks\large_file_benchmark.py scripts\render_package_manifests.py
 python -m unittest discover -s tests -v
 python -m pip_audit -r requirements-build.txt --strict
 
@@ -35,6 +36,7 @@ if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; 
 
 python -m PyInstaller --clean --noconfirm HostsFileGet.spec
 Get-FileHash -Algorithm SHA256 dist\HostsFileGet.exe
+python scripts\render_package_manifests.py --version 2.20.0 --installer-url https://github.com/SysAdminDoc/HostsFileGet/releases/download/v2.20.0/HostsFileGet.exe --sha256 (Get-FileHash -Algorithm SHA256 dist\HostsFileGet.exe).Hash --output-dir dist\package-manifests
 python -m pip_audit -r requirements-build.txt --strict --format cyclonedx-json --output dist\HostsFileGet.sbom.cdx.json
 ```
 
@@ -43,6 +45,8 @@ Expected output:
 - `dist\HostsFileGet.exe`
 - `dist\HostsFileGet.exe.sha256`
 - `dist\HostsFileGet.sbom.cdx.json`
+- `dist\package-manifests\`
+- `dist\HostsFileGet.package-manifests.zip` in GitHub Actions
 
 ## GitHub Actions
 
@@ -69,9 +73,10 @@ The workflow:
 10. Signs the executable when signing secrets are configured.
 11. Records Authenticode signature status.
 12. Writes `dist\HostsFileGet.exe.sha256`.
-13. Writes `dist\HostsFileGet.sbom.cdx.json`.
-14. Uploads release files as workflow artifacts.
-15. On tag builds, creates or updates the matching GitHub release assets.
+13. Renders Winget and Chocolatey manifests from the release URL and SHA-256.
+14. Writes `dist\HostsFileGet.sbom.cdx.json`.
+15. Uploads release files as workflow artifacts.
+16. On tag builds, creates or updates the matching GitHub release assets.
 
 ## Code Signing
 

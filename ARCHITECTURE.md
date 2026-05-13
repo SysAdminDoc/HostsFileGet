@@ -79,6 +79,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `docs/git-history.md` | Optional local Git-backed hosts snapshot and restore behavior |
 | `docs/scheduler-activity.md` | Scheduled-update silent logging and activity report behavior |
 | `docs/portable-config.md` | Local-vs-portable config resolution and portable bundle export behavior |
+| `docs/package-managers.md` | Winget and Chocolatey manifest rendering and publishing boundary |
 | `docs/dns-integrations.md` | Pi-hole, AdGuard Home/DNS, Technitium, and blocky file-first interoperability presets |
 | `docs/cloud-dns-adapters.md` | Plan-only NextDNS and Control D adapters plus local CSV log import behavior |
 | `docs/adblock-lint.md` | Adblock syntax lint and browser-only rule quarantine behavior |
