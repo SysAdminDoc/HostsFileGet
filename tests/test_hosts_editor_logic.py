@@ -4733,6 +4733,43 @@ profile:
                 newurl="ftp://internal.example.local/list.txt",
             )
 
+    def test_prune_orphan_source_cache_files_removes_only_dead_blobs(self):
+        """The pruner must only delete cache blobs whose 64-hex key is not
+        referenced by the metadata, and must leave foreign files alone."""
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            live_url = "https://example.com/live.txt"
+            stale_url = "https://example.com/stale.txt"
+            live_key = hosts_editor.source_cache_key(live_url)
+            stale_key = hosts_editor.source_cache_key(stale_url)
+            (cache_dir / f"{live_key}.bin").write_bytes(b"live payload")
+            (cache_dir / f"{stale_key}.bin").write_bytes(b"stale payload " * 100)
+            # Foreign files that look superficially similar - must NOT be touched.
+            (cache_dir / "README.md").write_text("keep me")
+            (cache_dir / "ZZZZ.bin").write_bytes(b"non-hex filename, leave alone")
+            (cache_dir / f"{live_key}.unrelated").write_bytes(b"different ext")
+
+            metadata = {live_url: {"cache_key": live_key, "etag": '"x"'}}
+            report = hosts_editor.prune_orphan_source_cache_files(metadata, str(cache_dir))
+
+            self.assertEqual(report["removed"], 1)
+            self.assertEqual(report["retained"], 1)
+            self.assertGreater(report["freed_bytes"], 0)
+            self.assertTrue((cache_dir / f"{live_key}.bin").exists())
+            self.assertFalse((cache_dir / f"{stale_key}.bin").exists())
+            self.assertTrue((cache_dir / "README.md").exists())
+            self.assertTrue((cache_dir / "ZZZZ.bin").exists())
+            self.assertTrue((cache_dir / f"{live_key}.unrelated").exists())
+
+    def test_prune_orphan_source_cache_files_handles_missing_cache_dir(self):
+        report = hosts_editor.prune_orphan_source_cache_files(
+            {}, "/nonexistent/source_cache"
+        )
+        self.assertEqual(report, {"removed": 0, "retained": 0, "freed_bytes": 0, "errors": 0})
+
     def test_safe_urlopen_allows_http_to_https_redirect(self):
         """The handler must continue to permit normal http<->https
         redirects that real-world CDNs and mirrors rely on."""

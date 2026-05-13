@@ -4,6 +4,12 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Hardening pass — v2.23.0 (Pass 3)**
+- Class-level `BLOCKLIST_SOURCES` and `SOURCE_BUNDLES` loads now degrade gracefully instead of aborting module import on a malformed `data/blocklist_sources.json`. A corrupted manifest previously made the app fail to launch entirely; the editor, custom sources, and CLI tools now still come up with an empty curated catalog and the failure is surfaced via `_manifest_load_error` / `_bundle_load_error`.
+- Windows admin self-relaunch now uses `subprocess.list2cmdline(...)` instead of hand-rolled `'"%s"' % arg` formatting to build the parameter string passed to `ShellExecuteW`. The old quoting did not escape embedded `"` or backslash-quote runs and could corrupt the relaunched command line per `CommandLineToArgvW` parsing rules. `list2cmdline` implements the documented escape algorithm exactly.
+- New `prune_orphan_source_cache_files(metadata, cache_dir)` helper and `--source-cache-prune` CLI flag clean up `<sha256>.bin` blobs in `%LOCALAPPDATA%/HostsFileGet/source_cache/` whose URL is no longer referenced by the persisted `source_cache_metadata`. Source cache historically grew unbounded; removed-then-re-added sources or rotated curated URLs left dead blobs forever.
+- Two new regression tests pin the orphan-blob pruner to leave foreign files (`README.md`, non-hex filenames, alternate extensions) alone and tolerate a missing cache directory. Total: 341 tests.
+
 **Hardening pass — v2.22.0 (Pass 2)**
 - `apply_find_replace` case-insensitive literal path now goes through a unicode-aware `re.sub(re.escape(...), lambda)` instead of a hand-rolled lower-cased index walk. The old implementation silently misaligned on code points whose lowercased form has a different length (German `ß`/`SS`, Turkish `İ`/`i̇`, several other special-cased letters), either truncating the surrounding text or dropping the replacement. Regex metacharacters in the literal pattern and backreference syntax in the literal replacement are now also guaranteed to be treated literally.
 - `update_status` is now thread-safe. The 192 call sites historically included worker-thread callers (tray quick-switch, ping/resolve workers, whitelist web fetch, source preview) that wrote to Tk widgets directly. The method now detects off-main-thread invocation and marshals through `_safe_after(0, ...)` so the only thread mutating widgets is the one Tk created them on.
