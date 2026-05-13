@@ -12,6 +12,13 @@ Phase 1 extractions (v2.24.0):
     - :mod:`hostsfileget.atomic_io` — sibling-temp + ``os.replace`` writes
       and copies used by hosts-file save, backup rotation, and enable/disable
       transactional handoff.
+
+Phase 2 extractions (v2.25.0):
+    - :mod:`hostsfileget.parsing` — leaf-level domain/IP regex, ``looks_like_domain``,
+      ``_extract_domain_from_token``, ``_normalize_mapping_ip``, and the IDN
+      encoding/decoding primitives that every higher-level parser uses.
+    - :mod:`hostsfileget.theme` — ``PALETTE``, the WCAG contrast helpers, and
+      the accessibility audit report builder/formatter.
 """
 
-__all__ = ["compression", "atomic_io"]
+__all__ = ["compression", "atomic_io", "parsing", "theme"]

@@ -70,10 +70,42 @@ from hostsfileget.atomic_io import (
     write_bytes_file_atomic,
     write_text_file_atomic,
 )
+from hostsfileget.parsing import (
+    COMMENT_PREFIXES,
+    DNSMASQ_RULE_REGEX,
+    DOMAIN_REGEX,
+    HOST_LABEL_REGEX,
+    IPV4_REGEX,
+    IPV6_REGEX,
+    LOCAL_DOMAINS,
+    STANDARD_BLOCKING_IPS,
+    TOKEN_SPLITTER,
+    WILDCARD_STRIPPER,
+    _contains_non_ascii,
+    _decode_idna_domain,
+    _domain_shape_matches,
+    _encode_idna_domain,
+    _extract_domain_from_token,
+    _is_comment_line,
+    _looks_like_ip_token,
+    _normalize_mapping_ip,
+    looks_like_domain,
+)
+from hostsfileget.theme import (
+    ACCESSIBILITY_CONTRAST_PAIRS,
+    PALETTE,
+    _hex_to_srgb,
+    _linearize_srgb_channel,
+    _resolve_palette_color,
+    build_accessibility_audit_report,
+    contrast_ratio,
+    format_accessibility_audit_report,
+    relative_luminance,
+)
 
 APP_NAME = "Hosts File Get"
 APP_SLUG = "HostsFileGet"
-APP_VERSION = "2.24.0"
+APP_VERSION = "2.25.0"
 CONFIG_FILENAME = "hosts_editor_config.json"
 CONFIG_SCHEMA_VERSION = 4
 PROFILE_SCHEMA_VERSION = 1
@@ -627,145 +659,12 @@ def _enable_windows_dpi_awareness() -> None:
 _enable_windows_dpi_awareness()
 
 # ----------------------------- Theme -----------------------------------------
-# A restrained palette keeps the interface calm and scannable. We still use
-# color for priority and state, but most surfaces stay close together so the
-# eye lands on structure and content instead of decoration.
-PALETTE = {
-    "base": "#0f1318",
-    "mantle": "#141a20",
-    "panel": "#171e26",
-    "panel_alt": "#1b2430",
-    "crust": "#0c1117",
-    "text": "#edf2f7",
-    "subtext": "#a0acb8",
-    "surface0": "#202935",
-    "surface1": "#293444",
-    "surface2": "#354255",
-    "overlay0": "#5d6977",
-    "overlay1": "#7d8896",
-    "border": "#273241",
-    "focus": "#7ea8ff",
-    "ink": "#0b1020",
-    "blue": "#8fb2ff",
-    "blue_hover": "#a5c1ff",
-    "green": "#8fc4a1",
-    "green_hover": "#a4d0b3",
-    "green_press": "#72b387",
-    "red": "#e8a1aa",
-    "red_hover": "#efb0b8",
-    "red_press": "#d38993",
-    "yellow": "#d8c08b",
-    "yellow_ink": "#2e2410",
-    "warning_highlight": "#a38900",
-    "accent": "#8fb2ff",
-}
+# ``PALETTE``, ``ACCESSIBILITY_CONTRAST_PAIRS``, ``_resolve_palette_color``,
+# ``_hex_to_srgb``, ``_linearize_srgb_channel``, ``relative_luminance``,
+# ``contrast_ratio``, ``build_accessibility_audit_report``, and
+# ``format_accessibility_audit_report`` now live in ``hostsfileget.theme``
+# and are imported near the top of this module.
 
-ACCESSIBILITY_CONTRAST_PAIRS = (
-    ("Body text", "text", "base", 4.5),
-    ("Muted body text", "subtext", "base", 4.5),
-    ("Secondary label on panel", "overlay1", "panel", 4.5),
-    ("Code surface text", "text", "crust", 4.5),
-    ("Focus ring on base", "focus", "base", 3.0),
-    ("Action button text", "ink", "blue", 4.5),
-    ("Saved button text", "ink", "green", 4.5),
-    ("Danger button text", "ink", "red", 4.5),
-    ("Warning text", "yellow", "panel", 4.5),
-    ("Inline discard warning", "ink", "red_press", 4.5),
-    ("Inline transform warning", "ink", "warning_highlight", 4.5),
-)
-
-
-def _resolve_palette_color(color: str, palette: dict[str, str]) -> str:
-    return palette.get(color, color)
-
-
-def _hex_to_srgb(color: str) -> tuple[float, float, float]:
-    value = color.strip().lstrip("#")
-    if len(value) != 6:
-        raise ValueError(f"Expected #RRGGBB color, got {color!r}")
-    try:
-        return tuple(int(value[index:index + 2], 16) / 255 for index in (0, 2, 4))
-    except ValueError as exc:
-        raise ValueError(f"Expected #RRGGBB color, got {color!r}") from exc
-
-
-def _linearize_srgb_channel(channel: float) -> float:
-    if channel <= 0.03928:
-        return channel / 12.92
-    return ((channel + 0.055) / 1.055) ** 2.4
-
-
-def relative_luminance(color: str) -> float:
-    red, green, blue = (_linearize_srgb_channel(channel) for channel in _hex_to_srgb(color))
-    return (0.2126 * red) + (0.7152 * green) + (0.0722 * blue)
-
-
-def contrast_ratio(foreground: str, background: str) -> float:
-    fg_luminance = relative_luminance(foreground)
-    bg_luminance = relative_luminance(background)
-    lighter = max(fg_luminance, bg_luminance)
-    darker = min(fg_luminance, bg_luminance)
-    return (lighter + 0.05) / (darker + 0.05)
-
-
-def build_accessibility_audit_report(palette: dict[str, str] | None = None) -> dict:
-    palette = palette or PALETTE
-    contrast_pairs = []
-    for label, fg_key, bg_key, minimum in ACCESSIBILITY_CONTRAST_PAIRS:
-        foreground = _resolve_palette_color(fg_key, palette)
-        background = _resolve_palette_color(bg_key, palette)
-        ratio = contrast_ratio(foreground, background)
-        contrast_pairs.append({
-            "label": label,
-            "foreground": foreground,
-            "background": background,
-            "ratio": round(ratio, 2),
-            "minimum": minimum,
-            "passes": ratio >= minimum,
-        })
-
-    return {
-        "contrast_pairs": contrast_pairs,
-        "summary": {
-            "total_pairs": len(contrast_pairs),
-            "passing_pairs": sum(1 for pair in contrast_pairs if pair["passes"]),
-        },
-        "font_checks": [
-            "Primary UI font uses Segoe UI at 10pt or larger.",
-            "Code/editor surfaces use Consolas at 10pt or larger.",
-            "Windows DPI awareness is enabled before the Tk root is built.",
-        ],
-        "assistive_tech_checks": [
-            "Primary commands use visible text labels, not icon-only buttons.",
-            "Tooltips are supplemental; core actions also have button/menu labels.",
-            "Manual Narrator/NVDA checks should cover menu traversal, editor focus, dialogs, and status updates.",
-        ],
-    }
-
-
-def format_accessibility_audit_report(report: dict) -> str:
-    summary = report.get("summary", {})
-    lines = [
-        "Accessibility audit",
-        f"Contrast pairs: {summary.get('passing_pairs', 0)}/{summary.get('total_pairs', 0)} passing",
-        "",
-        "Contrast:",
-    ]
-    for pair in report.get("contrast_pairs", []):
-        status = "PASS" if pair.get("passes") else "FAIL"
-        lines.append(
-            f"  {status} {pair.get('label')}: {pair.get('ratio')}:1 "
-            f"(min {pair.get('minimum')}:1, fg {pair.get('foreground')}, bg {pair.get('background')})"
-        )
-    lines.append("")
-    lines.append("Font checks:")
-    for item in report.get("font_checks", []):
-        lines.append(f"  - {item}")
-    lines.append("")
-    lines.append("Assistive-technology checks:")
-    for item in report.get("assistive_tech_checks", []):
-        lines.append(f"  - {item}")
-    return "\n".join(lines)
 
 # ----------------------------- Tooltip Helper --------------------------------
 class ToolTip:
@@ -1761,16 +1660,14 @@ class MatchRemovalDialog(tk.Toplevel):
 
 # -------------------------------- Domain & Hosts Helpers -----------------------------------
 
-DOMAIN_REGEX = re.compile(r'^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$')
-IPV4_REGEX = re.compile(r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$')
-IPV6_REGEX = re.compile(r'^[\da-fA-F:.]+$')
-WILDCARD_STRIPPER = re.compile(r'^\*\.?(.*)')
-TOKEN_SPLITTER = re.compile(r'[\s,;]+')
-DNSMASQ_RULE_REGEX = re.compile(r'^(?:address|local)=/([^/]+)/?', re.IGNORECASE)
-COMMENT_PREFIXES = ('#', '!', '[')
-LOCAL_DOMAINS = {'localhost', 'localhost.localdomain', '::1'}
-HOST_LABEL_REGEX = re.compile(r'^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$')
-STANDARD_BLOCKING_IPS = {"0.0.0.0", "127.0.0.1", "::1"}
+# Leaf-level domain/IP regex and primitive helpers (DOMAIN_REGEX, IPV4_REGEX,
+# IPV6_REGEX, WILDCARD_STRIPPER, TOKEN_SPLITTER, DNSMASQ_RULE_REGEX,
+# COMMENT_PREFIXES, LOCAL_DOMAINS, HOST_LABEL_REGEX, STANDARD_BLOCKING_IPS,
+# looks_like_domain, _looks_like_ip_token, _is_comment_line,
+# _normalize_mapping_ip, _extract_domain_from_token, _domain_shape_matches,
+# _contains_non_ascii, _decode_idna_domain, _encode_idna_domain) now live in
+# ``hostsfileget.parsing`` and are imported near the top of this module.
+
 ADBLOCK_COSMETIC_MARKERS = (
     ("#@%#", "scriptlet exception"),
     ("#%#", "scriptlet"),
@@ -1811,108 +1708,6 @@ CONFUSABLE_ASCII_MAP = {
     "\u03bd": "v", "\u039d": "N",
     "\u03b9": "i", "\u0399": "I",
 }
-
-def looks_like_domain(token: str, allow_single_label: bool = False) -> bool:
-    if len(token) > 253: return False
-    if token.startswith(('-', '.')) or token.endswith(('-', '.')): return False
-    if IPV4_REGEX.match(token) or (IPV6_REGEX.match(token) and ':' in token): return False
-    if allow_single_label and '.' not in token:
-        return bool(HOST_LABEL_REGEX.match(token)) and any(character.isalpha() for character in token)
-    return bool(DOMAIN_REGEX.match(token))
-
-def _looks_like_ip_token(token: str) -> bool:
-    return bool(IPV4_REGEX.match(token) or (IPV6_REGEX.match(token) and ':' in token))
-
-def _is_comment_line(stripped: str) -> bool:
-    return stripped.startswith(COMMENT_PREFIXES)
-
-def _normalize_mapping_ip(token: str) -> tuple[str, bool, bool]:
-    candidate = token.strip()
-    normalized = candidate.lower() if ':' in candidate else candidate
-    if normalized in STANDARD_BLOCKING_IPS:
-        return "0.0.0.0", normalized != "0.0.0.0", True
-    return normalized, normalized != candidate, False
-
-def _extract_domain_from_token(token: str, allow_single_label: bool = False) -> tuple[str | None, bool]:
-    candidate = token.strip().strip('\'"()[]{}<>')
-    transformed = candidate != token.strip()
-    if not candidate:
-        return None, transformed
-
-    if candidate.startswith('@@'):
-        return None, True
-
-    dnsmasq_match = DNSMASQ_RULE_REGEX.match(candidate)
-    if dnsmasq_match:
-        candidate = dnsmasq_match.group(1)
-        transformed = True
-
-    if candidate.startswith('||'):
-        candidate = candidate[2:]
-        transformed = True
-    elif candidate.startswith('|'):
-        candidate = candidate[1:]
-        transformed = True
-
-    for delimiter in ('^', '$'):
-        if delimiter in candidate:
-            candidate = candidate.split(delimiter, 1)[0]
-            transformed = True
-
-    if candidate.lower().startswith(('http://', 'https://', 'ftp://')):
-        hostname = urllib.parse.urlsplit(candidate).hostname
-        transformed = True
-        if not hostname:
-            return None, transformed
-        candidate = hostname
-    elif any(separator in candidate for separator in ('/', '?', ':')):
-        try:
-            hostname = urllib.parse.urlsplit(f"http://{candidate}").hostname
-        except ValueError:
-            hostname = None
-        if hostname:
-            candidate = hostname
-            transformed = True
-
-    wildcard_match = WILDCARD_STRIPPER.match(candidate)
-    if wildcard_match:
-        candidate = wildcard_match.group(1)
-        transformed = True
-
-    if candidate.endswith('.'):
-        candidate = candidate[:-1]
-        transformed = True
-
-    domain = candidate.lower()
-    if domain in LOCAL_DOMAINS or not looks_like_domain(domain, allow_single_label=allow_single_label):
-        return None, transformed
-
-    return domain, transformed
-
-
-def _domain_shape_matches(domain: str, allow_single_label: bool = False) -> bool:
-    if allow_single_label and "." not in domain:
-        return bool(HOST_LABEL_REGEX.match(domain)) and any(character.isalpha() for character in domain)
-    return looks_like_domain(domain, allow_single_label=False)
-
-
-def _contains_non_ascii(value: str) -> bool:
-    return any(ord(character) > 127 for character in value)
-
-
-def _decode_idna_domain(domain: str) -> tuple[str | None, str | None]:
-    try:
-        return domain.encode("ascii").decode("idna"), None
-    except (UnicodeError, UnicodeEncodeError) as exc:
-        return None, str(exc)
-
-
-def _encode_idna_domain(domain: str) -> tuple[str | None, str | None]:
-    try:
-        return domain.encode("idna").decode("ascii").lower(), None
-    except UnicodeError as exc:
-        return None, str(exc)
-
 
 def _script_bucket(character: str) -> str | None:
     if character in ".-" or character.isdigit() or unicodedata.category(character).startswith("M"):
