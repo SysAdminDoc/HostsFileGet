@@ -122,6 +122,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F059 complete. Next roadmap item: F060 Intune/GPO/PDQ/SCCM package exports.
 - Completed F060: added plan-only managed package export bundles for Intune Win32 apps, Group Policy startup scripts, PDQ Deploy, and Configuration Manager with managed hosts fencing, SHA-256-verified install wrappers, detection/uninstall scripts, target-specific field maps, docs, and regression tests. HostsFileGet does not upload, assign, import, or deploy packages.
 - Updated `ROADMAP.md` to mark F060 complete. Next roadmap item: F061 VS Code companion extension.
+- Completed F061: added `--vscode-extension-export` for a guarded VS Code companion extension scaffold with `package.json`, `extension.js`, `README.md`, `.vscodeignore`, and a JSON review plan. The generated extension uses SecretStorage or `HOSTSFILEGET_API_TOKEN`, enforces loopback API URLs, exposes status and clean-preview commands only, and does not write the Windows hosts file.
+- Updated `ROADMAP.md` to mark F061 complete. Next roadmap item: F062 prompt_toolkit TUI.
 
 ## Scope
 

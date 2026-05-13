@@ -36,6 +36,7 @@ from hosts_editor import (
     STALE_FRESH_HOURS,
     STALE_WARN_HOURS,
     NRPT_POLICY_PLAN_SCHEMA,
+    VSCODE_COMPANION_EXPORT_SCHEMA,
     WFP_BLOCKER_PLAN_SCHEMA,
     append_provenance_event,
     append_cli_activity_event,
@@ -52,6 +53,7 @@ from hosts_editor import (
     build_local_api_status_payload,
     build_managed_hosts_block,
     build_managed_package_export_plan,
+    build_vscode_companion_export_plan,
     build_profile_sync_payload,
     build_allowlist_share_patch,
     build_profile_share_patch,
@@ -171,6 +173,7 @@ from hosts_editor import (
     format_i18n_contribution_report,
     format_managed_package_export_plan,
     format_managed_package_target_catalog,
+    format_vscode_companion_export_plan,
     format_rule_tier_report,
     format_declarative_config_payload,
     format_declarative_profile_summary,
@@ -293,6 +296,7 @@ from hosts_editor import (
     verify_share_patch_signature,
     write_portable_bundle_config,
     write_managed_package_export_bundle,
+    write_vscode_companion_export,
     write_text_file_atomic,
     write_bytes_file_atomic,
 )
@@ -2895,6 +2899,23 @@ profile:
                 "HostsFileGet.exe",
             )
 
+        with mock.patch.object(hosts_editor, "_cli_vscode_companion_export", return_value=0) as mocked_vscode:
+            self.assertEqual(
+                hosts_editor._handle_cli_args([
+                    "--vscode-extension-export", "vscode-bundle",
+                    "--vscode-extension-name", "hfg-companion",
+                    "--vscode-extension-version", "0.2.0",
+                    "--vscode-api-base-url", "http://localhost:8765",
+                ]),
+                0,
+            )
+            mocked_vscode.assert_called_once_with(
+                "vscode-bundle",
+                "hfg-companion",
+                "0.2.0",
+                "http://localhost:8765",
+            )
+
     def test_handle_cli_args_routes_cloud_dns_flags(self):
         with mock.patch.object(hosts_editor, "_cli_cloud_adapter_list", return_value=0) as mocked_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--cloud-adapter-list"]), 0)
@@ -3739,6 +3760,64 @@ profile:
         self.assertEqual(plan["execution"], "not-run")
         self.assertEqual(artifacts_exist, [True, True, True, True])
         self.assertIn("0.0.0.0 ads.example", managed_hosts_text)
+
+    def test_vscode_companion_export_plan_is_guarded_and_uses_local_api(self):
+        plan = build_vscode_companion_export_plan(
+            output_name="hostsfileget-companion",
+            version="0.1.0",
+            api_base_url="http://127.0.0.1:8765",
+            now=datetime.datetime(2026, 5, 13, 13, 0, 0),
+        )
+        formatted = format_vscode_companion_export_plan(plan)
+
+        self.assertEqual(plan["schema"], VSCODE_COMPANION_EXPORT_SCHEMA)
+        self.assertTrue(plan["plan_only"])
+        self.assertTrue(plan["bundle_only"])
+        self.assertEqual(plan["execution"], "not-run")
+        self.assertEqual(plan["extension"]["api_base_url"], "http://127.0.0.1:8765")
+        self.assertIn("hostsfileget.showStatus", plan["commands"])
+        self.assertIn("hostsfileget.cleanPreviewSelection", plan["commands"])
+        self.assertIn("context.secrets.store", plan["extension_js"])
+        self.assertIn("/v1/clean-preview", plan["extension_js"])
+        self.assertIn("127.0.0.1", plan["extension_js"])
+        self.assertIn("hostsfileget.apiBaseUrl", json.dumps(plan["package_json"]))
+        self.assertIn("http://127.0.0.1:8765", json.dumps(plan["package_json"]))
+        self.assertIn("Roadmap source IDs", formatted)
+        with self.assertRaises(ValueError):
+            build_vscode_companion_export_plan(api_base_url="https://example.com")
+
+    def test_cli_vscode_companion_export_writes_scaffold_without_installing(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "vscode"
+            with mock.patch.object(hosts_editor, "_cli_print"):
+                result = hosts_editor._cli_vscode_companion_export(
+                    str(output),
+                    "hfg-companion",
+                    "0.2.0",
+                    "http://localhost:8765",
+                )
+
+            plan = json.loads((output / "vscode-companion-export-plan.json").read_text(encoding="utf-8"))
+            package_json = json.loads((output / "package.json").read_text(encoding="utf-8"))
+            extension_js = (output / "extension.js").read_text(encoding="utf-8")
+            artifacts_exist = [
+                (output / "package.json").exists(),
+                (output / "extension.js").exists(),
+                (output / "README.md").exists(),
+                (output / ".vscodeignore").exists(),
+                (output / "vscode-companion-export-plan.json").exists(),
+            ]
+
+        self.assertEqual(result, 0)
+        self.assertEqual(plan["execution"], "not-run")
+        self.assertEqual(package_json["name"], "hfg-companion")
+        self.assertEqual(package_json["contributes"]["configuration"]["properties"]["hostsfileget.apiBaseUrl"]["default"], "http://localhost:8765")
+        self.assertIn("hostsfileget.setApiToken", extension_js)
+        self.assertIn("HOSTSFILEGET_API_TOKEN", extension_js)
+        self.assertEqual(artifacts_exist, [True, True, True, True, True])
 
     def test_cli_router_gateway_push_plan_writes_bundle_without_remote_actions(self):
         import tempfile

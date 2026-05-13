@@ -1,7 +1,7 @@
 # HostsFileGet Roadmap
 
 Version: 2026-05-13 roadmap execution update
-Repo state basis: `main` through F044/F045/F046/F051/F052/F053/F054/F055/F056/F057/F058/F059/F060 implementation plus external research current to 2026-05-13
+Repo state basis: `main` through F044/F045/F046/F051/F052/F053/F054/F055/F056/F057/F058/F059/F060/F061 implementation plus external research current to 2026-05-13
 Scope: Windows-first desktop hosts-file editor, importer, cleaner, diagnostics, and safe writer
 
 This document supersedes the earlier broad idea dump. Useful shipped history has been preserved as baseline context, but the forward roadmap is now source-backed and tiered. Every active candidate cites at least one source ID from the appendix.
@@ -80,6 +80,7 @@ Non-negotiables:
 - [x] F058 - Windows Sandbox and VM hosts injector (`docs/sandbox-vm-hosts.md`, plan-only lab staging bundle)
 - [x] F059 - Router/gateway push adapters (`docs/router-gateway-adapters.md`, plan-only dnsmasq/Unbound bundles, guarded SSH script)
 - [x] F060 - Intune/GPO/PDQ/SCCM package exports (`docs/managed-package-exports.md`, plan-only managed package export bundles)
+- [x] F061 - VS Code companion extension (`docs/vscode-companion.md`, export-only extension scaffold, local REST status/clean-preview commands)
 
 ## State Of The Repo
 
@@ -88,8 +89,8 @@ Non-negotiables:
 - Language and runtime: Python 3.x, Tkinter desktop UI, Windows-first assumptions, PowerShell launcher.
 - Entry points: `hosts_editor.py` for GUI and CLI, `PythonLauncher.ps1` for elevated launch/bootstrap, `HostsFileGet.spec` for PyInstaller.
 - Packaging: PyInstaller one-file Windows EXE with `uac_admin=True`; build artifacts exist locally under `build/` and `dist/` but are not tracked.
-- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, `tests/test_benchmarks.py`, and `tests/test_package_manifests.py` contain 303 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation and contribution fixtures, encrypted profile sync fixtures, signed share patch fixtures, recovery-plan fixtures, WFP blocker companion fixtures, NRPT policy export fixtures, sandbox/VM hosts bundle fixtures, router/gateway bundle fixtures, managed package export fixtures, migration importer fixtures, export-format fixtures, DNS integration fixtures, cloud DNS adapter fixtures, source adapter plugin fixtures, local REST API fixtures, package manifest render fixtures, adblock syntax lint/quarantine fixtures, rule tier fixtures, IDN/homograph fixtures, threat-feed pack fixtures, CNAME cloaking workflow fixtures, encrypted-DNS bypass pack fixtures, DNS rebinding report fixtures, SafeSearch/restricted-mode template fixtures, profile activation schedule fixtures, profile quick-switch/tray dependency fixtures, source-bundle manifest fixtures, filter-builder query-history fixtures, watch-expression fixtures, source metrics fixtures, virtual-list fixtures, parallel import retry/order fixtures, provenance filter/export fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, NextDNS/Control D CSV logs, and find/replace.
-- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `data/i18n/README.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/cloud-dns-adapters.md`, `docs/router-gateway-adapters.md`, `docs/managed-package-exports.md`, `docs/adblock-lint.md`, `docs/rule-tiers.md`, `docs/idn-homograph.md`, `docs/threat-feed-packs.md`, `docs/cname-cloaking.md`, `docs/encrypted-dns-bypass.md`, `docs/encrypted-sync.md`, `docs/share-patches.md`, `docs/recovery-plan.md`, `docs/wfp-blocker-companion.md`, `docs/nrpt-policy-export.md`, `docs/sandbox-vm-hosts.md`, `docs/dns-rebinding.md`, `docs/safesearch-restricted-mode.md`, `docs/profile-activation-schedule.md`, `docs/profile-quick-switch.md`, `docs/source-adapter-plugins.md`, `docs/local-rest-api.md`, `docs/package-managers.md`, `docs/source-bundles.md`, `docs/filter-builder.md`, `docs/watch-expressions.md`, `docs/source-metrics.md`, `docs/parallel-imports.md`, `docs/virtualized-lists.md`, `docs/provenance-log.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `.github/ISSUE_TEMPLATE/translation.yml`, `LICENSE`, and this roadmap.
+- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, `tests/test_benchmarks.py`, and `tests/test_package_manifests.py` contain 305 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation and contribution fixtures, encrypted profile sync fixtures, signed share patch fixtures, recovery-plan fixtures, WFP blocker companion fixtures, NRPT policy export fixtures, sandbox/VM hosts bundle fixtures, router/gateway bundle fixtures, managed package export fixtures, VS Code companion export fixtures, migration importer fixtures, export-format fixtures, DNS integration fixtures, cloud DNS adapter fixtures, source adapter plugin fixtures, local REST API fixtures, package manifest render fixtures, adblock syntax lint/quarantine fixtures, rule tier fixtures, IDN/homograph fixtures, threat-feed pack fixtures, CNAME cloaking workflow fixtures, encrypted-DNS bypass pack fixtures, DNS rebinding report fixtures, SafeSearch/restricted-mode template fixtures, profile activation schedule fixtures, profile quick-switch/tray dependency fixtures, source-bundle manifest fixtures, filter-builder query-history fixtures, watch-expression fixtures, source metrics fixtures, virtual-list fixtures, parallel import retry/order fixtures, provenance filter/export fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, NextDNS/Control D CSV logs, and find/replace.
+- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `data/i18n/README.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/cloud-dns-adapters.md`, `docs/router-gateway-adapters.md`, `docs/managed-package-exports.md`, `docs/vscode-companion.md`, `docs/adblock-lint.md`, `docs/rule-tiers.md`, `docs/idn-homograph.md`, `docs/threat-feed-packs.md`, `docs/cname-cloaking.md`, `docs/encrypted-dns-bypass.md`, `docs/encrypted-sync.md`, `docs/share-patches.md`, `docs/recovery-plan.md`, `docs/wfp-blocker-companion.md`, `docs/nrpt-policy-export.md`, `docs/sandbox-vm-hosts.md`, `docs/dns-rebinding.md`, `docs/safesearch-restricted-mode.md`, `docs/profile-activation-schedule.md`, `docs/profile-quick-switch.md`, `docs/source-adapter-plugins.md`, `docs/local-rest-api.md`, `docs/package-managers.md`, `docs/source-bundles.md`, `docs/filter-builder.md`, `docs/watch-expressions.md`, `docs/source-metrics.md`, `docs/parallel-imports.md`, `docs/virtualized-lists.md`, `docs/provenance-log.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `.github/ISSUE_TEMPLATE/translation.yml`, `LICENSE`, and this roadmap.
 - License: MIT.
 
 ### Product Reality
@@ -131,6 +132,7 @@ HostsFileGet already provides:
 - `--sandbox-vm-hosts-plan` writes a plan-only Windows Sandbox and Hyper-V VM hosts staging bundle without launching or mutating guests.
 - `--router-adapter-list` and `--router-push-plan` write plan-only OpenWrt dnsmasq, generic dnsmasq, and Unbound gateway bundles with guarded SSH scripts and no live router writes.
 - `--managed-package-list` and `--managed-package-export` write plan-only Intune, Group Policy startup script, PDQ Deploy, and Configuration Manager package export bundles without uploading, assigning, importing, or deploying packages.
+- `--vscode-extension-export` writes an export-only VS Code companion extension scaffold that uses the loopback REST API for status and clean-preview commands without installing, running, packaging, or publishing an extension.
 - `--profile-schedule-list`, `--profile-schedule-add`, `--profile-schedule-apply`, and `--profile-schedule-at` expose guarded time-bound profile activation that switches app config only and never writes the system hosts file.
 - **Tools > Profile Quick Switch...** and optional **Tools > Start Tray Quick Switch...** expose config-only saved-profile switching without writing the system hosts file.
 - Optional local Git-backed history commands for snapshot, status, and admin-gated rollback with normal `.bak` backup creation.
@@ -300,7 +302,7 @@ Legend:
 | F058 | Windows Sandbox and VM hosts injector | Platform/OS | rare | Guarded | 2 | 5 | Useful for lab workflows but niche. | Later | S17, S18, S19 |
 | F059 | Router/gateway push adapters | Integrations | common | Guarded | 4 | 5 | Credentials and bricking risk; generate scripts before live push. | Later | O6, O7, O8, K1, S20, S21, S22 |
 | F060 | Intune/GPO/PDQ/SCCM package exports | Distribution, multi-user | common in enterprise | Guarded | 4 | 5 | Requires signed artifacts and managed-line mode. | Later | C6, S1, S23-S30 |
-| F061 | VS Code companion extension | Dev-experience | rare | Guarded | 2 | 5 | Separate ecosystem; only after API/export contracts stabilize. | Later | O1, O2 |
+| F061 | VS Code companion extension | Dev-experience | rare | Guarded | 2 | 5 | Separate ecosystem; only after API/export contracts stabilize. | Later | O1, O2, S31-S36 |
 | F062 | prompt_toolkit TUI | Dev-experience, accessibility | rare | Guarded | 3 | 5 | New dependency and parallel UI surface. | Later | O9, O14 |
 | F063 | Local custom block page server | UX, diagnostics | common in DNS products | Guarded | 2 | 4 | Hosts cannot redirect paths; local server must be explicit. | Later | C1, C5, C3 |
 | F064 | Advanced DNS rewrites/CNAME/private domains | Platform, integrations | common | Guarded | 3 | 4 | Hosts can map A/AAAA only; richer rewrites belong to export adapters. | Later | C3, O8 |
@@ -374,18 +376,19 @@ Legend:
 37. Completed - Windows Sandbox and VM hosts injector: F058.
 38. Completed - Router/gateway push adapters: F059.
 39. Completed - Intune/GPO/PDQ/SCCM package exports: F060.
+40. Completed - VS Code companion extension: F061.
 
 Rationale: these items reduce maintenance risk, make the current product more trustworthy, and create the internal contracts needed for the larger profile/integration work.
 
 ### Next
 
-1. Later-stage platform and enterprise items: F061-F070.
+1. Later-stage platform and enterprise items: F062-F070.
 
 Rationale: these are valuable and well-supported by the market, but most require the Now-phase source manifest, profile model, and test/release foundations.
 
 ### Later
 
-1. Developer-side extension surfaces: F061, F062.
+1. Developer-side extension surfaces: F062.
 2. Advanced DNS/security enrichment: F063, F064, F065, F066, F067, F068, F069, F070.
 
 Rationale: these are plausible directions, but they either introduce credentials, services, signing, network-stack risk, or product-scope expansion.
@@ -554,6 +557,12 @@ A hostile reviewer would likely object to four things:
 | S28 | https://docs.pdq.com/current-version/deploy/deploy-cli.htm | PDQ Deploy CLI deployment surface |
 | S29 | https://learn.microsoft.com/mem/configmgr/apps/deploy-use/create-applications | Configuration Manager application and deployment type model |
 | S30 | https://learn.microsoft.com/en-us/troubleshoot/mem/configmgr/app-management/understand/deployment-install-technical-reference | Configuration Manager app install and detection technical workflow |
+| S31 | https://code.visualstudio.com/api/get-started/extension-anatomy | VS Code extension scaffold layout, activation, manifest, and entry-point model |
+| S32 | https://code.visualstudio.com/api/references/extension-manifest | VS Code `package.json` manifest, contribution points, commands, and configuration model |
+| S33 | https://code.visualstudio.com/api/extension-guides/command | VS Code command registration and command contribution behavior |
+| S34 | https://code.visualstudio.com/api/extension-guides/workspace-trust | Workspace Trust risk framing for local workspace-affecting extension behavior |
+| S35 | https://code.visualstudio.com/api/references/vscode-api#SecretStorage | SecretStorage API for bearer token storage in VS Code extensions |
+| S36 | https://code.visualstudio.com/api/working-with-extensions/publishing-extension | VS Code extension packaging and publishing workflow boundary |
 
 ### Academic, Research, And Engineering Sources
 
@@ -606,6 +615,8 @@ Representative queries used:
 - `Group Policy startup PowerShell script software installation executable deployment`
 - `PDQ Deploy package management custom PowerShell package docs`
 - `Configuration Manager application deployment type detection script install command docs`
+- `VS Code extension anatomy package.json contributes.commands SecretStorage workspace trust publishing docs`
+- `Visual Studio Code extension local REST API bearer token SecretStorage command palette companion extension`
 
 ## Appendix C - Self-Audit
 

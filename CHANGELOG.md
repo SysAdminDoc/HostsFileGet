@@ -4,6 +4,10 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**VS Code companion export**
+- Added `--vscode-extension-export` for a guarded VS Code companion extension scaffold that calls the opt-in loopback REST API for status and clean-preview commands.
+- The generated scaffold includes `package.json`, `extension.js`, `README.md`, `.vscodeignore`, and a review plan; HostsFileGet does not install, run, package, publish, or grant hosts-file write behavior to the extension.
+
 **Managed package exports**
 - Added `--managed-package-list` and `--managed-package-export` for plan-only Intune Win32 app, Group Policy startup script, PDQ Deploy, and Configuration Manager deployment bundles.
 - Bundles include managed hosts block fencing, SHA-256-verified install wrappers, detection/uninstall scripts, target-specific field maps, and explicit warnings that HostsFileGet does not upload, assign, import, or deploy packages.
