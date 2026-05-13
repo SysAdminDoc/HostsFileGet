@@ -33,6 +33,17 @@ dist\HostsFileGet.package-manifests.zip
 
 That zip is uploaded as a workflow artifact and as a GitHub release asset on tag builds.
 
+## Managed Deployment Handoffs
+
+Winget and Chocolatey manifests describe public package-manager submission metadata. Enterprise deployment bundles are generated separately by:
+
+```powershell
+python hosts_editor.py --managed-package-list
+python hosts_editor.py --managed-package-export intune-win32 .\managed-hosts.txt .\managed-bundle --managed-installer-url https://github.com/SysAdminDoc/HostsFileGet/releases/download/v2.20.0/HostsFileGet.exe --managed-sha256 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+```
+
+See `docs/managed-package-exports.md` for the Intune, Group Policy startup script, PDQ Deploy, and Configuration Manager export contract.
+
 ## Publishing Boundary
 
 The generated files are submission-ready metadata, not automatic publication:

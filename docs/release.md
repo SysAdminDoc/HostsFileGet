@@ -11,6 +11,7 @@ HostsFileGet release builds are Windows-only until the roadmap explicitly adds a
 - Application entry point: `hosts_editor.py`.
 - Curated source manifest: `data/blocklist_sources.json`.
 - Package manager templates: `packaging\winget\` and `packaging\chocolatey\`.
+- Managed package export docs: `docs\managed-package-exports.md`.
 - Launcher script: `PythonLauncher.ps1`.
 
 ## Local Build
@@ -37,6 +38,7 @@ if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; 
 python -m PyInstaller --clean --noconfirm HostsFileGet.spec
 Get-FileHash -Algorithm SHA256 dist\HostsFileGet.exe
 python scripts\render_package_manifests.py --version 2.20.0 --installer-url https://github.com/SysAdminDoc/HostsFileGet/releases/download/v2.20.0/HostsFileGet.exe --sha256 (Get-FileHash -Algorithm SHA256 dist\HostsFileGet.exe).Hash --output-dir dist\package-manifests
+python hosts_editor.py --managed-package-export intune-win32 .\default.txt dist\managed-package-export --managed-package-version 2.20.0 --managed-installer-url https://github.com/SysAdminDoc/HostsFileGet/releases/download/v2.20.0/HostsFileGet.exe --managed-sha256 (Get-FileHash -Algorithm SHA256 dist\HostsFileGet.exe).Hash
 python -m pip_audit -r requirements-build.txt --strict --format cyclonedx-json --output dist\HostsFileGet.sbom.cdx.json
 ```
 
@@ -46,6 +48,7 @@ Expected output:
 - `dist\HostsFileGet.exe.sha256`
 - `dist\HostsFileGet.sbom.cdx.json`
 - `dist\package-manifests\`
+- `dist\managed-package-export\`
 - `dist\HostsFileGet.package-manifests.zip` in GitHub Actions
 
 ## GitHub Actions

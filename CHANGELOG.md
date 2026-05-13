@@ -4,6 +4,10 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Managed package exports**
+- Added `--managed-package-list` and `--managed-package-export` for plan-only Intune Win32 app, Group Policy startup script, PDQ Deploy, and Configuration Manager deployment bundles.
+- Bundles include managed hosts block fencing, SHA-256-verified install wrappers, detection/uninstall scripts, target-specific field maps, and explicit warnings that HostsFileGet does not upload, assign, import, or deploy packages.
+
 **Router/gateway push adapters**
 - Added `--router-adapter-list` and `--router-push-plan` for plan-only OpenWrt dnsmasq, generic dnsmasq, and Unbound gateway bundles.
 - Bundles include a generated resolver config, JSON review plan, and guarded shell script that exits unless `HOSTSFILEGET_CONFIRM=apply` is set; HostsFileGet does not execute `scp`, `ssh`, reloads, router APIs, or credential prompts.
