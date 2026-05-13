@@ -128,6 +128,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F062 complete. Next roadmap item: F063 local custom block page server.
 - Completed F063: added `--block-page-preview` and loopback-only `--block-page-serve` for local HTTP blocked-site explanation pages, including escaped HTML rendering, all-route responses, a JSON health endpoint, explicit HTTPS/path limitation warnings, docs, and regression tests. The server does not write the hosts file, expose LAN services, redirect paths, or manage certificates.
 - Updated `ROADMAP.md` to mark F063 complete. Next roadmap item: F064 advanced DNS rewrites/CNAME/private domains.
+- Completed F064: added `--dns-rewrite-provider-list` and `--dns-rewrite-plan` for plan-only Control D private-rule and Technitium zone rewrite exports. The parser accepts hosts-style IP mappings, explicit A/AAAA/CNAME declarations, and arrow-form rewrites, emits JSON review artifacts, and keeps CNAME/private-domain behavior outside the hosts-native write path.
+- Updated `ROADMAP.md` to mark F064 complete. Next roadmap item: F065 certificate transparency and typosquat watchdog.
 
 ## Scope
 

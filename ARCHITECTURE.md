@@ -26,6 +26,8 @@ The prompt_toolkit TUI is optional and dependency-gated. HostsFileGet can launch
 
 The local block page server is explicit and loopback-only. HostsFileGet can serve an informational HTTP page for blocked names that have been manually mapped to loopback, plus a static preview file for review, but it does not write hosts entries, expose LAN services, handle HTTPS certificates, redirect paths, or replace resolver/router block-page features.
 
+Advanced DNS rewrite support is export-only. HostsFileGet can parse reviewed A, AAAA, and CNAME/private-domain declarations into Control D or Technitium review plans, but it does not call provider APIs, store DNS credentials, import zone files, reload resolvers, or imply that CNAME/private-domain behavior is hosts-native.
+
 DNS rebinding protection is also advisory. HostsFileGet can report static hosts entries that map external-looking names to private, local, loopback, link-local, ULA, CGNAT, or special-use ranges, but live DNS rebinding enforcement belongs in the resolver, router, or managed endpoint policy.
 
 SafeSearch and restricted-mode templates follow the same boundary. HostsFileGet can produce reviewable hosts-line and DNS CNAME plans for Google, Bing, DuckDuckGo, and YouTube, but it does not apply parental controls, create DNS records, install browser policy, or enforce account/device controls.
@@ -101,6 +103,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `docs/vscode-companion.md` | Export-only VS Code companion extension scaffold for local REST status and clean preview |
 | `docs/tui.md` | Optional prompt_toolkit TUI shell behavior and dependency boundary |
 | `docs/block-page-server.md` | Explicit loopback-only local block page server behavior and HTTPS/path limitations |
+| `docs/dns-rewrites.md` | Plan-only Control D and Technitium DNS rewrite/CNAME/private-domain exports |
 | `docs/git-history.md` | Optional local Git-backed hosts snapshot and restore behavior |
 | `docs/scheduler-activity.md` | Scheduled-update silent logging and activity report behavior |
 | `docs/portable-config.md` | Local-vs-portable config resolution and portable bundle export behavior |
@@ -191,7 +194,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Encrypted-DNS bypass pack planning: `list_encrypted_dns_bypass_packs`, `build_encrypted_dns_bypass_pack_plan`, `format_encrypted_dns_bypass_catalog`, `format_encrypted_dns_bypass_pack_plan`.
 - DNS rebinding checks: `classify_dns_rebinding_mapping`, `build_dns_rebinding_report`, `format_dns_rebinding_report`.
 - SafeSearch and restricted-mode templates: `list_safesearch_templates`, `build_safesearch_template_plan`, `format_safesearch_template_catalog`, `format_safesearch_template_plan`.
-- Cleanup/export/search helpers: `remove_lines_by_indices`, `rewrite_block_sink_ip`, `scan_suspicious_redirects`, `build_export_domain_records`, `build_dns_integration_export`, `build_cloud_dns_adapter_plan`, `build_managed_package_export_plan`, `write_managed_package_export_bundle`, `format_managed_package_export_plan`, `build_vscode_companion_export_plan`, `write_vscode_companion_export`, `format_vscode_companion_export_plan`, `build_tui_launch_report`, `format_tui_launch_report`, `build_block_page_server_config`, `build_block_page_request_context`, `render_block_page_html`, `format_block_page_server_report`, `format_dns_integration_pack_report`, `format_cloud_dns_adapter_catalog`, `export_lines_as_format`, `export_lines_as_bytes`, `strip_lines_by_category`.
+- Cleanup/export/search helpers: `remove_lines_by_indices`, `rewrite_block_sink_ip`, `scan_suspicious_redirects`, `build_export_domain_records`, `build_dns_integration_export`, `build_cloud_dns_adapter_plan`, `parse_dns_rewrite_records`, `build_dns_rewrite_plan`, `format_dns_rewrite_plan`, `build_managed_package_export_plan`, `write_managed_package_export_bundle`, `format_managed_package_export_plan`, `build_vscode_companion_export_plan`, `write_vscode_companion_export`, `format_vscode_companion_export_plan`, `build_tui_launch_report`, `format_tui_launch_report`, `build_block_page_server_config`, `build_block_page_request_context`, `render_block_page_html`, `format_block_page_server_report`, `format_dns_integration_pack_report`, `format_cloud_dns_adapter_catalog`, `export_lines_as_format`, `export_lines_as_bytes`, `strip_lines_by_category`.
 - Large-list helpers: `build_virtual_list_page`; `MatchRemovalDialog` uses it to page checkbox rows while preserving global selection state.
 - Source analytics: `find_sources_containing_domain`, `summarize_source_contributions`, `build_source_domain_index`, `build_source_overlap_report`, `sanitize_source_metrics_history`, `record_source_metrics_snapshot`, `build_source_metrics_report`, `format_source_metrics_report`, `build_filter_builder_report`, `format_filter_builder_report`, `sanitize_watch_expressions`, `build_watch_expression_report`, `format_watch_expression_report`, `categorize_entries_by_domain_hint`, `classify_source_freshness`.
 - Local REST API: `create_local_api_server`, `LocalApiRequestHandler`, `build_local_api_status_payload`, `build_local_api_clean_preview_payload`, `local_api_authorization_valid`.
@@ -269,6 +272,8 @@ The CLI functions live near the bottom of `hosts_editor.py` and intentionally sh
 - `_cli_tui_status`
 - `_cli_block_page_preview`
 - `_cli_block_page_serve`
+- `_cli_dns_rewrite_provider_list`
+- `_cli_dns_rewrite_plan`
 - `_cli_profile_schedule_list`
 - `_cli_profile_schedule_add`
 - `_cli_profile_schedule_apply`
