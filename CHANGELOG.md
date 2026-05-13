@@ -4,6 +4,10 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Encrypted profile sync**
+- Added guarded `--sync-git-export` and `--sync-git-import` commands that sync saved profiles through an explicit Git worktree while encrypting the payload with GPG.
+- Sync includes profiles and activation schedules only; it excludes local cache/history/provenance metadata and never writes the Windows hosts file.
+
 **Translation contribution workflow**
 - Added `--i18n-template` and `--i18n-validate` so contributors can generate locale catalogs and validate keys/placeholders before opening a PR.
 - Added translation contribution docs, data-folder notes, and a GitHub issue template for locale submissions.

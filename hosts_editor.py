@@ -132,6 +132,14 @@ GIT_HISTORY_HOSTS_FILENAME = "hosts"
 GIT_HISTORY_METADATA_FILENAME = "hostsfileget-history.json"
 GIT_HISTORY_DEFAULT_LIMIT = 25
 GIT_HISTORY_REF_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/\-]{0,127}$")
+PROFILE_SYNC_PAYLOAD_SCHEMA = "hostsfileget.profile-sync.v1"
+PROFILE_SYNC_METADATA_SCHEMA = "hostsfileget.profile-sync-metadata.v1"
+PROFILE_SYNC_GIT_DIRNAME = "profile_sync_git"
+PROFILE_SYNC_BUNDLE_FILENAME = "hostsfileget-profile-sync.json.gpg"
+PROFILE_SYNC_METADATA_FILENAME = "hostsfileget-profile-sync.metadata.json"
+PROFILE_SYNC_PASSPHRASE_ENV = "HOSTSFILEGET_SYNC_PASSPHRASE"
+PROFILE_SYNC_MIN_PASSPHRASE_LENGTH = 16
+PROFILE_SYNC_ENV_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 SCHEDULED_TASK_NAME = "HostsFileGet Auto-Update"
 CLI_LOG_FILENAME = "cli.log"
 CLI_ACTIVITY_FILENAME = "cli-activity.jsonl"
@@ -3235,6 +3243,362 @@ def format_git_history_status_report(report: dict) -> str:
         lines.append(
             f"- {snapshot.get('short_commit')}  {snapshot.get('committed_at')}  {snapshot.get('subject')}"
         )
+    return "\n".join(lines)
+
+
+def get_profile_sync_git_dir(base_dir: str | None = None) -> str:
+    root = base_dir or get_config_root_dir()
+    return os.path.join(root, PROFILE_SYNC_GIT_DIRNAME)
+
+
+def resolve_gpg_executable(gpg_executable: str | None = None) -> str | None:
+    if gpg_executable:
+        return gpg_executable
+    return shutil.which("gpg") or shutil.which("gpg.exe")
+
+
+def sanitize_profile_sync_env_name(value: str | None) -> str:
+    candidate = str(value or PROFILE_SYNC_PASSPHRASE_ENV).strip()
+    if not PROFILE_SYNC_ENV_NAME_PATTERN.match(candidate):
+        raise ValueError("sync passphrase environment variable name is invalid")
+    return candidate
+
+
+def sanitize_profile_sync_passphrase(value: str | None) -> str:
+    if not isinstance(value, str):
+        raise ValueError("sync passphrase is required")
+    if len(value) < PROFILE_SYNC_MIN_PASSPHRASE_LENGTH or _contains_control_chars(value):
+        raise ValueError(
+            f"sync passphrase must be at least {PROFILE_SYNC_MIN_PASSPHRASE_LENGTH} characters "
+            "and cannot contain control characters"
+        )
+    return value
+
+
+def read_profile_sync_passphrase(env_name: str | None = None, environ=None) -> str:
+    safe_name = sanitize_profile_sync_env_name(env_name)
+    source = os.environ if environ is None else environ
+    return sanitize_profile_sync_passphrase(source.get(safe_name))
+
+
+def build_profile_sync_payload(config: dict, default_last_open_dir: str | None = None, now=None) -> dict:
+    sanitized = sanitize_config_snapshot(config, default_last_open_dir or os.path.expanduser("~"))
+    created_at = now or datetime.datetime.now()
+    if isinstance(created_at, datetime.datetime):
+        created_at = created_at.isoformat(timespec="seconds")
+    payload = {
+        "schema": PROFILE_SYNC_PAYLOAD_SCHEMA,
+        "app_version": APP_VERSION,
+        "created_at": str(created_at),
+        "config_version": CONFIG_SCHEMA_VERSION,
+        "profile_schema_version": PROFILE_SCHEMA_VERSION,
+        "active_profile_id": sanitized["active_profile_id"],
+        "profiles": sanitized["profiles"],
+        "profile_activation_schedule_version": PROFILE_ACTIVATION_SCHEDULE_VERSION,
+        "profile_activation_fallback_id": sanitized["profile_activation_fallback_id"],
+        "profile_activation_schedule": sanitized["profile_activation_schedule"],
+    }
+    return sanitize_profile_sync_payload(payload)
+
+
+def sanitize_profile_sync_payload(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("profile sync payload must be a JSON object")
+    if payload.get("schema") != PROFILE_SYNC_PAYLOAD_SCHEMA:
+        raise ValueError(f"profile sync payload schema must be {PROFILE_SYNC_PAYLOAD_SCHEMA}")
+    profiles, active_profile_id = sanitize_profiles_snapshot(
+        payload.get("profiles", []),
+        payload.get("active_profile_id", DEFAULT_PROFILE_ID),
+    )
+    profile_ids = {profile["id"] for profile in profiles}
+    fallback_id = _sanitize_profile_id_strict(payload.get("profile_activation_fallback_id"))
+    if fallback_id not in profile_ids:
+        fallback_id = active_profile_id
+    schedule = sanitize_profile_activation_schedule(
+        payload.get("profile_activation_schedule", []),
+        profile_ids,
+    )
+    created_at = str(payload.get("created_at") or "")
+    if not created_at or _contains_control_chars(created_at) or len(created_at) > 80:
+        created_at = datetime.datetime.now().isoformat(timespec="seconds")
+    return {
+        "schema": PROFILE_SYNC_PAYLOAD_SCHEMA,
+        "app_version": str(payload.get("app_version") or APP_VERSION)[:40],
+        "created_at": created_at,
+        "config_version": CONFIG_SCHEMA_VERSION,
+        "profile_schema_version": PROFILE_SCHEMA_VERSION,
+        "active_profile_id": active_profile_id,
+        "profiles": profiles,
+        "profile_activation_schedule_version": PROFILE_ACTIVATION_SCHEDULE_VERSION,
+        "profile_activation_fallback_id": fallback_id,
+        "profile_activation_schedule": schedule,
+    }
+
+
+def apply_profile_sync_payload_to_config(
+    config: dict,
+    payload: dict,
+    default_last_open_dir: str | None = None,
+) -> dict:
+    default_dir = default_last_open_dir or os.path.expanduser("~")
+    current = sanitize_config_snapshot(config, default_dir)
+    synced = sanitize_profile_sync_payload(payload)
+    current["profiles"] = synced["profiles"]
+    current["active_profile_id"] = synced["active_profile_id"]
+    current["profile_activation_fallback_id"] = synced["profile_activation_fallback_id"]
+    current["profile_activation_schedule"] = synced["profile_activation_schedule"]
+    current["profile_activation_schedule_version"] = PROFILE_ACTIVATION_SCHEDULE_VERSION
+    return set_active_profile_in_config(current, synced["active_profile_id"], default_dir)
+
+
+def build_profile_sync_metadata(payload: dict, encrypted_filename: str = PROFILE_SYNC_BUNDLE_FILENAME) -> dict:
+    sanitized = sanitize_profile_sync_payload(payload)
+    canonical = json.dumps(sanitized, sort_keys=True, separators=(",", ":"))
+    return {
+        "schema": PROFILE_SYNC_METADATA_SCHEMA,
+        "app_version": APP_VERSION,
+        "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "payload_schema": sanitized["schema"],
+        "payload_created_at": sanitized["created_at"],
+        "active_profile_id": sanitized["active_profile_id"],
+        "profile_count": len(sanitized["profiles"]),
+        "encrypted_file": encrypted_filename,
+        "encryption": "gpg symmetric AES256",
+        "payload_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    }
+
+
+def _run_gpg_transform(
+    input_path: str,
+    output_path: str,
+    passphrase: str,
+    decrypt: bool = False,
+    gpg_executable: str | None = None,
+    runner=None,
+    timeout: int = 60,
+) -> None:
+    gpg = resolve_gpg_executable(gpg_executable)
+    if not gpg:
+        raise OSError("gpg executable not found")
+    safe_passphrase = sanitize_profile_sync_passphrase(passphrase)
+    args = [
+        gpg,
+        "--batch",
+        "--yes",
+        "--pinentry-mode",
+        "loopback",
+        "--passphrase-fd",
+        "0",
+        "--output",
+        output_path,
+    ]
+    if decrypt:
+        args.extend(["--decrypt", input_path])
+    else:
+        args.extend(["--symmetric", "--cipher-algo", "AES256", input_path])
+    run = runner or subprocess.run
+    try:
+        result = run(
+            args,
+            input=f"{safe_passphrase}\n",
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise OSError("gpg executable not found") from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise OSError(f"gpg {'decrypt' if decrypt else 'encrypt'} failed: {detail}")
+
+
+def encrypt_profile_sync_payload(
+    payload: dict,
+    output_path: str,
+    passphrase: str,
+    gpg_executable: str | None = None,
+    runner=None,
+) -> dict:
+    sanitized = sanitize_profile_sync_payload(payload)
+    output_dir = os.path.dirname(os.path.abspath(output_path))
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        plain_path = os.path.join(tmpdir, "hostsfileget-profile-sync.json")
+        write_text_file_atomic(plain_path, json.dumps(sanitized, indent=2, sort_keys=True))
+        _run_gpg_transform(
+            plain_path,
+            output_path,
+            passphrase,
+            decrypt=False,
+            gpg_executable=gpg_executable,
+            runner=runner,
+        )
+    return build_profile_sync_metadata(sanitized, os.path.basename(output_path))
+
+
+def decrypt_profile_sync_payload(
+    input_path: str,
+    passphrase: str,
+    gpg_executable: str | None = None,
+    runner=None,
+) -> dict:
+    if not os.path.isfile(input_path):
+        raise OSError(f"profile sync bundle not found: {input_path}")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        plain_path = os.path.join(tmpdir, "hostsfileget-profile-sync.json")
+        _run_gpg_transform(
+            input_path,
+            plain_path,
+            passphrase,
+            decrypt=True,
+            gpg_executable=gpg_executable,
+            runner=runner,
+        )
+        try:
+            payload = json.loads(read_text_file_content(plain_path))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"profile sync payload JSON is invalid: {exc}") from exc
+    return sanitize_profile_sync_payload(payload)
+
+
+def ensure_profile_sync_git_repo(
+    repo_dir: str,
+    git_executable: str | None = None,
+    runner=None,
+) -> str:
+    return ensure_git_history_repo(repo_dir, git_executable=git_executable, runner=runner)
+
+
+def _profile_sync_commit_message(payload: dict) -> str:
+    synced = sanitize_profile_sync_payload(payload)
+    return f"profile sync: {synced['active_profile_id']}"
+
+
+def write_profile_sync_git_export(
+    repo_dir: str,
+    config: dict,
+    passphrase: str,
+    default_last_open_dir: str | None = None,
+    git_executable: str | None = None,
+    git_runner=None,
+    gpg_executable: str | None = None,
+    gpg_runner=None,
+    push: bool = False,
+) -> dict:
+    ensure_profile_sync_git_repo(repo_dir, git_executable=git_executable, runner=git_runner)
+    payload = build_profile_sync_payload(config, default_last_open_dir)
+    bundle_path = os.path.join(repo_dir, PROFILE_SYNC_BUNDLE_FILENAME)
+    metadata_path = os.path.join(repo_dir, PROFILE_SYNC_METADATA_FILENAME)
+    metadata = encrypt_profile_sync_payload(
+        payload,
+        bundle_path,
+        passphrase,
+        gpg_executable=gpg_executable,
+        runner=gpg_runner,
+    )
+    write_text_file_atomic(metadata_path, json.dumps(metadata, indent=2))
+    _run_git_command(
+        repo_dir,
+        ["add", "--", PROFILE_SYNC_BUNDLE_FILENAME, PROFILE_SYNC_METADATA_FILENAME],
+        git_executable=git_executable,
+        runner=git_runner,
+    )
+    status = _run_git_command(
+        repo_dir,
+        ["status", "--porcelain", "--", PROFILE_SYNC_BUNDLE_FILENAME, PROFILE_SYNC_METADATA_FILENAME],
+        git_executable=git_executable,
+        runner=git_runner,
+    )
+    commit_status = "unchanged"
+    if status:
+        _run_git_command(
+            repo_dir,
+            ["commit", "-m", _profile_sync_commit_message(payload)],
+            git_executable=git_executable,
+            runner=git_runner,
+        )
+        commit_status = "committed"
+    try:
+        commit = _run_git_command(repo_dir, ["rev-parse", "--short=12", "HEAD"], git_executable=git_executable, runner=git_runner)
+    except OSError:
+        commit = None
+    pushed = False
+    if push:
+        _run_git_command(repo_dir, ["push", "origin", "HEAD"], git_executable=git_executable, runner=git_runner, timeout=60)
+        pushed = True
+    return {
+        "action": "export",
+        "status": commit_status,
+        "repo_dir": repo_dir,
+        "bundle_path": bundle_path,
+        "metadata_path": metadata_path,
+        "commit": commit,
+        "pushed": pushed,
+        "active_profile_id": payload["active_profile_id"],
+        "profile_count": len(payload["profiles"]),
+    }
+
+
+def read_profile_sync_git_import(
+    repo_dir: str,
+    current_config: dict,
+    passphrase: str,
+    default_last_open_dir: str | None = None,
+    git_executable: str | None = None,
+    git_runner=None,
+    gpg_executable: str | None = None,
+    gpg_runner=None,
+    pull: bool = False,
+) -> dict:
+    if pull:
+        if not os.path.isdir(os.path.join(repo_dir, ".git")):
+            raise OSError("profile sync Git repository has not been initialized")
+        _run_git_command(repo_dir, ["pull", "--ff-only"], git_executable=git_executable, runner=git_runner, timeout=60)
+    bundle_path = os.path.join(repo_dir, PROFILE_SYNC_BUNDLE_FILENAME)
+    payload = decrypt_profile_sync_payload(
+        bundle_path,
+        passphrase,
+        gpg_executable=gpg_executable,
+        runner=gpg_runner,
+    )
+    merged_config = apply_profile_sync_payload_to_config(
+        current_config,
+        payload,
+        default_last_open_dir,
+    )
+    return {
+        "action": "import",
+        "status": "imported",
+        "repo_dir": repo_dir,
+        "bundle_path": bundle_path,
+        "config": merged_config,
+        "active_profile_id": payload["active_profile_id"],
+        "profile_count": len(payload["profiles"]),
+        "pulled": bool(pull),
+    }
+
+
+def format_profile_sync_report(report: dict) -> str:
+    lines = [
+        "Encrypted Profile Sync",
+        f"Action: {report.get('action', '-')}",
+        f"Status: {report.get('status', '-')}",
+        f"Repository: {report.get('repo_dir') or '-'}",
+        f"Encrypted bundle: {report.get('bundle_path') or '-'}",
+        f"Active profile: {report.get('active_profile_id') or DEFAULT_PROFILE_ID}",
+        f"Profiles: {report.get('profile_count', 0)}",
+    ]
+    if report.get("metadata_path"):
+        lines.append(f"Metadata: {report.get('metadata_path')}")
+    if report.get("commit"):
+        lines.append(f"Commit: {report.get('commit')}")
+    if report.get("pushed"):
+        lines.append("Pushed: yes")
+    if report.get("pulled"):
+        lines.append("Pulled: yes")
+    lines.append("Hosts file writes: none")
     return "\n".join(lines)
 
 
@@ -20210,6 +20574,46 @@ def _cli_profile_export(profile_id: str, output_path: str) -> int:
     return 0
 
 
+def _cli_profile_sync_export(repo_dir: str, passphrase_env: str | None = None, push: bool = False) -> int:
+    try:
+        passphrase = read_profile_sync_passphrase(passphrase_env)
+        config_path = get_primary_config_path("hosts_editor_config.json")
+        current = _read_cli_config_payload(config_path)
+        report = write_profile_sync_git_export(
+            repo_dir,
+            current,
+            passphrase,
+            default_last_open_dir=os.path.expanduser("~"),
+            push=push,
+        )
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Encrypted profile sync export failed: {exc}")
+        return 2
+    _cli_print(format_profile_sync_report(report))
+    return 0
+
+
+def _cli_profile_sync_import(repo_dir: str, passphrase_env: str | None = None, pull: bool = False) -> int:
+    try:
+        passphrase = read_profile_sync_passphrase(passphrase_env)
+        config_path = get_primary_config_path("hosts_editor_config.json")
+        current = _read_cli_config_payload(config_path)
+        report = read_profile_sync_git_import(
+            repo_dir,
+            current,
+            passphrase,
+            default_last_open_dir=os.path.expanduser("~"),
+            pull=pull,
+        )
+        _write_cli_config_payload(config_path, report["config"])
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Encrypted profile sync import failed: {exc}")
+        return 2
+    _cli_print(format_profile_sync_report(report))
+    _cli_print(f"Wrote config: {config_path}")
+    return 0
+
+
 def _cli_profile_schedule_list(at_value: str | None = None) -> int:
     try:
         config_path = get_primary_config_path("hosts_editor_config.json")
@@ -20351,6 +20755,11 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--profile-apply",
         "--profile-import",
         "--profile-export",
+        "--sync-git-export",
+        "--sync-git-import",
+        "--sync-passphrase-env",
+        "--sync-git-push",
+        "--sync-git-pull",
         "--profile-schedule-list",
         "--profile-schedule-add",
         "--profile-schedule-days",
@@ -20412,6 +20821,9 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--profile-apply=",
         "--profile-import=",
         "--profile-export=",
+        "--sync-git-export=",
+        "--sync-git-import=",
+        "--sync-passphrase-env=",
         "--profile-schedule-add=",
         "--profile-schedule-days=",
         "--profile-schedule-name=",
@@ -20470,6 +20882,11 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--profile-apply", metavar="ID", help="Make a saved profile active in the app config without writing the hosts file.")
     parser.add_argument("--profile-import", metavar="PATH", help="Import a declarative profile file into the app config without activating it.")
     parser.add_argument("--profile-export", nargs=2, metavar=("ID", "PATH"), help="Export a saved profile by ID as declarative YAML/TOML/JSON.")
+    parser.add_argument("--sync-git-export", metavar="DIR", help="Write an encrypted profile-sync bundle into DIR and commit it to that Git worktree.")
+    parser.add_argument("--sync-git-import", metavar="DIR", help="Import an encrypted profile-sync bundle from DIR into app config only.")
+    parser.add_argument("--sync-passphrase-env", default=PROFILE_SYNC_PASSPHRASE_ENV, metavar="ENV", help=f"Environment variable containing the sync passphrase; defaults to {PROFILE_SYNC_PASSPHRASE_ENV}.")
+    parser.add_argument("--sync-git-push", action="store_true", help="After --sync-git-export, push HEAD to origin. Tokens are not stored or prompted for.")
+    parser.add_argument("--sync-git-pull", action="store_true", help="Before --sync-git-import, run git pull --ff-only in the sync worktree.")
     parser.add_argument("--profile-schedule-list", action="store_true", help="Show the time-bound profile activation schedule without writing files.")
     parser.add_argument(
         "--profile-schedule-add",
@@ -20626,6 +21043,16 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         return _cli_profile_import(args.profile_import)
     if args.profile_export:
         return _cli_profile_export(args.profile_export[0], args.profile_export[1])
+    if args.sync_git_export and args.sync_git_import:
+        parser.error("--sync-git-export and --sync-git-import cannot be used together")
+    if args.sync_git_push and not args.sync_git_export:
+        parser.error("--sync-git-push requires --sync-git-export DIR")
+    if args.sync_git_pull and not args.sync_git_import:
+        parser.error("--sync-git-pull requires --sync-git-import DIR")
+    if args.sync_git_export:
+        return _cli_profile_sync_export(args.sync_git_export, args.sync_passphrase_env, args.sync_git_push)
+    if args.sync_git_import:
+        return _cli_profile_sync_import(args.sync_git_import, args.sync_passphrase_env, args.sync_git_pull)
     if args.profile_schedule_add:
         return _cli_profile_schedule_add(
             args.profile_schedule_add[0],

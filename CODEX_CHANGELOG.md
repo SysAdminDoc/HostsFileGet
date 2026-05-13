@@ -105,6 +105,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F052 complete. Next roadmap item: F053 translation contribution workflow.
 - Completed F053: added translation contribution template and validation CLI commands, placeholder/key review helpers, data-folder notes, a GitHub issue template, docs, and regression tests.
 - Updated `ROADMAP.md` to mark F053 complete. Next roadmap item: F054 encrypted opt-in sync via Gist or local Git remote.
+- Completed F054: added GPG-encrypted profile sync payload helpers, explicit Git worktree export/import CLI commands, local-only docs, and regression tests with fake GPG plus real Git when available.
+- Updated `ROADMAP.md` to mark F054 complete. Next roadmap item: F055 signed shareable allowlist/profile patches.
 
 ## Scope
 

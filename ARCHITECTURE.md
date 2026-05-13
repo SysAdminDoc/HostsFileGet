@@ -76,6 +76,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `docs/cli-profiles.md` | CLI profile list/import/apply/export behavior |
 | `docs/profile-quick-switch.md` | GUI and optional tray profile quick-switch behavior |
 | `docs/profile-activation-schedule.md` | Time-bound profile activation schedule behavior and config-only CLI |
+| `docs/encrypted-sync.md` | GPG-encrypted profile sync through explicit Git worktrees |
 | `docs/git-history.md` | Optional local Git-backed hosts snapshot and restore behavior |
 | `docs/scheduler-activity.md` | Scheduled-update silent logging and activity report behavior |
 | `docs/portable-config.md` | Local-vs-portable config resolution and portable bundle export behavior |
@@ -136,6 +137,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Hosts parsing and normalization: `parse_hosts_line_entries`, `normalize_line_to_hosts_entries`, `_get_canonical_cleaned_output_and_stats`, `compute_clean_impact_stats`.
 - File IO helpers: `decode_text_bytes`, `read_text_file_lines`, `write_text_file_atomic`.
 - Optional Git history helpers: `write_git_history_snapshot`, `list_git_history_snapshots`, `read_git_history_snapshot`, `build_git_history_status_report`.
+- Encrypted profile sync helpers: `build_profile_sync_payload`, `sanitize_profile_sync_payload`, `encrypt_profile_sync_payload`, `decrypt_profile_sync_payload`, `write_profile_sync_git_export`, `read_profile_sync_git_import`, `format_profile_sync_report`.
 - Scheduler activity helpers: `build_scheduler_update_command`, `query_scheduled_task_status`, `append_cli_activity_event`, `build_scheduler_activity_report`, `format_scheduler_activity_report`.
 - Transactional hosts enable/disable helpers: `disable_hosts_file_transactionally`, `enable_hosts_file_transactionally`.
 - Download guards: `read_http_body_limited`, `decode_downloaded_lines`, `looks_like_html_document`.
@@ -217,6 +219,8 @@ The CLI functions live near the bottom of `hosts_editor.py` and intentionally sh
 - `_cli_profile_apply`
 - `_cli_profile_import`
 - `_cli_profile_export`
+- `_cli_profile_sync_export`
+- `_cli_profile_sync_import`
 - `_cli_profile_schedule_list`
 - `_cli_profile_schedule_add`
 - `_cli_profile_schedule_apply`
@@ -256,6 +260,7 @@ Admin-required CLI actions must fail clearly when not elevated. Source health ch
 | Curated source manifest | `data/blocklist_sources.json` beside script, exe bundle, or launcher cache | Versioned schema documented in `docs/source-manifest.md` |
 | Source adapter plugins | `source_adapters\*.json` beside the active config location | Optional manifest-only local source packs; no plugin code execution |
 | i18n catalog | `data\i18n\en-US.json` beside script, exe bundle, or launcher cache | Optional versioned UI strings; built-in English fallback is used if the cached catalog is missing |
+| Encrypted profile sync | User-selected Git worktree, or `profile_sync_git` beside active config when helpers use the default | GPG-encrypted profile bundle plus non-sensitive metadata; no hosts-file writes |
 | Source response cache | `source_cache\*.bin` beside the active config location | Raw source bodies keyed by normalized URL hash, verified by `source_cache_metadata` |
 | Source metrics history | Active config JSON | Compact local freshness/growth points under `source_metrics_history`, capped per source |
 | Filter query history | Active config JSON | Recent **Filter Builder** queries under `filter_query_history`; local-only and sanitized on load/save |
