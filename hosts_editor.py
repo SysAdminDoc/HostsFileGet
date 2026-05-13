@@ -10867,6 +10867,33 @@ CTI_ENRICHMENT_PROVIDER_ALIASES = {
     "stix21": "stix-bundle",
     "stix-bundle": "stix-bundle",
 }
+TLS_CERTIFICATE_PREVIEW_PLAN_SCHEMA = "hostsfileget.tls-certificate-preview-plan.v1"
+TLS_CERTIFICATE_PREVIEW_DEFAULT_PORT = 443
+TLS_CERTIFICATE_PREVIEW_DEFAULT_TIMEOUT_SECONDS = 5
+TLS_CERTIFICATE_PREVIEW_MAX_TIMEOUT_SECONDS = 60
+TLS_CERTIFICATE_PREVIEW_DEFAULT_MAX_HOSTS = 200
+TLS_CERTIFICATE_PREVIEW_MAX_HOSTS = 5000
+TLS_CERTIFICATE_PREVIEW_SOURCE_IDS = ("A8", "S50", "S51", "S52", "S53")
+TLS_CERTIFICATE_PREVIEW_REVIEW_FIELDS = (
+    "peer_certificate_chain",
+    "subject",
+    "subject_alt_name_dns",
+    "issuer",
+    "serial_number",
+    "not_before",
+    "not_after",
+    "sha256_fingerprint",
+    "tls_version",
+    "cipher_suite",
+    "hostname_verification_result",
+)
+TLS_CERTIFICATE_PREVIEW_WARNINGS = (
+    "Plan-only: HostsFileGet prepares TLS review targets and commands; it does not open sockets or perform certificate handshakes.",
+    "Run generated commands only for hosts you own, administer, or are explicitly authorized to inspect.",
+    "A TLS handshake can disclose the queried hostname through SNI and can appear in network, proxy, CDN, or server logs.",
+    "Certificate anomalies are investigation leads, not hosts-file verdicts; do not auto-block solely from certificate metadata.",
+    "Keep captured certificates and command output as short-lived review artifacts unless policy requires retention.",
+)
 THREAT_FEED_PACK_WARNINGS = (
     "Plan-only: HostsFileGet lists vetted feed URLs and review controls; it does not fetch or auto-apply threat feeds.",
     "NRD and DGA feeds can false-positive newly launched, parked, CDN, or campaign-specific legitimate domains.",
@@ -12997,6 +13024,325 @@ def format_cti_enrichment_plan(plan: dict) -> str:
     for warning in plan.get("warnings") or CTI_ENRICHMENT_WARNINGS:
         lines.append(f"- {warning}")
     lines.extend(["", "Roadmap source IDs:", f"- {', '.join(plan.get('references') or CTI_ENRICHMENT_SOURCE_IDS)}"])
+    return "\n".join(lines)
+
+
+def sanitize_tls_certificate_preview_port(value: int | str | None = None) -> int:
+    if value is None:
+        return TLS_CERTIFICATE_PREVIEW_DEFAULT_PORT
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        raise ValueError("TLS certificate preview port must be an integer") from None
+    if port < 1 or port > 65535:
+        raise ValueError("TLS certificate preview port must be between 1 and 65535")
+    return port
+
+
+def sanitize_tls_certificate_preview_timeout(value: int | str | None = None) -> int:
+    if value is None:
+        return TLS_CERTIFICATE_PREVIEW_DEFAULT_TIMEOUT_SECONDS
+    try:
+        timeout = int(value)
+    except (TypeError, ValueError):
+        raise ValueError("TLS certificate preview timeout must be an integer") from None
+    if timeout < 1 or timeout > TLS_CERTIFICATE_PREVIEW_MAX_TIMEOUT_SECONDS:
+        raise ValueError(
+            f"TLS certificate preview timeout must be between 1 and {TLS_CERTIFICATE_PREVIEW_MAX_TIMEOUT_SECONDS} seconds"
+        )
+    return timeout
+
+
+def sanitize_tls_certificate_preview_max_hosts(value: int | str | None = None) -> int:
+    if value is None:
+        return TLS_CERTIFICATE_PREVIEW_DEFAULT_MAX_HOSTS
+    try:
+        limit = int(value)
+    except (TypeError, ValueError):
+        raise ValueError("TLS certificate preview max hosts must be an integer") from None
+    if limit < 1 or limit > TLS_CERTIFICATE_PREVIEW_MAX_HOSTS:
+        raise ValueError(f"TLS certificate preview max hosts must be between 1 and {TLS_CERTIFICATE_PREVIEW_MAX_HOSTS}")
+    return limit
+
+
+def _normalize_tls_certificate_preview_hostname(value: str) -> str:
+    candidate = (value or "").strip().strip(" \t\r\n'\"`<>()[]{}")
+    if not candidate or _contains_control_chars(candidate):
+        return ""
+    candidate = candidate.removeprefix("||").removeprefix("|").removeprefix("@@")
+    candidate = candidate.lstrip("*.").split("^", 1)[0].split("/", 1)[0].rstrip(".").lower()
+    if not candidate:
+        return ""
+    if candidate.startswith("[") and "]" in candidate:
+        return ""
+    if ":" in candidate:
+        if candidate.count(":") != 1:
+            return ""
+        host_part, port_part = candidate.rsplit(":", 1)
+        if not port_part.isdigit():
+            return ""
+        candidate = host_part.rstrip(".")
+    if not candidate:
+        return ""
+    try:
+        ipaddress.ip_address(candidate)
+        return ""
+    except ValueError:
+        pass
+    try:
+        candidate = candidate.encode("idna").decode("ascii")
+    except UnicodeError:
+        return ""
+    if not looks_like_domain(candidate, allow_single_label=False):
+        return ""
+    return candidate
+
+
+def _normalize_tls_certificate_preview_url_host(value: str) -> str:
+    candidate = (value or "").strip().strip(" \t\r\n'\"`<>")
+    while candidate and candidate[-1] in ".,;)]}":
+        candidate = candidate[:-1]
+    if _contains_control_chars(candidate):
+        return ""
+    parsed = urllib.parse.urlsplit(candidate)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return _normalize_tls_certificate_preview_hostname(parsed.hostname or "")
+
+
+def _add_tls_certificate_preview_target(
+    targets: dict[str, dict],
+    host: str,
+    line_number: int,
+    source: str,
+    limit: int,
+) -> bool:
+    if not host:
+        return False
+    if host not in targets:
+        if len(targets) >= limit:
+            return False
+        targets[host] = {"host": host, "source_lines": [], "sources": []}
+    target = targets[host]
+    if line_number not in target["source_lines"]:
+        target["source_lines"].append(line_number)
+    if source not in target["sources"]:
+        target["sources"].append(source)
+    return True
+
+
+def parse_tls_certificate_preview_targets(text: str, max_hosts: int | str | None = None) -> dict:
+    limit = sanitize_tls_certificate_preview_max_hosts(max_hosts)
+    targets: dict[str, dict] = {}
+    rejected: list[dict] = []
+    truncated = False
+    url_pattern = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+    for line_number, raw_line in enumerate((text or "").splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        line_without_comment = line.split("#", 1)[0].strip()
+        if not line_without_comment:
+            continue
+
+        saw_candidate = False
+        for raw_url in url_pattern.findall(line_without_comment):
+            host = _normalize_tls_certificate_preview_url_host(raw_url)
+            if host:
+                saw_candidate = True
+                if not _add_tls_certificate_preview_target(targets, host, line_number, "url-host", limit):
+                    truncated = True
+
+        parsed_entries, _transformed = parse_hosts_line_entries(line_without_comment)
+        for _entry, domain, _is_block in parsed_entries:
+            host = _normalize_tls_certificate_preview_hostname(domain)
+            if host:
+                saw_candidate = True
+                if not _add_tls_certificate_preview_target(targets, host, line_number, "hosts-entry", limit):
+                    truncated = True
+
+        for token in re.split(r"[\s,;]+", line_without_comment):
+            if not token or url_pattern.match(token):
+                continue
+            host = _normalize_tls_certificate_preview_hostname(token)
+            if host:
+                saw_candidate = True
+                if not _add_tls_certificate_preview_target(targets, host, line_number, "domain-token", limit):
+                    truncated = True
+
+        if not saw_candidate:
+            rejected.append({"line": line_number, "text": line[:120], "reason": "no public DNS hostname found"})
+
+    records = sorted(targets.values(), key=lambda item: item["host"])
+    for record in records:
+        record["source_lines"].sort()
+        record["sources"].sort()
+    return {
+        "max_hosts": limit,
+        "truncated": truncated,
+        "targets": records,
+        "hosts": [record["host"] for record in records],
+        "rejected": rejected,
+    }
+
+
+def _tls_certificate_preview_openssl_argv(host: str, port: int, timeout_seconds: int) -> list[str]:
+    return [
+        "openssl",
+        "s_client",
+        "-connect",
+        f"{host}:{port}",
+        "-servername",
+        host,
+        "-verify_hostname",
+        host,
+        "-showcerts",
+        "-brief",
+        "-timeout",
+        str(timeout_seconds),
+    ]
+
+
+def _tls_certificate_preview_review_csv(targets: list[dict]) -> str:
+    output = io.StringIO()
+    fieldnames = ("host", "port", "server_name", "source_lines", "openssl_command", "review_fields", "review_action")
+    writer = csv.DictWriter(output, fieldnames=fieldnames, lineterminator="\n")
+    writer.writeheader()
+    for target in targets:
+        writer.writerow({
+            "host": target["host"],
+            "port": target["port"],
+            "server_name": target["server_name"],
+            "source_lines": " ".join(str(line) for line in target.get("source_lines") or []),
+            "openssl_command": target["commands"]["openssl_command"],
+            "review_fields": " ".join(TLS_CERTIFICATE_PREVIEW_REVIEW_FIELDS),
+            "review_action": "Run manually only after scope approval; compare SAN, issuer, validity, fingerprint, and hostname verification before taking policy action.",
+        })
+    return output.getvalue()
+
+
+def build_tls_certificate_preview_plan(
+    text: str,
+    port: int | str | None = None,
+    timeout_seconds: int | str | None = None,
+    max_hosts: int | str | None = None,
+) -> dict:
+    safe_port = sanitize_tls_certificate_preview_port(port)
+    safe_timeout = sanitize_tls_certificate_preview_timeout(timeout_seconds)
+    parsed = parse_tls_certificate_preview_targets(text, max_hosts=max_hosts)
+    targets: list[dict] = []
+    for parsed_target in parsed["targets"]:
+        host = parsed_target["host"]
+        openssl_argv = _tls_certificate_preview_openssl_argv(host, safe_port, safe_timeout)
+        targets.append({
+            "host": host,
+            "port": safe_port,
+            "server_name": host,
+            "connect_endpoint": f"{host}:{safe_port}",
+            "source_lines": list(parsed_target.get("source_lines") or []),
+            "sources": list(parsed_target.get("sources") or []),
+            "commands": {
+                "openssl_argv": openssl_argv,
+                "openssl_command": subprocess.list2cmdline(openssl_argv),
+            },
+            "python_ssl_recipe": {
+                "module": "ssl",
+                "context": "ssl.create_default_context()",
+                "connect": "socket.create_connection((host, port), timeout=timeout_seconds)",
+                "wrap": "context.wrap_socket(sock, server_hostname=host)",
+                "inspect": "ssock.getpeercert(), ssock.version(), ssock.cipher()",
+            },
+            "expected_fields": list(TLS_CERTIFICATE_PREVIEW_REVIEW_FIELDS),
+            "network": {
+                "requires_explicit_execution": True,
+                "side_effect": "Manual execution opens a TLS handshake to the target endpoint and sends SNI.",
+                "cache_policy": "Do not persist certificate PEMs or command output beyond the active review unless policy requires it.",
+            },
+        })
+
+    controls = [
+        "Review and execute generated commands outside HostsFileGet; this JSON plan never opens sockets.",
+        "Use SNI and hostname verification for every target so virtual-host certificates are evaluated correctly.",
+        "Compare Subject Alternative Name DNS entries, issuer, validity dates, fingerprint, TLS version, cipher, and hostname verification result.",
+        "Keep certificate output separate from hosts-file history and dispose of it after review unless retention is required.",
+    ]
+    warnings = list(TLS_CERTIFICATE_PREVIEW_WARNINGS)
+    if parsed["truncated"]:
+        warnings.append("Input contained more hostnames than the configured cap; increase --tls-preview-max-hosts only after review scope approval.")
+    if parsed["rejected"]:
+        warnings.append("Some input rows were ignored because no public DNS hostname could be extracted.")
+
+    return {
+        "schema": TLS_CERTIFICATE_PREVIEW_PLAN_SCHEMA,
+        "plan_only": True,
+        "target_count": len(targets),
+        "port": safe_port,
+        "timeout_seconds": safe_timeout,
+        "max_hosts": parsed["max_hosts"],
+        "targets": targets,
+        "rejected": parsed["rejected"],
+        "controls": controls,
+        "warnings": warnings,
+        "artifacts": {
+            "openssl_commands": [target["commands"]["openssl_command"] for target in targets],
+            "review_csv": _tls_certificate_preview_review_csv(targets),
+        },
+        "references": list(TLS_CERTIFICATE_PREVIEW_SOURCE_IDS),
+    }
+
+
+def format_tls_certificate_preview_catalog() -> str:
+    lines = [
+        "TLS certificate preview",
+        "",
+        "This is a plan-only certificate review workflow. HostsFileGet extracts public DNS hostnames and writes explicit TLS inspection commands; it does not open network sockets or cache certificates.",
+        "",
+        "Workflow:",
+        "- Provide hosts lines, URLs, or one DNS hostname per line.",
+        "- Generate a JSON plan with SNI-aware OpenSSL commands and a CSV review queue.",
+        "- Run commands manually only after scope approval, then compare certificate metadata before changing policy.",
+        "",
+        "Review fields:",
+    ]
+    lines.extend(f"- {field}" for field in TLS_CERTIFICATE_PREVIEW_REVIEW_FIELDS)
+    lines.extend(["", "Warnings:"])
+    lines.extend(f"- {warning}" for warning in TLS_CERTIFICATE_PREVIEW_WARNINGS)
+    lines.extend(["", "Roadmap source IDs:", f"- {', '.join(TLS_CERTIFICATE_PREVIEW_SOURCE_IDS)}"])
+    return "\n".join(lines)
+
+
+def format_tls_certificate_preview_plan(plan: dict) -> str:
+    lines = [
+        "TLS Certificate Preview Plan",
+        f"Schema: {plan.get('schema')}",
+        f"Plan only: {'yes' if plan.get('plan_only') else 'no'}",
+        f"Targets: {int(plan.get('target_count') or 0):,}",
+        f"Port: {int(plan.get('port') or 0)}",
+        f"Timeout: {int(plan.get('timeout_seconds') or 0)} second(s)",
+        "",
+        "Targets:",
+    ]
+    targets = plan.get("targets") or []
+    if not targets:
+        lines.append("- none")
+    for target in targets[:10]:
+        lines.append(f"- {target.get('host')}:{target.get('port')} using SNI {target.get('server_name')}")
+        lines.append(f"  Command: {target.get('commands', {}).get('openssl_command')}")
+    omitted = max(0, len(targets) - 10)
+    if omitted:
+        lines.append(f"- ... {omitted:,} additional target(s) in JSON")
+    rejected = plan.get("rejected") or []
+    if rejected:
+        lines.extend(["", "Rejected rows:"])
+        for row in rejected[:10]:
+            lines.append(f"- line {row.get('line')}: {row.get('reason')}")
+    lines.extend(["", "Controls:"])
+    for control in plan.get("controls") or []:
+        lines.append(f"- {control}")
+    lines.extend(["", "Warnings:"])
+    for warning in plan.get("warnings") or TLS_CERTIFICATE_PREVIEW_WARNINGS:
+        lines.append(f"- {warning}")
+    lines.extend(["", "Roadmap source IDs:", f"- {', '.join(plan.get('references') or TLS_CERTIFICATE_PREVIEW_SOURCE_IDS)}"])
     return "\n".join(lines)
 
 
@@ -18440,6 +18786,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="IDN / Homograph Report...", command=self.show_idn_homograph_report)
         tools_menu.add_command(label="CT / Typosquat Watchdog...", command=self.show_ct_typosquat_watchdog)
         tools_menu.add_command(label="CTI Enrichment Plans...", command=self.show_cti_enrichment_plans)
+        tools_menu.add_command(label="TLS Certificate Preview...", command=self.show_tls_certificate_preview)
         tools_menu.add_command(label="NRD / DGA Threat Feed Packs...", command=self.show_threat_feed_packs)
         tools_menu.add_command(label="CNAME Cloaking Workflow...", command=self.show_cname_cloaking_workflow)
         tools_menu.add_command(label="DNS Bypass Diagnostics...", command=self.show_dns_bypass_diagnostics)
@@ -19530,6 +19877,16 @@ class HostsFileEditor:
             "CTI enrichment plans",
             "Plan-only VirusTotal, URLhaus, MISP, and STIX enrichment templates for reviewed IoCs.",
             format_cti_enrichment_catalog(),
+            tone="warning",
+            width=980,
+            height=740,
+        )
+
+    def show_tls_certificate_preview(self):
+        self._show_text_report_dialog(
+            "TLS certificate preview",
+            "Plan-only SNI-aware certificate review commands for scoped hosts and URLs.",
+            format_tls_certificate_preview_catalog(),
             tone="warning",
             width=980,
             height=740,
@@ -25134,6 +25491,37 @@ def _cli_cti_enrichment_plan(
     return 0
 
 
+def _cli_tls_certificate_preview_list() -> int:
+    _cli_print(format_tls_certificate_preview_catalog())
+    return 0
+
+
+def _cli_tls_certificate_preview_plan(
+    input_path: str,
+    output_path: str,
+    port: int,
+    timeout_seconds: int,
+    max_hosts: int,
+) -> int:
+    try:
+        plan = build_tls_certificate_preview_plan(
+            read_text_file_content(input_path),
+            port=port,
+            timeout_seconds=timeout_seconds,
+            max_hosts=max_hosts,
+        )
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        write_text_file_atomic(output_path, json.dumps(plan, indent=2))
+    except (OSError, ValueError) as exc:
+        _cli_print(f"TLS certificate preview plan failed: {exc}")
+        return 2
+    _cli_print(format_tls_certificate_preview_plan(plan))
+    _cli_print(f"Wrote TLS certificate preview plan to {output_path}")
+    return 0
+
+
 def _cli_threat_feed_list() -> int:
     _cli_print(format_threat_feed_pack_catalog())
     return 0
@@ -26078,6 +26466,11 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--cti-enrichment-provider",
         "--cti-enrichment-max-iocs",
         "--cti-enrichment-misp-url",
+        "--tls-preview-list",
+        "--tls-preview-plan",
+        "--tls-preview-port",
+        "--tls-preview-timeout",
+        "--tls-preview-max-hosts",
         "--threat-feed-list",
         "--threat-feed-plan",
         "--cname-cloaking-list",
@@ -26190,6 +26583,10 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--cti-enrichment-provider=",
         "--cti-enrichment-max-iocs=",
         "--cti-enrichment-misp-url=",
+        "--tls-preview-plan=",
+        "--tls-preview-port=",
+        "--tls-preview-timeout=",
+        "--tls-preview-max-hosts=",
         "--threat-feed-plan=",
         "--cname-cloaking-plan=",
         "--encrypted-dns-bypass-plan=",
@@ -26394,6 +26791,16 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--cti-enrichment-provider", action="append", metavar="PROVIDER", help="Limit --cti-enrichment-plan to a provider ID or alias. Repeat for multiple providers.")
     parser.add_argument("--cti-enrichment-max-iocs", type=int, default=CTI_ENRICHMENT_DEFAULT_MAX_IOCS, metavar="COUNT", help=f"Maximum IoCs to include in --cti-enrichment-plan; defaults to {CTI_ENRICHMENT_DEFAULT_MAX_IOCS}.")
     parser.add_argument("--cti-enrichment-misp-url", default=CTI_ENRICHMENT_DEFAULT_MISP_URL, metavar="URL", help="MISP base URL placeholder for --cti-enrichment-plan request templates.")
+    parser.add_argument("--tls-preview-list", action="store_true", help="Describe the plan-only TLS certificate preview workflow.")
+    parser.add_argument(
+        "--tls-preview-plan",
+        nargs=2,
+        metavar=("INPUT", "OUTPUT"),
+        help="Write a plan-only TLS certificate preview JSON plan from INPUT hosts/URLs to OUTPUT. No network sockets are opened.",
+    )
+    parser.add_argument("--tls-preview-port", type=int, default=TLS_CERTIFICATE_PREVIEW_DEFAULT_PORT, metavar="PORT", help=f"TLS port for --tls-preview-plan commands; defaults to {TLS_CERTIFICATE_PREVIEW_DEFAULT_PORT}.")
+    parser.add_argument("--tls-preview-timeout", type=int, default=TLS_CERTIFICATE_PREVIEW_DEFAULT_TIMEOUT_SECONDS, metavar="SECONDS", help=f"Timeout placeholder for --tls-preview-plan commands; defaults to {TLS_CERTIFICATE_PREVIEW_DEFAULT_TIMEOUT_SECONDS}.")
+    parser.add_argument("--tls-preview-max-hosts", type=int, default=TLS_CERTIFICATE_PREVIEW_DEFAULT_MAX_HOSTS, metavar="COUNT", help=f"Maximum hostnames to include in --tls-preview-plan; defaults to {TLS_CERTIFICATE_PREVIEW_DEFAULT_MAX_HOSTS}.")
     parser.add_argument("--threat-feed-list", action="store_true", help="List curated NRD/DGA/TIF threat feed packs.")
     parser.add_argument(
         "--threat-feed-plan",
@@ -26755,6 +27162,23 @@ def _handle_cli_args(argv: list[str]) -> int | None:
             args.cti_enrichment_provider,
             args.cti_enrichment_max_iocs,
             args.cti_enrichment_misp_url,
+        )
+    tls_preview_options = [
+        args.tls_preview_port != TLS_CERTIFICATE_PREVIEW_DEFAULT_PORT,
+        args.tls_preview_timeout != TLS_CERTIFICATE_PREVIEW_DEFAULT_TIMEOUT_SECONDS,
+        args.tls_preview_max_hosts != TLS_CERTIFICATE_PREVIEW_DEFAULT_MAX_HOSTS,
+    ]
+    if any(tls_preview_options) and not args.tls_preview_plan:
+        parser.error("--tls-preview-* options require --tls-preview-plan INPUT OUTPUT")
+    if args.tls_preview_list:
+        return _cli_tls_certificate_preview_list()
+    if args.tls_preview_plan:
+        return _cli_tls_certificate_preview_plan(
+            args.tls_preview_plan[0],
+            args.tls_preview_plan[1],
+            args.tls_preview_port,
+            args.tls_preview_timeout,
+            args.tls_preview_max_hosts,
         )
     if args.threat_feed_list:
         return _cli_threat_feed_list()
