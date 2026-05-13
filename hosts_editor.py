@@ -323,6 +323,25 @@ MANAGED_PACKAGE_TARGET_ALIASES = {
     "sccm": "sccm-application",
     "mecm": "sccm-application",
 }
+VSCODE_COMPANION_EXPORT_SCHEMA = "hostsfileget.vscode-companion-export.v1"
+VSCODE_COMPANION_PLAN_JSON_NAME = "vscode-companion-export-plan.json"
+VSCODE_COMPANION_README_NAME = "README.md"
+VSCODE_COMPANION_EXTENSION_JS_NAME = "extension.js"
+VSCODE_COMPANION_PACKAGE_JSON_NAME = "package.json"
+VSCODE_COMPANION_VSCODEIGNORE_NAME = ".vscodeignore"
+VSCODE_COMPANION_DEFAULT_NAME = "hostsfileget-companion"
+VSCODE_COMPANION_DEFAULT_DISPLAY_NAME = "HostsFileGet Companion"
+VSCODE_COMPANION_DEFAULT_VERSION = "0.1.0"
+VSCODE_COMPANION_DEFAULT_PUBLISHER = "hostsfileget"
+VSCODE_COMPANION_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$")
+VSCODE_COMPANION_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?$")
+VSCODE_COMPANION_WARNINGS = (
+    "Export-only: HostsFileGet writes a VS Code extension scaffold but does not install, package, publish, or run it.",
+    "The extension talks only to the opt-in HostsFileGet loopback API and inherits its bearer-token requirement.",
+    "The generated extension has read-only commands for status and clean preview; it does not write the Windows hosts file.",
+    "Review and package with the normal VS Code extension tooling before distributing.",
+)
+VSCODE_COMPANION_REFERENCES = ("O1", "O2", "S31", "S32", "S33", "S34", "S35", "S36")
 SCHEDULED_TASK_NAME = "HostsFileGet Auto-Update"
 CLI_LOG_FILENAME = "cli.log"
 CLI_ACTIVITY_FILENAME = "cli-activity.jsonl"
@@ -6007,6 +6026,398 @@ def format_managed_package_export_plan(plan: dict) -> str:
     lines.extend(["", "Commands:"])
     for name, command in (plan.get("commands") or {}).items():
         lines.append(f"- {name}: {_format_command_for_display(command)}")
+    lines.extend(["", "Warnings:"])
+    for warning in plan.get("warnings") or []:
+        lines.append(f"- {warning}")
+    references = plan.get("references") or []
+    if references:
+        lines.extend(["", "Roadmap source IDs:", f"- {', '.join(references)}"])
+    return "\n".join(lines)
+
+
+def sanitize_vscode_companion_extension_name(name: str | None = None) -> str:
+    value = str(name or VSCODE_COMPANION_DEFAULT_NAME).strip().lower()
+    if not VSCODE_COMPANION_NAME_RE.match(value):
+        raise ValueError(
+            "VS Code extension name must be 3-50 lowercase letters, digits, or hyphens, "
+            "and must start/end with a letter or digit."
+        )
+    return value
+
+
+def sanitize_vscode_companion_version(version: str | None = None) -> str:
+    value = str(version or VSCODE_COMPANION_DEFAULT_VERSION).strip()
+    if value.startswith("v"):
+        value = value[1:]
+    if not VSCODE_COMPANION_VERSION_RE.match(value):
+        raise ValueError("VS Code extension version must be semantic version form MAJOR.MINOR.PATCH.")
+    return value
+
+
+def sanitize_vscode_companion_api_base_url(url: str | None = None) -> str:
+    value = str(url or f"http://{LOCAL_API_DEFAULT_HOST}:{LOCAL_API_DEFAULT_PORT}").strip()
+    parsed = urllib.parse.urlparse(value)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("VS Code companion API base URL must use http or https.")
+    if not parsed.hostname or not is_loopback_api_host(parsed.hostname):
+        raise ValueError("VS Code companion API base URL must point at localhost, 127.0.0.1, or ::1.")
+    if parsed.path not in ("", "/") or parsed.params or parsed.query or parsed.fragment:
+        raise ValueError("VS Code companion API base URL must not include a path, query, or fragment.")
+    return value.rstrip("/")
+
+
+def build_vscode_companion_package_json(name: str, version: str, api_base_url: str) -> dict:
+    commands = [
+        {"command": "hostsfileget.showStatus", "title": "HostsFileGet: Show Local API Status"},
+        {"command": "hostsfileget.cleanPreviewSelection", "title": "HostsFileGet: Clean Preview Selection"},
+        {"command": "hostsfileget.setApiToken", "title": "HostsFileGet: Set API Token"},
+        {"command": "hostsfileget.clearApiToken", "title": "HostsFileGet: Clear API Token"},
+    ]
+    return {
+        "name": name,
+        "displayName": VSCODE_COMPANION_DEFAULT_DISPLAY_NAME,
+        "description": "Read-only companion commands for the HostsFileGet local API.",
+        "version": version,
+        "publisher": VSCODE_COMPANION_DEFAULT_PUBLISHER,
+        "license": "MIT",
+        "engines": {"vscode": "^1.74.0"},
+        "categories": ["Other"],
+        "main": f"./{VSCODE_COMPANION_EXTENSION_JS_NAME}",
+        "activationEvents": [f"onCommand:{command['command']}" for command in commands],
+        "contributes": {
+            "commands": commands,
+            "configuration": {
+                "title": "HostsFileGet",
+                "properties": {
+                    "hostsfileget.apiBaseUrl": {
+                        "type": "string",
+                        "default": api_base_url,
+                        "description": "Loopback HostsFileGet local API base URL.",
+                    },
+                    "hostsfileget.requestTimeoutMs": {
+                        "type": "number",
+                        "default": 5000,
+                        "minimum": 1000,
+                        "maximum": 60000,
+                        "description": "Timeout for local API requests.",
+                    },
+                },
+            },
+        },
+    }
+
+
+def build_vscode_companion_extension_js(api_base_url: str) -> str:
+    default_url = json.dumps(api_base_url)
+    return "\n".join([
+        '"use strict";',
+        "",
+        'const http = require("http");',
+        'const https = require("https");',
+        'const vscode = require("vscode");',
+        "",
+        'const SECRET_KEY = "hostsfileget.apiToken";',
+        f"const DEFAULT_API_BASE_URL = {default_url};",
+        "",
+        "function activate(context) {",
+        '  const output = vscode.window.createOutputChannel("HostsFileGet");',
+        "  context.subscriptions.push(output);",
+        "",
+        '  context.subscriptions.push(vscode.commands.registerCommand("hostsfileget.showStatus", async () => {',
+        "    try {",
+        "      const client = await createClient(context);",
+        '      const payload = await client.requestJson("GET", "/v1/status");',
+        "      output.clear();",
+        '      output.appendLine("HostsFileGet Local API Status");',
+        '      output.appendLine(`Version: ${payload.version}`);',
+        '      output.appendLine(`Hosts path: ${payload.hosts_path}`);',
+        '      output.appendLine(`Write endpoints enabled: ${payload.write_endpoints_enabled}`);',
+        "      output.show(true);",
+        '      vscode.window.showInformationMessage(`HostsFileGet API ${payload.version} is reachable.`);',
+        "    } catch (error) {",
+        "      showError(error);",
+        "    }",
+        "  }));",
+        "",
+        '  context.subscriptions.push(vscode.commands.registerCommand("hostsfileget.cleanPreviewSelection", async () => {',
+        "    try {",
+        "      const editor = vscode.window.activeTextEditor;",
+        "      if (!editor) {",
+        '        throw new Error("Open a hosts-like document before running clean preview.");',
+        "      }",
+        "      const selection = editor.selection;",
+        "      const text = selection.isEmpty ? editor.document.getText() : editor.document.getText(selection);",
+        "      if (!text.trim()) {",
+        '        throw new Error("The selected text is empty.");',
+        "      }",
+        "      const client = await createClient(context);",
+        '      const payload = await client.requestJson("POST", "/v1/clean-preview", { text });',
+        '      const cleanedText = `${payload.cleaned_lines.join("\\n")}\\n`;',
+        "      const document = await vscode.workspace.openTextDocument({ content: cleanedText, language: editor.document.languageId || \"plaintext\" });",
+        "      await vscode.window.showTextDocument(document, { preview: false });",
+        '      vscode.window.showInformationMessage(`HostsFileGet clean preview produced ${payload.cleaned_line_count} lines without writing hosts.`);',
+        "    } catch (error) {",
+        "      showError(error);",
+        "    }",
+        "  }));",
+        "",
+        '  context.subscriptions.push(vscode.commands.registerCommand("hostsfileget.setApiToken", async () => {',
+        "    const token = await vscode.window.showInputBox({",
+        '      prompt: "HostsFileGet local API bearer token",',
+        "      password: true,",
+        "      ignoreFocusOut: true,",
+        "      validateInput: value => value && value.length >= 16 ? undefined : \"Token must be at least 16 characters.\"",
+        "    });",
+        "    if (token) {",
+        "      await context.secrets.store(SECRET_KEY, token);",
+        '      vscode.window.showInformationMessage("HostsFileGet API token saved to VS Code SecretStorage.");',
+        "    }",
+        "  }));",
+        "",
+        '  context.subscriptions.push(vscode.commands.registerCommand("hostsfileget.clearApiToken", async () => {',
+        "    await context.secrets.delete(SECRET_KEY);",
+        '    vscode.window.showInformationMessage("HostsFileGet API token cleared from VS Code SecretStorage.");',
+        "  }));",
+        "}",
+        "",
+        "function deactivate() {}",
+        "",
+        "async function createClient(context) {",
+        '  const config = vscode.workspace.getConfiguration("hostsfileget");',
+        '  const baseUrl = normalizeBaseUrl(config.get("apiBaseUrl", DEFAULT_API_BASE_URL));',
+        '  const timeoutMs = Number(config.get("requestTimeoutMs", 5000));',
+        "  const token = await getApiToken(context);",
+        "  return {",
+        "    requestJson(method, path, body) {",
+        "      return requestJson(baseUrl, method, path, body, token, timeoutMs);",
+        "    }",
+        "  };",
+        "}",
+        "",
+        "async function getApiToken(context) {",
+        "  const stored = await context.secrets.get(SECRET_KEY);",
+        "  if (stored) {",
+        "    return stored;",
+        "  }",
+        "  if (process.env.HOSTSFILEGET_API_TOKEN) {",
+        "    return process.env.HOSTSFILEGET_API_TOKEN;",
+        "  }",
+        '  throw new Error("Set a HostsFileGet API token with the HostsFileGet: Set API Token command or HOSTSFILEGET_API_TOKEN.");',
+        "}",
+        "",
+        "function normalizeBaseUrl(value) {",
+        "  const url = new URL(value || DEFAULT_API_BASE_URL);",
+        '  if (url.protocol !== "http:" && url.protocol !== "https:") {',
+        '    throw new Error("HostsFileGet API URL must use http or https.");',
+        "  }",
+        '  if (!["localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname)) {',
+        '    throw new Error("HostsFileGet API URL must point at localhost, 127.0.0.1, or ::1.");',
+        "  }",
+        '  url.pathname = "";',
+        '  url.search = "";',
+        '  url.hash = "";',
+        '  return url.toString().replace(/\\/$/, "");',
+        "}",
+        "",
+        "function requestJson(baseUrl, method, path, body, token, timeoutMs) {",
+        "  return new Promise((resolve, reject) => {",
+        "    const url = new URL(path, baseUrl);",
+        "    const serialized = body ? JSON.stringify(body) : undefined;",
+        '    const transport = url.protocol === "https:" ? https : http;',
+        "    const request = transport.request(url, {",
+        "      method,",
+        "      timeout: Number.isFinite(timeoutMs) ? timeoutMs : 5000,",
+        "      headers: {",
+        '        "Accept": "application/json",',
+        '        "Authorization": `Bearer ${token}`,',
+        "        ...(serialized ? {",
+        '          "Content-Type": "application/json",',
+        '          "Content-Length": Buffer.byteLength(serialized)',
+        "        } : {})",
+        "      }",
+        "    }, response => {",
+        "      const chunks = [];",
+        "      let size = 0;",
+        '      response.on("data", chunk => {',
+        "        size += chunk.length;",
+        "        if (size > 1024 * 1024) {",
+        '          request.destroy(new Error("HostsFileGet API response is too large."));',
+        "          return;",
+        "        }",
+        "        chunks.push(chunk);",
+        "      });",
+        '      response.on("end", () => {',
+        '        const text = Buffer.concat(chunks).toString("utf8");',
+        "        let payload;",
+        "        try {",
+        "          payload = text ? JSON.parse(text) : {};",
+        "        } catch (error) {",
+        "          reject(new Error(`HostsFileGet API returned invalid JSON: ${error.message}`));",
+        "          return;",
+        "        }",
+        "        if (response.statusCode < 200 || response.statusCode >= 300) {",
+        "          reject(new Error(payload.error || `HostsFileGet API request failed with ${response.statusCode}.`));",
+        "          return;",
+        "        }",
+        "        resolve(payload);",
+        "      });",
+        "    });",
+        '    request.on("timeout", () => request.destroy(new Error("HostsFileGet API request timed out.")));',
+        '    request.on("error", reject);',
+        "    if (serialized) {",
+        "      request.write(serialized);",
+        "    }",
+        "    request.end();",
+        "  });",
+        "}",
+        "",
+        "function showError(error) {",
+        "  const message = error && error.message ? error.message : String(error);",
+        "  vscode.window.showErrorMessage(`HostsFileGet: ${message}`);",
+        "}",
+        "",
+        "module.exports = { activate, deactivate };",
+        "",
+    ]) + "\n"
+
+
+def build_vscode_companion_readme(plan: dict) -> str:
+    extension = plan.get("extension") or {}
+    return "\n".join([
+        "# HostsFileGet Companion",
+        "",
+        "This exported VS Code extension scaffold provides read-only companion commands for the HostsFileGet local API.",
+        "",
+        "Commands:",
+        "",
+        "- `HostsFileGet: Show Local API Status` calls `GET /v1/status`.",
+        "- `HostsFileGet: Clean Preview Selection` sends the current selection or document to `POST /v1/clean-preview` and opens the cleaned result in an unsaved editor.",
+        "- `HostsFileGet: Set API Token` stores the bearer token in VS Code SecretStorage.",
+        "- `HostsFileGet: Clear API Token` removes the stored bearer token.",
+        "",
+        "Before use:",
+        "",
+        "```powershell",
+        "$env:HOSTSFILEGET_API_TOKEN = \"replace-with-at-least-16-random-chars\"",
+        "python hosts_editor.py --api-serve",
+        "```",
+        "",
+        "Default API base URL:",
+        "",
+        f"```text\n{extension.get('api_base_url')}\n```",
+        "",
+        "Safety boundary:",
+        "",
+        "- The scaffold is export-only. HostsFileGet does not install, package, publish, or run the extension.",
+        "- The generated extension enforces a loopback API base URL.",
+        "- Commands are read-only and do not write the Windows hosts file.",
+        "- Review, package, and publish with normal VS Code extension tooling after local testing.",
+    ]) + "\n"
+
+
+def build_vscode_companion_export_plan(
+    *,
+    output_name: str | None = None,
+    version: str | None = None,
+    api_base_url: str | None = None,
+    now=None,
+) -> dict:
+    safe_name = sanitize_vscode_companion_extension_name(output_name)
+    safe_version = sanitize_vscode_companion_version(version)
+    safe_api_base_url = sanitize_vscode_companion_api_base_url(api_base_url)
+    created_at = now or datetime.datetime.now()
+    if isinstance(created_at, datetime.datetime):
+        created_at = created_at.isoformat(timespec="seconds")
+    created_at = str(created_at)
+    package_json = build_vscode_companion_package_json(safe_name, safe_version, safe_api_base_url)
+    extension_js = build_vscode_companion_extension_js(safe_api_base_url)
+    plan = {
+        "schema": VSCODE_COMPANION_EXPORT_SCHEMA,
+        "app_version": APP_VERSION,
+        "created_at": created_at,
+        "plan_only": True,
+        "bundle_only": True,
+        "execution": "not-run",
+        "extension": {
+            "name": safe_name,
+            "display_name": VSCODE_COMPANION_DEFAULT_DISPLAY_NAME,
+            "version": safe_version,
+            "publisher": VSCODE_COMPANION_DEFAULT_PUBLISHER,
+            "api_base_url": safe_api_base_url,
+        },
+        "files": [
+            VSCODE_COMPANION_PACKAGE_JSON_NAME,
+            VSCODE_COMPANION_EXTENSION_JS_NAME,
+            VSCODE_COMPANION_README_NAME,
+            VSCODE_COMPANION_VSCODEIGNORE_NAME,
+        ],
+        "commands": [
+            "hostsfileget.showStatus",
+            "hostsfileget.cleanPreviewSelection",
+            "hostsfileget.setApiToken",
+            "hostsfileget.clearApiToken",
+        ],
+        "warnings": list(VSCODE_COMPANION_WARNINGS),
+        "references": list(VSCODE_COMPANION_REFERENCES),
+        "plan_filename": VSCODE_COMPANION_PLAN_JSON_NAME,
+        "package_json_filename": VSCODE_COMPANION_PACKAGE_JSON_NAME,
+        "extension_js_filename": VSCODE_COMPANION_EXTENSION_JS_NAME,
+        "readme_filename": VSCODE_COMPANION_README_NAME,
+        "vscodeignore_filename": VSCODE_COMPANION_VSCODEIGNORE_NAME,
+        "package_json": package_json,
+        "extension_js": extension_js,
+        "vscodeignore": "\n".join([
+            ".vscode/**",
+            ".gitignore",
+            VSCODE_COMPANION_PLAN_JSON_NAME,
+            "",
+        ]),
+    }
+    plan["readme"] = build_vscode_companion_readme(plan)
+    return plan
+
+
+def write_vscode_companion_export(plan: dict, output_dir: str) -> dict:
+    root = os.path.abspath(output_dir)
+    os.makedirs(root, exist_ok=True)
+    bundled = dict(plan)
+    artifacts = {
+        "plan_json": os.path.join(root, bundled["plan_filename"]),
+        "package_json": os.path.join(root, bundled["package_json_filename"]),
+        "extension_js": os.path.join(root, bundled["extension_js_filename"]),
+        "readme": os.path.join(root, bundled["readme_filename"]),
+        "vscodeignore": os.path.join(root, bundled["vscodeignore_filename"]),
+    }
+    bundled["output_dir"] = root
+    bundled["artifacts"] = artifacts
+    write_text_file_atomic(artifacts["package_json"], json.dumps(bundled["package_json"], indent=2))
+    write_text_file_atomic(artifacts["extension_js"], bundled["extension_js"])
+    write_text_file_atomic(artifacts["readme"], bundled["readme"])
+    write_text_file_atomic(artifacts["vscodeignore"], bundled["vscodeignore"])
+    write_text_file_atomic(artifacts["plan_json"], json.dumps(bundled, indent=2))
+    return bundled
+
+
+def format_vscode_companion_export_plan(plan: dict) -> str:
+    extension = plan.get("extension") or {}
+    lines = [
+        "VS Code Companion Export Plan",
+        f"Schema: {plan.get('schema')}",
+        f"Plan only: {'yes' if plan.get('plan_only') else 'no'}",
+        f"Bundle only: {'yes' if plan.get('bundle_only') else 'no'}",
+        f"Execution: {plan.get('execution')}",
+        f"Extension: {extension.get('name')} {extension.get('version')}",
+        f"API base URL: {extension.get('api_base_url')}",
+        "",
+        "Commands:",
+    ]
+    for command in plan.get("commands") or []:
+        lines.append(f"- {command}")
+    artifacts = plan.get("artifacts") or {}
+    if artifacts:
+        lines.extend(["", "Artifacts:"])
+        for name, path in artifacts.items():
+            lines.append(f"- {name}: {path}")
     lines.extend(["", "Warnings:"])
     for warning in plan.get("warnings") or []:
         lines.append(f"- {warning}")
@@ -23261,6 +23672,27 @@ def _cli_managed_package_export(
     return 0
 
 
+def _cli_vscode_companion_export(
+    output_dir: str,
+    output_name: str | None,
+    version: str | None,
+    api_base_url: str | None,
+) -> int:
+    try:
+        plan = build_vscode_companion_export_plan(
+            output_name=output_name,
+            version=version,
+            api_base_url=api_base_url,
+        )
+        plan = write_vscode_companion_export(plan, output_dir)
+    except (OSError, ValueError) as exc:
+        _cli_print(f"VS Code companion export failed: {exc}")
+        return 2
+    _cli_print(format_vscode_companion_export_plan(plan))
+    _cli_print(f"Wrote VS Code companion extension scaffold to {plan['output_dir']}")
+    return 0
+
+
 def _cli_profile_schedule_list(at_value: str | None = None) -> int:
     try:
         config_path = get_primary_config_path("hosts_editor_config.json")
@@ -23443,6 +23875,10 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--managed-label",
         "--managed-install-dir",
         "--managed-exe-name",
+        "--vscode-extension-export",
+        "--vscode-extension-name",
+        "--vscode-extension-version",
+        "--vscode-api-base-url",
         "--profile-schedule-list",
         "--profile-schedule-add",
         "--profile-schedule-days",
@@ -23540,6 +23976,10 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--managed-label=",
         "--managed-install-dir=",
         "--managed-exe-name=",
+        "--vscode-extension-export=",
+        "--vscode-extension-name=",
+        "--vscode-extension-version=",
+        "--vscode-api-base-url=",
         "--profile-schedule-add=",
         "--profile-schedule-days=",
         "--profile-schedule-name=",
@@ -23664,6 +24104,15 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--managed-label", metavar="TEXT", help="Managed hosts block label for --managed-package-export.")
     parser.add_argument("--managed-install-dir", default=MANAGED_PACKAGE_DEFAULT_INSTALL_DIR, metavar="PATH", help="Target install directory for --managed-package-export.")
     parser.add_argument("--managed-exe-name", default=MANAGED_PACKAGE_DEFAULT_EXE_NAME, metavar="NAME", help="Staged executable filename for --managed-package-export.")
+    parser.add_argument("--vscode-extension-export", metavar="OUTPUT_DIR", help="Write a guarded VS Code companion extension scaffold into OUTPUT_DIR.")
+    parser.add_argument("--vscode-extension-name", default=VSCODE_COMPANION_DEFAULT_NAME, metavar="NAME", help="Extension name for --vscode-extension-export.")
+    parser.add_argument("--vscode-extension-version", default=VSCODE_COMPANION_DEFAULT_VERSION, metavar="VERSION", help="Extension version for --vscode-extension-export.")
+    parser.add_argument(
+        "--vscode-api-base-url",
+        default=f"http://{LOCAL_API_DEFAULT_HOST}:{LOCAL_API_DEFAULT_PORT}",
+        metavar="URL",
+        help="Loopback API base URL for --vscode-extension-export.",
+    )
     parser.add_argument("--profile-schedule-list", action="store_true", help="Show the time-bound profile activation schedule without writing files.")
     parser.add_argument(
         "--profile-schedule-add",
@@ -23930,6 +24379,20 @@ def _handle_cli_args(argv: list[str]) -> int | None:
             args.managed_label,
             args.managed_install_dir,
             args.managed_exe_name,
+        )
+    vscode_options = [
+        args.vscode_extension_name != VSCODE_COMPANION_DEFAULT_NAME,
+        args.vscode_extension_version != VSCODE_COMPANION_DEFAULT_VERSION,
+        args.vscode_api_base_url != f"http://{LOCAL_API_DEFAULT_HOST}:{LOCAL_API_DEFAULT_PORT}",
+    ]
+    if any(vscode_options) and not args.vscode_extension_export:
+        parser.error("--vscode-* options require --vscode-extension-export OUTPUT_DIR")
+    if args.vscode_extension_export:
+        return _cli_vscode_companion_export(
+            args.vscode_extension_export,
+            args.vscode_extension_name,
+            args.vscode_extension_version,
+            args.vscode_api_base_url,
         )
     if args.profile_schedule_add:
         return _cli_profile_schedule_add(

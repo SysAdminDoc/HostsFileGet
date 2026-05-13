@@ -73,6 +73,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - plan-only NextDNS and Control D cloud DNS adapter plans that never store API keys or execute remote writes
   - plan-only router/gateway adapter bundles for OpenWrt dnsmasq, generic dnsmasq, and Unbound that generate reviewable SSH scripts without executing them
   - plan-only Intune, Group Policy, PDQ Deploy, and Configuration Manager package export bundles with hash-verified install/detect/uninstall wrappers
+  - export-only VS Code companion extension scaffolds that use the opt-in loopback REST API for status and clean-preview commands
   - RPZ, Unbound, Privoxy, gzip-compressed hosts, and bzip2-compressed hosts
 - Operational utilities:
   - DNS cache flush
@@ -281,6 +282,12 @@ $env:HOSTSFILEGET_API_TOKEN = "replace-with-at-least-16-random-chars"
 python hosts_editor.py --api-serve
 ```
 
+Export a guarded VS Code companion extension scaffold without installing, running, packaging, or publishing it:
+
+```powershell
+python hosts_editor.py --vscode-extension-export .\vscode-hostsfileget-companion --vscode-api-base-url http://127.0.0.1:8765
+```
+
 Export or import encrypted profile sync bundles through a Git worktree:
 
 ```powershell
@@ -418,6 +425,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - NRPT policy export: `docs/nrpt-policy-export.md`
 - Windows Sandbox / VM hosts bundle: `docs/sandbox-vm-hosts.md`
 - Managed package exports: `docs/managed-package-exports.md`
+- VS Code companion export: `docs/vscode-companion.md`
 - Optional Git history: `docs/git-history.md`
 - Scheduler activity report: `docs/scheduler-activity.md`
 - Portable bundle config: `docs/portable-config.md`
