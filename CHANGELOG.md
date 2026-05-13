@@ -4,6 +4,10 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**TLS certificate preview**
+- Added `--tls-preview-list` and `--tls-preview-plan` for plan-only SNI-aware TLS certificate review queues.
+- The plan exports normalized public hostnames, OpenSSL command arrays, Python `ssl` review guidance, expected certificate fields, and CSV review rows while warning that HostsFileGet does not open sockets or cache certificate chains.
+
 **CTI enrichment plans**
 - Added `--cti-enrichment-list` and `--cti-enrichment-plan` for plan-only VirusTotal, URLhaus, MISP, and STIX enrichment handoffs.
 - The plan exports normalized IoCs, provider request templates with API-key placeholders, a local STIX 2.1 observable bundle, and CSV review rows while warning that enrichment signals are not automatic hosts-file verdicts.

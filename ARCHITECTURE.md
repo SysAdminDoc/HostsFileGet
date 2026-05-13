@@ -32,6 +32,8 @@ Certificate Transparency and typosquat watchdog support is also plan-only. Hosts
 
 CTI enrichment support follows the same boundary. HostsFileGet can extract domains, URLs, and public IPs, then write VirusTotal, URLhaus, and MISP request templates plus a local STIX 2.1 observable bundle, but it does not execute enrichment requests, store API keys, call TAXII services, or convert provider scores directly into hosts-file changes.
 
+TLS certificate preview support is also plan-only. HostsFileGet can extract public DNS hostnames from hosts-like text or URLs and write SNI-aware OpenSSL/Python SSL review guidance, but it does not open sockets, perform certificate handshakes, cache certificate chains, or turn certificate metadata directly into hosts-file changes.
+
 DNS rebinding protection is also advisory. HostsFileGet can report static hosts entries that map external-looking names to private, local, loopback, link-local, ULA, CGNAT, or special-use ranges, but live DNS rebinding enforcement belongs in the resolver, router, or managed endpoint policy.
 
 SafeSearch and restricted-mode templates follow the same boundary. HostsFileGet can produce reviewable hosts-line and DNS CNAME plans for Google, Bing, DuckDuckGo, and YouTube, but it does not apply parental controls, create DNS records, install browser policy, or enforce account/device controls.
@@ -119,6 +121,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `docs/idn-homograph.md` | IDN/Punycode decoding and deterministic homograph-risk report behavior |
 | `docs/ct-typosquat-watchdog.md` | Plan-only Certificate Transparency search and typosquat candidate review workflow |
 | `docs/cti-enrichment.md` | Plan-only VirusTotal, URLhaus, MISP, and STIX enrichment request templates |
+| `docs/tls-certificate-preview.md` | Plan-only SNI-aware TLS certificate preview commands and review boundary |
 | `docs/threat-feed-packs.md` | NRD, DGA, and threat-intel feed pack planning with freshness and false-positive controls |
 | `docs/cname-cloaking.md` | CNAME cloaking source packs, hosts-file limits, and DNS handoff guidance |
 | `docs/encrypted-dns-bypass.md` | Encrypted-DNS bypass source packs and router/firewall handoff guidance |

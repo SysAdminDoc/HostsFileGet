@@ -23,6 +23,7 @@ from hosts_editor import (
     DNS_REWRITE_PLAN_SCHEMA,
     CT_WATCHDOG_PLAN_SCHEMA,
     CTI_ENRICHMENT_PLAN_SCHEMA,
+    TLS_CERTIFICATE_PREVIEW_PLAN_SCHEMA,
     DOMAIN_CATEGORY_RULES,
     FTL_BLOCKED_STATUS_CODES,
     HostsFileEditor,
@@ -102,6 +103,7 @@ from hosts_editor import (
     parse_controld_activity_csv,
     parse_ct_watchdog_domains,
     parse_cti_enrichment_iocs,
+    parse_tls_certificate_preview_targets,
     parse_dns_rewrite_records,
     parse_pinned_import_payload,
     read_provenance_events,
@@ -153,6 +155,7 @@ from hosts_editor import (
     build_dns_rewrite_plan,
     build_ct_typosquat_watchdog_plan,
     build_cti_enrichment_plan,
+    build_tls_certificate_preview_plan,
     build_portable_bundle_readme,
     build_scheduler_activity_report,
     build_scheduler_update_command,
@@ -215,6 +218,8 @@ from hosts_editor import (
     format_ct_typosquat_watchdog_plan,
     format_cti_enrichment_catalog,
     format_cti_enrichment_plan,
+    format_tls_certificate_preview_catalog,
+    format_tls_certificate_preview_plan,
     format_cname_cloaking_catalog,
     format_cname_cloaking_plan,
     format_dns_rebinding_report,
@@ -3157,6 +3162,22 @@ profile:
                 "https://misp.local",
             )
 
+        with mock.patch.object(hosts_editor, "_cli_tls_certificate_preview_list", return_value=0) as mocked_tls_list:
+            self.assertEqual(hosts_editor._handle_cli_args(["--tls-preview-list"]), 0)
+            mocked_tls_list.assert_called_once_with()
+
+        with mock.patch.object(hosts_editor, "_cli_tls_certificate_preview_plan", return_value=0) as mocked_tls_plan:
+            self.assertEqual(
+                hosts_editor._handle_cli_args([
+                    "--tls-preview-plan", "hosts.txt", "tls-plan.json",
+                    "--tls-preview-port", "8443",
+                    "--tls-preview-timeout", "9",
+                    "--tls-preview-max-hosts", "25",
+                ]),
+                0,
+            )
+            mocked_tls_plan.assert_called_once_with("hosts.txt", "tls-plan.json", 8443, 9, 25)
+
     def test_handle_cli_args_routes_threat_feed_flags(self):
         with mock.patch.object(hosts_editor, "_cli_threat_feed_list", return_value=0) as mocked_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--threat-feed-list"]), 0)
@@ -4970,6 +4991,49 @@ profile:
         self.assertIn("STIX 2.1", catalog)
         self.assertIn("does not perform live lookups", catalog)
         self.assertIn("S44", catalog)
+
+    def test_tls_certificate_preview_plan_builds_sni_review_commands(self):
+        text = "\n".join([
+            "0.0.0.0 ads.example.com",
+            "https://login.example.org/path?q=1",
+            "secure.example.net:8443",
+            "127.0.0.1 localhost",
+            "not-a-host",
+        ])
+
+        parsed = parse_tls_certificate_preview_targets(text, max_hosts=20)
+        plan = build_tls_certificate_preview_plan(
+            text,
+            port=8443,
+            timeout_seconds=9,
+            max_hosts=20,
+        )
+        rendered = format_tls_certificate_preview_plan(plan)
+
+        self.assertEqual(plan["schema"], TLS_CERTIFICATE_PREVIEW_PLAN_SCHEMA)
+        self.assertTrue(plan["plan_only"])
+        self.assertEqual(parsed["hosts"], ["ads.example.com", "login.example.org", "secure.example.net"])
+        self.assertEqual(plan["target_count"], 3)
+        self.assertEqual(plan["port"], 8443)
+        self.assertEqual(plan["timeout_seconds"], 9)
+        first_target = next(target for target in plan["targets"] if target["host"] == "ads.example.com")
+        self.assertIn("-servername ads.example.com", first_target["commands"]["openssl_command"])
+        self.assertIn("-verify_hostname ads.example.com", first_target["commands"]["openssl_command"])
+        self.assertIn("subject_alt_name_dns", first_target["expected_fields"])
+        self.assertIn("ssl.create_default_context()", first_target["python_ssl_recipe"]["context"])
+        self.assertIn("ads.example.com", plan["artifacts"]["review_csv"])
+        self.assertIn("Plan only: yes", rendered)
+        self.assertIn("Roadmap source IDs", rendered)
+        self.assertTrue(any("does not open sockets" in warning for warning in plan["warnings"]))
+
+    def test_tls_certificate_preview_catalog_is_guarded_and_plan_only(self):
+        catalog = format_tls_certificate_preview_catalog()
+
+        self.assertIn("TLS certificate preview", catalog)
+        self.assertIn("plan-only certificate review workflow", catalog)
+        self.assertIn("SNI-aware OpenSSL commands", catalog)
+        self.assertIn("does not open network sockets", catalog)
+        self.assertIn("S50", catalog)
 
     def test_threat_feed_catalog_lists_guarded_packs_and_sources(self):
         pack_ids = {pack["id"] for pack in list_threat_feed_packs()}
