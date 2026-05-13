@@ -36,6 +36,7 @@ from hosts_editor import (
     STALE_FRESH_HOURS,
     STALE_WARN_HOURS,
     NRPT_POLICY_PLAN_SCHEMA,
+    TUI_SCHEMA,
     VSCODE_COMPANION_EXPORT_SCHEMA,
     WFP_BLOCKER_PLAN_SCHEMA,
     append_provenance_event,
@@ -53,6 +54,7 @@ from hosts_editor import (
     build_local_api_status_payload,
     build_managed_hosts_block,
     build_managed_package_export_plan,
+    build_tui_launch_report,
     build_vscode_companion_export_plan,
     build_profile_sync_payload,
     build_allowlist_share_patch,
@@ -173,6 +175,7 @@ from hosts_editor import (
     format_i18n_contribution_report,
     format_managed_package_export_plan,
     format_managed_package_target_catalog,
+    format_tui_launch_report,
     format_vscode_companion_export_plan,
     format_rule_tier_report,
     format_declarative_config_payload,
@@ -2916,6 +2919,14 @@ profile:
                 "http://localhost:8765",
             )
 
+        with mock.patch.object(hosts_editor, "_cli_tui_status", return_value=0) as mocked_tui_status:
+            self.assertEqual(hosts_editor._handle_cli_args(["--tui-status"]), 0)
+            mocked_tui_status.assert_called_once_with()
+
+        with mock.patch.object(hosts_editor, "_cli_tui", return_value=0) as mocked_tui:
+            self.assertEqual(hosts_editor._handle_cli_args(["--tui"]), 0)
+            mocked_tui.assert_called_once_with(hosts_editor._default_hosts_file_path())
+
     def test_handle_cli_args_routes_cloud_dns_flags(self):
         with mock.patch.object(hosts_editor, "_cli_cloud_adapter_list", return_value=0) as mocked_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--cloud-adapter-list"]), 0)
@@ -3818,6 +3829,47 @@ profile:
         self.assertIn("hostsfileget.setApiToken", extension_js)
         self.assertIn("HOSTSFILEGET_API_TOKEN", extension_js)
         self.assertEqual(artifacts_exist, [True, True, True, True, True])
+
+    def test_tui_launch_report_is_optional_and_guarded(self):
+        probe = {
+            "package": "prompt_toolkit",
+            "requirement": "prompt_toolkit>=3.0.52,<4",
+            "available": False,
+            "version": None,
+            "error": "missing",
+        }
+        report = build_tui_launch_report(
+            prompt_toolkit_probe=probe,
+            now=datetime.datetime(2026, 5, 13, 14, 0, 0),
+        )
+        formatted = format_tui_launch_report(report)
+
+        self.assertEqual(report["schema"], TUI_SCHEMA)
+        self.assertTrue(report["optional_dependency"])
+        self.assertFalse(report["dependency"]["available"])
+        self.assertFalse(report["writes_hosts_file"])
+        self.assertFalse(report["requires_admin"])
+        self.assertIn("clean-preview <path>", [command["command"] for command in report["commands"]])
+        self.assertIn("requirements-tui.txt", formatted)
+        self.assertIn("Roadmap source IDs", formatted)
+
+    def test_cli_tui_status_and_missing_dependency_are_safe(self):
+        probe = {
+            "package": "prompt_toolkit",
+            "requirement": "prompt_toolkit>=3.0.52,<4",
+            "available": False,
+            "version": None,
+            "error": "No module named prompt_toolkit",
+        }
+
+        with mock.patch.object(hosts_editor, "probe_prompt_toolkit_dependency", return_value=probe):
+            with mock.patch.object(hosts_editor, "_cli_print") as mocked_print:
+                self.assertEqual(hosts_editor._cli_tui_status(), 0)
+                self.assertEqual(hosts_editor._cli_tui(hosts_editor._default_hosts_file_path()), 2)
+
+        printed = "\n".join(str(call.args[0]) for call in mocked_print.call_args_list)
+        self.assertIn("Dependency available: no", printed)
+        self.assertIn("python -m pip install -r requirements-tui.txt", printed)
 
     def test_cli_router_gateway_push_plan_writes_bundle_without_remote_actions(self):
         import tempfile

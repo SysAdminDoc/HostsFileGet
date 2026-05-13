@@ -4,6 +4,10 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Optional prompt_toolkit TUI**
+- Added `--tui-status` and dependency-gated `--tui` for a keyboard-first prompt shell covering status, profiles, config paths, source bundles, and local clean-preview summaries.
+- Added `requirements-tui.txt` and docs so `prompt_toolkit` remains optional; the TUI does not write the Windows hosts file, run source-health workers, start the local API, or replace reviewed GUI/admin CLI write paths.
+
 **VS Code companion export**
 - Added `--vscode-extension-export` for a guarded VS Code companion extension scaffold that calls the opt-in loopback REST API for status and clean-preview commands.
 - The generated scaffold includes `package.json`, `extension.js`, `README.md`, `.vscodeignore`, and a review plan; HostsFileGet does not install, run, package, publish, or grant hosts-file write behavior to the extension.
