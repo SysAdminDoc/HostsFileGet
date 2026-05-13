@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>hostsfileget</id>
+    <version>{{VERSION}}</version>
+    <title>Hosts File Get</title>
+    <authors>SysAdminDoc</authors>
+    <owners>SysAdminDoc</owners>
+    <licenseUrl>https://github.com/SysAdminDoc/HostsFileGet/blob/main/LICENSE</licenseUrl>
+    <projectUrl>https://github.com/SysAdminDoc/HostsFileGet</projectUrl>
+    <projectSourceUrl>https://github.com/SysAdminDoc/HostsFileGet</projectSourceUrl>
+    <packageSourceUrl>https://github.com/SysAdminDoc/HostsFileGet</packageSourceUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <description>Windows-first hosts file editor, importer, cleaner, diagnostics, and safe writer.</description>
+    <summary>Inspect, clean, import, and safely write the Windows hosts file.</summary>
+    <releaseNotes>https://github.com/SysAdminDoc/HostsFileGet/releases/tag/v{{VERSION}}</releaseNotes>
+    <tags>hosts blocklist dns privacy windows admin</tags>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

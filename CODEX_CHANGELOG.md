@@ -101,6 +101,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F045 complete. Next roadmap item: F046 local REST facade with bearer auth.
 - Completed F046: added opt-in loopback-only bearer-auth local REST server, read-only status and clean-preview endpoints, CLI startup flags, docs, and regression tests for auth, loopback rejection, clean-preview behavior, live HTTP responses, and CLI routing.
 - Updated `ROADMAP.md` to mark F046 complete. Next roadmap item: F052 Winget and Chocolatey manifests.
+- Completed F052: added Winget and Chocolatey manifest templates, a deterministic render script, release workflow packaging, docs, and regression tests for release input validation/rendered manifests.
+- Updated `ROADMAP.md` to mark F052 complete. Next roadmap item: F053 translation contribution workflow.
 
 ## Scope
 

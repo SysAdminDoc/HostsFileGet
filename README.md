@@ -177,7 +177,7 @@ Keyboard shortcuts:
 Run the regression suite with:
 
 ```powershell
-python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py tests\test_gui_smoke.py tests\test_benchmarks.py benchmarks\large_file_benchmark.py
+python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py tests\test_gui_smoke.py tests\test_benchmarks.py tests\test_package_manifests.py benchmarks\large_file_benchmark.py scripts\render_package_manifests.py
 python -m unittest discover -s tests -v
 ```
 
@@ -382,6 +382,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Virtualized large-list dialogs: `docs/virtualized-lists.md`
 - Sourced implementation plan: `ROADMAP.md`
 - Release build notes: `docs/release.md`
+- Package manager manifests: `docs/package-managers.md`
 - Codex handoff notes: `CODEX_CHANGELOG.md`
 
 ## License

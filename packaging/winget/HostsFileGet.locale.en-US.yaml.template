@@ -1,0 +1,19 @@
+PackageIdentifier: SysAdminDoc.HostsFileGet
+PackageVersion: {{VERSION}}
+PackageLocale: en-US
+Publisher: SysAdminDoc
+PackageName: Hosts File Get
+License: MIT
+LicenseUrl: https://github.com/SysAdminDoc/HostsFileGet/blob/main/LICENSE
+ShortDescription: Windows-first hosts file editor, importer, cleaner, diagnostics, and safe writer.
+Description: HostsFileGet is a Windows-first desktop tool for inspecting, cleaning, importing, and safely writing the system hosts file.
+PackageUrl: https://github.com/SysAdminDoc/HostsFileGet
+ReleaseNotesUrl: https://github.com/SysAdminDoc/HostsFileGet/releases/tag/v{{VERSION}}
+Tags:
+  - hosts
+  - blocklist
+  - dns
+  - privacy
+  - windows
+ManifestType: defaultLocale
+ManifestVersion: 1.9.0
