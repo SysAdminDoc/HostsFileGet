@@ -23,6 +23,7 @@ from hosts_editor import (
     DNS_REWRITE_PLAN_SCHEMA,
     CT_WATCHDOG_PLAN_SCHEMA,
     CTI_ENRICHMENT_PLAN_SCHEMA,
+    MOBILE_DNS_PROFILE_EXPORT_SCHEMA,
     TLS_CERTIFICATE_PREVIEW_PLAN_SCHEMA,
     WHY_BLOCKED_SUMMARY_SCHEMA,
     DOMAIN_CATEGORY_RULES,
@@ -154,6 +155,7 @@ from hosts_editor import (
     build_config_location_report,
     build_dns_integration_export,
     build_dns_rewrite_plan,
+    build_mobile_dns_profile_export,
     build_ct_typosquat_watchdog_plan,
     build_cti_enrichment_plan,
     build_tls_certificate_preview_plan,
@@ -217,6 +219,8 @@ from hosts_editor import (
     format_dns_integration_pack_report,
     format_dns_rewrite_plan,
     format_dns_rewrite_provider_catalog,
+    format_mobile_dns_profile_catalog,
+    format_mobile_dns_profile_export,
     format_ct_typosquat_watchdog_catalog,
     format_ct_typosquat_watchdog_plan,
     format_cti_enrichment_catalog,
@@ -259,6 +263,7 @@ from hosts_editor import (
     list_safesearch_template_sources,
     list_safesearch_templates,
     list_cloud_dns_adapters,
+    list_mobile_dns_profile_targets,
     list_dns_integration_packs,
     list_dns_rewrite_providers,
     list_cti_enrichment_providers,
@@ -333,6 +338,7 @@ from hosts_editor import (
     write_managed_package_export_bundle,
     write_block_page_preview_html,
     write_vscode_companion_export,
+    write_mobile_dns_profile_export_bundle,
     write_text_file_atomic,
     write_bytes_file_atomic,
 )
@@ -3169,6 +3175,32 @@ profile:
             )
             mocked_import.assert_called_once_with("controld", "log.csv", "domains.txt")
 
+        with mock.patch.object(hosts_editor, "_cli_mobile_dns_profile_list", return_value=0) as mocked_mobile_list:
+            self.assertEqual(hosts_editor._handle_cli_args(["--mobile-dns-profile-list"]), 0)
+            mocked_mobile_list.assert_called_once_with()
+
+        with mock.patch.object(hosts_editor, "_cli_mobile_dns_profile_export", return_value=0) as mocked_mobile_export:
+            self.assertEqual(
+                hosts_editor._handle_cli_args([
+                    "--mobile-dns-profile-export", "nextdns", "mobile-out",
+                    "--mobile-dns-profile-id", "abc123",
+                    "--mobile-dns-hostname", "abc123.dns.nextdns.io",
+                    "--mobile-dns-doh-url", "https://dns.nextdns.io/abc123",
+                    "--mobile-dns-display-name", "Phone DNS",
+                    "--mobile-dns-match-domain", "example.com",
+                ]),
+                0,
+            )
+            mocked_mobile_export.assert_called_once_with(
+                "nextdns",
+                "mobile-out",
+                "abc123",
+                "abc123.dns.nextdns.io",
+                "https://dns.nextdns.io/abc123",
+                "Phone DNS",
+                ["example.com"],
+            )
+
         with mock.patch.object(hosts_editor, "_cli_dns_rewrite_provider_list", return_value=0) as mocked_rewrite_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--dns-rewrite-provider-list"]), 0)
             mocked_rewrite_list.assert_called_once_with()
@@ -4919,6 +4951,64 @@ profile:
 
         with self.assertRaises(ValueError):
             build_cloud_dns_adapter_plan(lines, "unknown-cloud")
+
+    def test_mobile_dns_profile_catalog_lists_guarded_targets(self):
+        target_ids = {target["id"] for target in list_mobile_dns_profile_targets()}
+        catalog = format_mobile_dns_profile_catalog()
+
+        self.assertEqual(target_ids, {"generic-dot", "generic-doh", "nextdns", "controld"})
+        self.assertIn("Mobile DNS profile exports", catalog)
+        self.assertIn("QR-ready payload", catalog)
+        self.assertIn("Android Private DNS", catalog)
+        self.assertIn("S56", catalog)
+
+    def test_mobile_dns_profile_export_builds_profiles_and_qr_payloads(self):
+        plan = build_mobile_dns_profile_export(
+            "generic-dot",
+            resolver_hostname="dns.example.com",
+            doh_url="https://dns.example.com/dns-query",
+            display_name="Lab DNS",
+            match_domains=["example.com", "*.corp.example"],
+        )
+        rendered = format_mobile_dns_profile_export(plan)
+
+        self.assertEqual(plan["schema"], MOBILE_DNS_PROFILE_EXPORT_SCHEMA)
+        self.assertTrue(plan["plan_only"])
+        self.assertEqual(plan["android_private_dns_hostname"], "dns.example.com")
+        self.assertEqual(plan["dns_over_https_url"], "https://dns.example.com/dns-query")
+        self.assertIn("com.apple.dnsSettings.managed", plan["apple_mobileconfig"])
+        self.assertIn("SupplementalMatchDomains", plan["apple_mobileconfig"])
+        self.assertIn("dns.example.com", plan["qr_payloads_text"])
+        self.assertIn("https://dns.example.com/dns-query", plan["qr_payloads_text"])
+        self.assertIn("Mobile DNS Profile Export", rendered)
+        self.assertIn("Roadmap source IDs", rendered)
+
+        nextdns = build_mobile_dns_profile_export("nextdns", profile_id="abc123")
+        self.assertEqual(nextdns["android_private_dns_hostname"], "abc123.dns.nextdns.io")
+        self.assertEqual(nextdns["dns_over_https_url"], "https://dns.nextdns.io/abc123")
+        self.assertIn("apple.nextdns.io/?profile=abc123", nextdns["apple_setup_url"])
+
+    def test_write_mobile_dns_profile_export_bundle_writes_review_artifacts(self):
+        import tempfile
+
+        plan = build_mobile_dns_profile_export(
+            "controld",
+            profile_id="resolver1",
+            resolver_hostname="resolver1.dns.controld.com",
+            display_name="Control D Lab",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = write_mobile_dns_profile_export_bundle(plan, tmp)
+            self.assertTrue(os.path.exists(paths["plan_json"]))
+            self.assertTrue(os.path.exists(paths["qr_payloads"]))
+            self.assertTrue(os.path.exists(paths["readme"]))
+            self.assertTrue(os.path.exists(paths["apple_mobileconfig"]))
+            with open(paths["plan_json"], "r", encoding="utf-8") as fp:
+                payload = json.load(fp)
+
+        self.assertEqual(payload["schema"], MOBILE_DNS_PROFILE_EXPORT_SCHEMA)
+        self.assertIn("resolver1.dns.controld.com", payload["qr_payloads_text"])
 
     def test_dns_rewrite_parser_accepts_hosts_explicit_and_arrow_forms(self):
         text = "\n".join([

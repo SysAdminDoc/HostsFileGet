@@ -138,6 +138,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F067 complete. Next roadmap item: F068 LLM-assisted "why blocked" summaries.
 - Completed F068: added offline why-blocked summary helpers, GUI/context-menu report entry, `--why-blocked-summary`, optional `--why-blocked-whitelist`, bounded local evidence output, and review-only LLM handoff prompts. HostsFileGet does not call LLM APIs, upload hosts data, store provider credentials, or auto-write policy changes from generated prose.
 - Updated `ROADMAP.md` to mark F068 complete. Next roadmap item: F069 mobile DNS profile export QR.
+- Completed F069: added export-only mobile DNS profile bundles for Android Private DNS, Apple DNS Settings `.mobileconfig`, and QR-ready resolver payload handoffs; added CLI/GUI catalog surfaces, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F069 complete. Next roadmap item: F070 roaming endpoint strategy.
 
 ## Scope
 
