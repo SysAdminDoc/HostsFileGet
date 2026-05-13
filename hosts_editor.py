@@ -48,7 +48,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback path
 
 APP_NAME = "Hosts File Get"
 APP_SLUG = "HostsFileGet"
-APP_VERSION = "2.20.0"
+APP_VERSION = "2.21.0"
 CONFIG_FILENAME = "hosts_editor_config.json"
 CONFIG_SCHEMA_VERSION = 4
 PROFILE_SCHEMA_VERSION = 1
@@ -2960,6 +2960,44 @@ def _allocate_unique_sibling_temp_path(target_path: str, suffix: str) -> str:
     return temp_path
 
 
+def copy_file_atomic(source_path: str, target_path: str) -> None:
+    """Copy ``source_path`` to ``target_path`` via a sibling temp + os.replace.
+
+    The naive ``shutil.copy2(src, dst)`` writes directly into ``dst`` and can
+    leave a half-written, corrupted file if the process is killed or the disk
+    fills mid-copy. This matters in particular for the system hosts file and
+    its ``.bak`` companions, where a torn write can wedge networking on next
+    boot. We stage into a unique sibling temp file, fsync the bytes, then
+    rename — which is atomic on POSIX and atomic-equivalent on NTFS.
+    """
+    directory = os.path.dirname(target_path) or "."
+    fd, temp_path = tempfile.mkstemp(prefix="hosts_editor_atomic_", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "wb") as dst_f:
+            with open(source_path, "rb") as src_f:
+                while True:
+                    chunk = src_f.read(64 * 1024)
+                    if not chunk:
+                        break
+                    dst_f.write(chunk)
+            dst_f.flush()
+            os.fsync(dst_f.fileno())
+        # Preserve metadata so timestamps/perms continue to match what
+        # shutil.copy2 used to provide.
+        try:
+            shutil.copystat(source_path, temp_path)
+        except OSError:
+            pass
+        os.replace(temp_path, target_path)
+    except Exception:
+        try:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+        except OSError:
+            pass
+        raise
+
+
 def disable_hosts_file_transactionally(hosts_path: str, disabled_path: str, minimal_content: str) -> None:
     """Disable the hosts file without leaving a stale disabled marker on failure."""
     had_existing_hosts = os.path.exists(hosts_path)
@@ -2968,7 +3006,7 @@ def disable_hosts_file_transactionally(hosts_path: str, disabled_path: str, mini
     try:
         if had_existing_hosts:
             staged_disabled_path = _allocate_unique_sibling_temp_path(disabled_path, ".pending")
-            shutil.copy2(hosts_path, staged_disabled_path)
+            copy_file_atomic(hosts_path, staged_disabled_path)
 
         write_text_file_atomic(hosts_path, minimal_content)
 
@@ -2978,7 +3016,7 @@ def disable_hosts_file_transactionally(hosts_path: str, disabled_path: str, mini
         if staged_disabled_path and os.path.exists(staged_disabled_path):
             if had_existing_hosts:
                 try:
-                    shutil.copy2(staged_disabled_path, hosts_path)
+                    copy_file_atomic(staged_disabled_path, hosts_path)
                 except OSError:
                     pass
             try:
@@ -2994,7 +3032,9 @@ def enable_hosts_file_transactionally(hosts_path: str, disabled_path: str) -> No
     os.replace(disabled_path, staged_restore_path)
 
     try:
-        shutil.copy2(staged_restore_path, hosts_path)
+        # Atomic copy: a partial write to hosts_path would leave the OS
+        # resolver pointing at half-written content until the next save.
+        copy_file_atomic(staged_restore_path, hosts_path)
         try:
             os.unlink(staged_restore_path)
         except OSError:
@@ -3031,24 +3071,72 @@ def read_http_body_limited(response, max_bytes: int = MAX_DOWNLOAD_BYTES) -> byt
     return data
 
 
+def _decompress_with_cap(
+    raw_bytes: bytes,
+    decompressor_factory,
+    max_bytes: int = MAX_DOWNLOAD_BYTES,
+    chunk_size: int = 64 * 1024,
+) -> bytes:
+    """Stream-decompress ``raw_bytes`` while enforcing a hard output cap.
+
+    The previous implementation called the eager ``gzip.decompress`` /
+    ``bz2.decompress`` helpers which would happily materialize a multi-GB
+    decompression bomb into memory before the post-hoc size check could fire.
+    Streaming through a fileobj with a per-chunk read cap lets us bail out as
+    soon as we cross ``max_bytes`` without ever holding the unsafe payload.
+    """
+    if not raw_bytes:
+        return raw_bytes
+
+    decompressor = decompressor_factory(io.BytesIO(raw_bytes))
+    output = bytearray()
+    overflow_probe = max_bytes + 1
+    try:
+        while True:
+            chunk = decompressor.read(chunk_size)
+            if not chunk:
+                break
+            output.extend(chunk)
+            if len(output) > overflow_probe:
+                raise ValueError(
+                    f"Decompressed payload exceeded {_format_size_limit(max_bytes)} size cap."
+                )
+    finally:
+        try:
+            decompressor.close()
+        except Exception:
+            pass
+    if len(output) > max_bytes:
+        raise ValueError(
+            f"Decompressed payload exceeded {_format_size_limit(max_bytes)} size cap."
+        )
+    return bytes(output)
+
+
 def decode_downloaded_lines(url: str, raw_bytes: bytes, content_encoding: str = "") -> list[str]:
     lowered_url = url.lower()
     lowered_encoding = content_encoding.lower()
 
     try:
         if lowered_url.endswith(".bz2"):
-            raw_bytes = bz2.decompress(raw_bytes)
+            raw_bytes = _decompress_with_cap(raw_bytes, bz2.BZ2File)
         elif lowered_url.endswith(".gz") or "gzip" in lowered_encoding:
-            raw_bytes = gzip.decompress(raw_bytes)
-    except OSError:
-        # Some mirrors advertise compression inconsistently; fall back to raw bytes.
+            raw_bytes = _decompress_with_cap(
+                raw_bytes,
+                lambda fileobj: gzip.GzipFile(fileobj=fileobj, mode="rb"),
+            )
+    except (OSError, EOFError):
+        # Some mirrors advertise compression inconsistently; fall back to raw
+        # bytes only when decompression itself failed (truncated stream, bad
+        # magic, etc.). A size-cap overflow re-raises ValueError below so the
+        # bomb guard cannot be silently bypassed.
         pass
 
-    # After decompression, re-check the size so a 1 KB gzip bomb can't expand
-    # into hundreds of MB in memory undetected.
+    # Defensive second guard: a non-compressed raw_bytes path could in theory
+    # still exceed the cap if a caller bypassed read_http_body_limited.
     if len(raw_bytes) > MAX_DOWNLOAD_BYTES:
         raise ValueError(
-            f"Decompressed payload exceeded {MAX_DOWNLOAD_BYTES // (1024 * 1024)} MB size cap."
+            f"Decompressed payload exceeded {_format_size_limit(MAX_DOWNLOAD_BYTES)} size cap."
         )
 
     return decode_text_bytes(raw_bytes).splitlines()
@@ -20206,8 +20294,16 @@ class HostsFileEditor:
             self.stop_import_flag.set()
 
         # Cancel pending Tk ``after`` callbacks so they don't try to touch
-        # widgets after we destroy the root window.
-        for attr in ("_update_ui_job", "_source_filter_job", "_status_reset_job"):
+        # widgets after we destroy the root window. ``_safe_after`` already
+        # tolerates a destroyed root, but cancelling here also frees the
+        # job ids so Tcl doesn't keep them around until the interpreter
+        # tears down.
+        for attr in (
+            "_update_ui_job",
+            "_source_filter_job",
+            "_status_reset_job",
+            "_gutter_redraw_job",
+        ):
             self._cancel_after_job(attr)
 
         try:
@@ -20623,13 +20719,16 @@ class HostsFileEditor:
         if not os.path.exists(self.HOSTS_FILE_PATH):
             return None
 
+        # Use copy_file_atomic so a torn write (process killed, disk full)
+        # cannot leave hosts.bak in a partially-written state. The rolling
+        # backup is what Revert-to-Backup depends on for recovery.
         latest_bak = self.HOSTS_FILE_PATH + ".bak"
-        shutil.copy2(self.HOSTS_FILE_PATH, latest_bak)
+        copy_file_atomic(self.HOSTS_FILE_PATH, latest_bak)
 
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         timestamped = f"{self.HOSTS_FILE_PATH}.{stamp}.bak"
         try:
-            shutil.copy2(self.HOSTS_FILE_PATH, timestamped)
+            copy_file_atomic(self.HOSTS_FILE_PATH, timestamped)
         except OSError:
             # Timestamped copy is a convenience layer - the rolling .bak
             # is still in place so a failure here is non-fatal.
@@ -20717,8 +20816,16 @@ class HostsFileEditor:
                     pass
                 if os.path.exists(self.HOSTS_FILE_PATH):
                     # Preserve the current minimal file as a backup too, so
-                    # the user can always get back to "stock Windows".
-                    shutil.copy2(self.HOSTS_FILE_PATH, self.HOSTS_FILE_PATH + ".bak")
+                    # the user can always get back to "stock Windows". Use
+                    # an atomic copy so a torn write here cannot wedge the
+                    # ``hosts.bak`` that Revert-to-Backup relies on.
+                    try:
+                        copy_file_atomic(self.HOSTS_FILE_PATH, self.HOSTS_FILE_PATH + ".bak")
+                    except OSError:
+                        # Backup preservation is best-effort; if it fails we
+                        # still proceed with the user-driven re-enable rather
+                        # than silently aborting it.
+                        pass
                 enable_hosts_file_transactionally(self.HOSTS_FILE_PATH, disabled_path)
                 self.update_status("Success: Hosts file re-enabled. Blocklists are active again.")
             else:
@@ -24457,8 +24564,15 @@ class HostsFileEditor:
     def _apply_import_mode_filter(self, source_name: str, lines: list[str], import_mode: str) -> list[str]:
         # Scrub newlines and control characters out of the source name so a
         # malicious or malformed source label can't inject extra lines into
-        # the generated Start/End markers.
-        safe_name = re.sub(r'[\r\n\t]+', ' ', str(source_name)).strip() or "Imported Source"
+        # the generated Start/End markers, smuggle ANSI escapes into the
+        # status bar/log preview, or render badly in terminal exports.
+        # ``[\x00-\x1f\x7f]`` covers C0 + DEL (\r, \n, \t, ESC, NUL, etc.).
+        safe_name = re.sub(r'[\x00-\x1f\x7f]+', ' ', str(source_name))
+        # Collapse runs of whitespace so labels never grow oddly wide.
+        safe_name = re.sub(r'\s{2,}', ' ', safe_name).strip() or "Imported Source"
+        # Defensive cap so a 10MB pasted name can't blow up the marker line.
+        if len(safe_name) > 200:
+            safe_name = safe_name[:200].rstrip()
 
         if import_mode == "Normalized":
             normalized_lines = []
@@ -26081,8 +26195,8 @@ def _cli_backup(hosts_path: str) -> int:
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     dest = f"{hosts_path}.{stamp}.bak"
     try:
-        shutil.copy2(hosts_path, f"{hosts_path}.bak")
-        shutil.copy2(hosts_path, dest)
+        copy_file_atomic(hosts_path, f"{hosts_path}.bak")
+        copy_file_atomic(hosts_path, dest)
     except OSError as e:
         _cli_print(f"Backup failed: {e}")
         return 1

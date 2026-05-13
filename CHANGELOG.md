@@ -4,6 +4,13 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Hardening pass — v2.21.0**
+- `decode_downloaded_lines` now stream-decompresses gzip and bz2 feeds with a per-chunk cap instead of calling the eager `gzip.decompress` / `bz2.decompress` helpers. A 50 KB gzip-bomb that previously inflated to multiple GB in memory before the post-hoc size check fired is now aborted as soon as the decompressed output crosses `MAX_DOWNLOAD_BYTES` (50 MB). Truncated or mis-labeled compressed streams still fall back to raw-byte parsing as before.
+- New `copy_file_atomic(src, dst)` helper writes through a sibling temp file + `os.replace`, so the hosts file, `hosts.bak`, timestamped snapshots, and the disable/enable transactional handoff can no longer be left half-written if the process is killed mid-copy. `_rotate_backups`, `enable_hosts_file_transactionally`, `disable_hosts_file_transactionally`, the Disable/Enable toggle backup preservation, and the `--backup` CLI path all switched off `shutil.copy2`.
+- Source-name sanitization for `# --- Raw|Normalized Import Start/End ---` markers now scrubs the full C0/DEL control-byte range (NUL, ESC, etc.) rather than just `\r\n\t`, collapses internal whitespace runs, and caps the rendered name at 200 chars so a malicious or accidentally-pasted source label can't smuggle ANSI escapes into terminal exports or pad the marker line into oblivion.
+- `on_closing` now also cancels `_gutter_redraw_job` alongside the existing update/source-filter/status jobs so the Tcl interpreter isn't left holding a job handle for a redraw scheduled milliseconds before the user clicked the close button.
+- Seven new regression tests cover the streaming bomb guard (gzip + bz2), `copy_file_atomic` happy path + failure-rollback, expanded control-byte scrubbing, source-name length capping, and the truncated-stream fall-back. Total suite: 333 tests.
+
 **Roaming endpoint strategy**
 - Added `--roaming-endpoint-strategy-list` and `--roaming-endpoint-strategy-plan` for strategy-only off-network protection decision records.
 - Plans compare native OS encrypted DNS profiles, provider endpoint/profile mapping, commercial roaming agents, router/gateway fallback, and provider app/local VPN clients while documenting that HostsFileGet does not install agents, deploy MDM/RMM payloads, enroll devices, or change DNS settings.
