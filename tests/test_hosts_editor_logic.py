@@ -40,6 +40,8 @@ from hosts_editor import (
     build_filter_builder_report,
     build_idn_homograph_report,
     build_i18n_catalog_report,
+    build_i18n_contribution_report,
+    build_i18n_contribution_template,
     build_local_api_clean_preview_payload,
     build_local_api_status_payload,
     build_entry_provenance_report,
@@ -144,6 +146,7 @@ from hosts_editor import (
     format_adblock_syntax_report,
     format_idn_homograph_report,
     format_i18n_catalog_report,
+    format_i18n_contribution_report,
     format_rule_tier_report,
     format_declarative_config_payload,
     format_declarative_profile_summary,
@@ -1093,6 +1096,60 @@ class HostsEditorLogicTests(unittest.TestCase):
 
         self.assertEqual(translate_message(catalog, "status.count", count=3), "3 entries")
         self.assertEqual(translate_message(catalog, "status.bad_template", count=3), "{missing} entries")
+
+    def test_i18n_contribution_template_is_complete_and_normalized(self):
+        template = build_i18n_contribution_template("es-mx", {
+            "status.count": "{count} entries",
+            "common.close": "Close",
+        })
+
+        self.assertEqual(template["locale"], "es-MX")
+        self.assertEqual(list(template["messages"]), ["common.close", "status.count"])
+        report = build_i18n_contribution_report(template, {
+            "status.count": "{count} entries",
+            "common.close": "Close",
+        })
+        self.assertTrue(report["ready"])
+        self.assertEqual(report["completion_percent"], 100.0)
+        self.assertEqual(report["unchanged_english_keys"], ["common.close", "status.count"])
+
+    def test_i18n_contribution_report_flags_missing_extra_and_placeholders(self):
+        catalog = {
+            "schema_version": I18N_CATALOG_SCHEMA_VERSION,
+            "locale": "fr-FR",
+            "messages": {
+                "status.count": "{total} entrees",
+                "extra.key": "Extra",
+            },
+        }
+
+        report = build_i18n_contribution_report(catalog, {
+            "status.count": "{count} entries",
+            "common.close": "Close",
+        })
+
+        self.assertFalse(report["ready"])
+        self.assertEqual(report["missing_required_keys"], ["common.close"])
+        self.assertEqual(report["extra_keys"], ["extra.key"])
+        self.assertEqual(report["placeholder_mismatches"][0]["key"], "status.count")
+        formatted = format_i18n_contribution_report(report)
+        self.assertIn("needs-work", formatted)
+        self.assertIn("expected count; found total", formatted)
+
+    def test_cli_i18n_template_and_validate_roundtrip(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "es-MX.json"
+            with mock.patch.object(hosts_editor, "_cli_print"):
+                self.assertEqual(hosts_editor._cli_i18n_template("es-mx", str(path)), 0)
+                self.assertEqual(hosts_editor._cli_i18n_validate(str(path)), 0)
+
+            payload = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["locale"], "es-MX")
+        self.assertIn("common.close", payload["messages"])
 
     def test_check_source_health_record_marks_host_sample_healthy(self):
         class FakeResponse:
@@ -2619,6 +2676,14 @@ profile:
                 0,
             )
             mocked_api.assert_called_once_with("127.0.0.1", 0, "0123456789abcdef")
+
+        with mock.patch.object(hosts_editor, "_cli_i18n_template", return_value=0) as mocked_template:
+            self.assertEqual(hosts_editor._handle_cli_args(["--i18n-template", "de-de", "de-DE.json"]), 0)
+            mocked_template.assert_called_once_with("de-de", "de-DE.json")
+
+        with mock.patch.object(hosts_editor, "_cli_i18n_validate", return_value=1) as mocked_validate:
+            self.assertEqual(hosts_editor._handle_cli_args(["--i18n-validate", "de-DE.json"]), 1)
+            mocked_validate.assert_called_once_with("de-DE.json")
 
     def test_handle_cli_args_routes_cloud_dns_flags(self):
         with mock.patch.object(hosts_editor, "_cli_cloud_adapter_list", return_value=0) as mocked_list:

@@ -89,6 +89,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - scheduled-update activity reports backed by bounded silent-run logs
   - managed portable bundle config export and config-location reporting
   - versioned English string catalog foundation for future localization
+  - translation template and validation CLI for local contribution review
 
 ## Supported Input Shapes
 
@@ -378,7 +379,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Migration imports: `docs/migration-imports.md`
 - Export formats: `docs/export-formats.md`
 - Accessibility audit: `docs/accessibility.md`
-- i18n string catalog: `docs/i18n.md`
+- i18n string catalog and contribution workflow: `docs/i18n.md`
 - Virtualized large-list dialogs: `docs/virtualized-lists.md`
 - Sourced implementation plan: `ROADMAP.md`
 - Release build notes: `docs/release.md`

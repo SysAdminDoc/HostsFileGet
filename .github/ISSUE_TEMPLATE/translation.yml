@@ -1,0 +1,40 @@
+name: Translation contribution
+description: Propose or update a HostsFileGet UI translation catalog.
+title: "Translation: <locale>"
+labels: ["i18n", "translation"]
+body:
+  - type: input
+    id: locale
+    attributes:
+      label: Locale
+      description: Use a BCP-47-style tag such as es-MX or de-DE.
+      placeholder: es-MX
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Describe whether this is a new catalog, an update, or a review pass.
+      placeholder: New es-MX catalog generated with --i18n-template and translated locally.
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation output
+      description: Paste the summary from python hosts_editor.py --i18n-validate <path>.
+      render: text
+    validations:
+      required: true
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I generated the catalog with --i18n-template or kept the same schema, locale, and messages shape.
+          required: true
+        - label: I preserved every message key and every format placeholder.
+          required: true
+        - label: I did not translate hostnames, paths, source names, command output, or raw report payloads.
+          required: true

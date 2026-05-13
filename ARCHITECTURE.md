@@ -53,7 +53,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `TROUBLESHOOTING.md` | Hosts-file limitations and operational recovery guide |
 | `CODEX_CHANGELOG.md` | Development-agent handoff notes |
 | `data/blocklist_sources.json` | Versioned curated blocklist catalog loaded at startup |
-| `data/i18n/en-US.json` | Versioned English UI string catalog for future localization |
+| `data/i18n/en-US.json` | Versioned English UI string catalog and contribution template source |
 | `docs/source-manifest.md` | Curated source manifest schema and maintenance rules |
 | `docs/source-adapter-plugins.md` | Manifest-only source adapter plugin contract and safety boundary |
 | `docs/source-bundles.md` | Manifest-defined source bundle selector behavior and validation rules |
@@ -91,7 +91,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `docs/dns-rebinding.md` | Static DNS rebinding-sensitive hosts mapping report behavior and limits |
 | `docs/safesearch-restricted-mode.md` | SafeSearch and YouTube Restricted Mode template behavior and provider limits |
 | `docs/accessibility.md` | Contrast audit, font assumptions, and manual Windows accessibility release checks |
-| `docs/i18n.md` | String catalog schema, fallback behavior, and localization guardrails |
+| `docs/i18n.md` | String catalog schema, fallback behavior, contribution CLI, and localization guardrails |
 | `CLAUDE.md` | Compact architecture and gotchas snapshot for agents |
 | `default.txt` | Sample/default hosts content |
 | `icon.png` | App branding asset |
@@ -143,7 +143,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Profile schedule helpers: `normalize_profile_activation_days`, `sanitize_profile_activation_schedule`, `evaluate_profile_activation_schedule`, `apply_profile_activation_schedule`, `format_profile_activation_schedule_report`.
 - Config location and portable export: `get_primary_config_path`, `get_config_root_dir`, `build_config_location_report`, `write_portable_bundle_config`, `format_portable_bundle_export_summary`.
 - Source catalog loading: `sanitize_source_manifest`, `load_blocklist_sources_manifest`, `sanitize_source_adapter_plugin_manifest`, `load_source_adapter_plugin_catalog`, `format_source_adapter_plugin_catalog`, `sanitize_source_bundle_catalog`, `load_source_bundle_catalog`, `format_source_bundle_catalog`, `format_source_bundle_report`.
-- i18n catalog loading: `normalize_locale_code`, `sanitize_i18n_catalog`, `load_i18n_catalog`, `translate_message`, `build_i18n_catalog_report`.
+- i18n catalog loading and contribution review: `normalize_locale_code`, `sanitize_i18n_catalog`, `load_i18n_catalog`, `translate_message`, `build_i18n_catalog_report`, `build_i18n_contribution_template`, `build_i18n_contribution_report`.
 - Source response caching and import retries: `fetch_source_with_cache`, `fetch_source_with_retries`, `resolve_import_fetch_worker_count`, `sanitize_source_cache_metadata`, `build_source_request_headers`.
 - Source trust display: `build_source_trust_badges`, `source_trust_report_url`, `format_source_trust_details`.
 - Source health reporting: `check_source_health_record`, `build_source_health_report`, `summarize_source_health_results`.

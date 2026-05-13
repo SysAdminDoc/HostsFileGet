@@ -36,6 +36,7 @@ import shlex
 import http.server
 import socketserver
 import secrets
+import string
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback path
@@ -4528,6 +4529,128 @@ def format_i18n_catalog_report(report: dict) -> str:
         lines.append("Extra keys:")
         for key in report["extra_keys"]:
             lines.append(f"  - {key}")
+    return "\n".join(lines)
+
+
+def build_i18n_contribution_template(locale: str, fallback_messages: dict[str, str] | None = None) -> dict:
+    fallback_messages = fallback_messages or DEFAULT_I18N_MESSAGES
+    normalized_locale = normalize_locale_code(locale)
+    return {
+        "schema_version": I18N_CATALOG_SCHEMA_VERSION,
+        "locale": normalized_locale,
+        "messages": {
+            key: fallback_messages[key]
+            for key in sorted(fallback_messages)
+        },
+    }
+
+
+def _i18n_format_signature(text: str) -> dict:
+    fields: list[str] = []
+    try:
+        for _literal, field_name, _format_spec, _conversion in string.Formatter().parse(text):
+            if field_name is None:
+                continue
+            root = re.split(r"[.\[]", field_name, maxsplit=1)[0]
+            fields.append(root)
+    except ValueError as exc:
+        return {"valid": False, "fields": [], "error": str(exc)}
+    return {"valid": True, "fields": sorted(set(fields)), "error": None}
+
+
+def build_i18n_contribution_report(catalog: dict, fallback_messages: dict[str, str] | None = None) -> dict:
+    fallback_messages = fallback_messages or DEFAULT_I18N_MESSAGES
+    sanitized = sanitize_i18n_catalog(catalog)
+    messages = sanitized["messages"]
+    required_keys = set(fallback_messages)
+    message_keys = set(messages)
+    missing_keys = sorted(required_keys - message_keys)
+    extra_keys = sorted(message_keys - required_keys)
+    placeholder_mismatches = []
+    for key in sorted(required_keys & message_keys):
+        expected = _i18n_format_signature(fallback_messages[key])
+        actual = _i18n_format_signature(messages[key])
+        if not actual["valid"] or expected["fields"] != actual["fields"]:
+            placeholder_mismatches.append({
+                "key": key,
+                "expected_fields": expected["fields"],
+                "actual_fields": actual["fields"],
+                "error": actual["error"],
+            })
+    unchanged_english = []
+    if sanitized["locale"] != DEFAULT_LOCALE:
+        unchanged_english = sorted(
+            key for key in required_keys & message_keys
+            if messages[key] == fallback_messages[key]
+        )
+    provided_required = len(required_keys - set(missing_keys))
+    completion_percent = 100.0
+    if required_keys:
+        completion_percent = round((provided_required / len(required_keys)) * 100, 1)
+    ready = not missing_keys and not extra_keys and not placeholder_mismatches
+    return {
+        "schema_version": sanitized["schema_version"],
+        "locale": sanitized["locale"],
+        "required_count": len(required_keys),
+        "message_count": len(message_keys),
+        "provided_required_count": provided_required,
+        "completion_percent": completion_percent,
+        "missing_required_keys": missing_keys,
+        "extra_keys": extra_keys,
+        "placeholder_mismatches": placeholder_mismatches,
+        "unchanged_english_keys": unchanged_english,
+        "ready": ready,
+        "status": "ready" if ready else "needs-work",
+    }
+
+
+def format_i18n_contribution_report(report: dict) -> str:
+    lines = [
+        "Translation contribution",
+        f"Locale: {report.get('locale', DEFAULT_LOCALE)}",
+        f"Schema version: {report.get('schema_version')}",
+        f"Status: {report.get('status', 'needs-work')}",
+        "",
+        f"Required keys: {report.get('required_count', 0)}",
+        f"Provided required keys: {report.get('provided_required_count', 0)}",
+        f"All messages: {report.get('message_count', 0)}",
+        f"Completion: {report.get('completion_percent', 0)}%",
+        f"Missing required keys: {len(report.get('missing_required_keys', []))}",
+        f"Extra keys: {len(report.get('extra_keys', []))}",
+        f"Placeholder mismatches: {len(report.get('placeholder_mismatches', []))}",
+        f"Unchanged English strings: {len(report.get('unchanged_english_keys', []))}",
+    ]
+    if report.get("missing_required_keys"):
+        lines.append("")
+        lines.append("Missing required keys:")
+        for key in report["missing_required_keys"][:50]:
+            lines.append(f"  - {key}")
+        if len(report["missing_required_keys"]) > 50:
+            lines.append(f"  - ...and {len(report['missing_required_keys']) - 50} more")
+    if report.get("extra_keys"):
+        lines.append("")
+        lines.append("Extra keys:")
+        for key in report["extra_keys"][:50]:
+            lines.append(f"  - {key}")
+        if len(report["extra_keys"]) > 50:
+            lines.append(f"  - ...and {len(report['extra_keys']) - 50} more")
+    if report.get("placeholder_mismatches"):
+        lines.append("")
+        lines.append("Placeholder mismatches:")
+        for item in report["placeholder_mismatches"][:50]:
+            expected = ", ".join(item.get("expected_fields", [])) or "(none)"
+            actual = ", ".join(item.get("actual_fields", [])) or "(none)"
+            suffix = f"; {item['error']}" if item.get("error") else ""
+            lines.append(f"  - {item.get('key')}: expected {expected}; found {actual}{suffix}")
+        if len(report["placeholder_mismatches"]) > 50:
+            lines.append(f"  - ...and {len(report['placeholder_mismatches']) - 50} more")
+    if report.get("unchanged_english_keys"):
+        lines.append("")
+        lines.append("Unchanged English strings to review:")
+        for key in report["unchanged_english_keys"][:25]:
+            lines.append(f"  - {key}")
+        if len(report["unchanged_english_keys"]) > 25:
+            lines.append(f"  - ...and {len(report['unchanged_english_keys']) - 25} more")
     return "\n".join(lines)
 
 
@@ -19594,6 +19717,34 @@ def _cli_api_serve(host: str, port: int, token: str | None) -> int:
     return 0
 
 
+def _cli_i18n_template(locale: str, output_path: str) -> int:
+    try:
+        template = build_i18n_contribution_template(locale)
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        write_text_file_atomic(output_path, json.dumps(template, indent=2) + "\n")
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Translation template failed: {exc}")
+        return 2
+    _cli_print(f"Wrote translation template for {template['locale']} to {output_path}")
+    return 0
+
+
+def _cli_i18n_validate(input_path: str) -> int:
+    try:
+        payload = json.loads(read_text_file_content(input_path))
+        report = build_i18n_contribution_report(payload)
+    except json.JSONDecodeError as exc:
+        _cli_print(f"Translation catalog validation failed: invalid JSON: {exc}")
+        return 2
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Translation catalog validation failed: {exc}")
+        return 2
+    _cli_print(format_i18n_contribution_report(report))
+    return 0 if report["ready"] else 1
+
+
 def _cli_integration_list() -> int:
     _cli_print(format_dns_integration_pack_report())
     return 0
@@ -20246,6 +20397,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--api-host",
         "--api-port",
         "--api-token",
+        "--i18n-template",
+        "--i18n-validate",
         "--silent",
         "-h",
         "--help",
@@ -20291,6 +20444,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--api-host=",
         "--api-port=",
         "--api-token=",
+        "--i18n-template=",
+        "--i18n-validate=",
     )
     if not any(arg in cli_flags or any(arg.startswith(prefix) for prefix in cli_prefixes) for arg in argv):
         return None
@@ -20421,6 +20576,13 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--api-host", default=LOCAL_API_DEFAULT_HOST, metavar="HOST", help="Loopback host for --api-serve; defaults to 127.0.0.1.")
     parser.add_argument("--api-port", type=int, default=LOCAL_API_DEFAULT_PORT, metavar="PORT", help="Port for --api-serve; use 0 for an ephemeral test port.")
     parser.add_argument("--api-token", metavar="TOKEN", help="Bearer token for --api-serve. Defaults to HOSTSFILEGET_API_TOKEN.")
+    parser.add_argument(
+        "--i18n-template",
+        nargs=2,
+        metavar=("LOCALE", "OUTPUT"),
+        help="Write a complete translation contribution JSON template for LOCALE to OUTPUT.",
+    )
+    parser.add_argument("--i18n-validate", metavar="PATH", help="Validate a translation contribution JSON catalog and print a review report.")
     parser.add_argument(
         "--silent", action="store_true",
         help="Suppress stderr progress. Progress is logged to %%LOCALAPPDATA%%\\HostsFileGet\\cli.log instead. Designed for Task Scheduler runs.",
@@ -20557,6 +20719,10 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         )
     if args.api_serve:
         return _cli_api_serve(args.api_host, args.api_port, args.api_token)
+    if args.i18n_template:
+        return _cli_i18n_template(args.i18n_template[0], args.i18n_template[1])
+    if args.i18n_validate:
+        return _cli_i18n_validate(args.i18n_validate)
     return None
 
 

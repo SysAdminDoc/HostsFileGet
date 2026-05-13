@@ -1,7 +1,7 @@
 # HostsFileGet Roadmap
 
 Version: 2026-05-12 roadmap execution update
-Repo state basis: `main` through F045/F046/F051/F052 implementation plus external research current to 2026-05-12
+Repo state basis: `main` through F045/F046/F051/F052/F053 implementation plus external research current to 2026-05-12
 Scope: Windows-first desktop hosts-file editor, importer, cleaner, diagnostics, and safe writer
 
 This document supersedes the earlier broad idea dump. Useful shipped history has been preserved as baseline context, but the forward roadmap is now source-backed and tiered. Every active candidate cites at least one source ID from the appendix.
@@ -71,6 +71,7 @@ Non-negotiables:
 - [x] F050 - Virtualized large-list views (`docs/virtualized-lists.md`, paged match-removal review)
 - [x] F051 - Parallel source fetcher with bounded retries (`docs/parallel-imports.md`, concurrent source fetches, source-order-preserving output)
 - [x] F052 - Winget and Chocolatey manifests (`docs/package-managers.md`, renderable templates, release artifact zip)
+- [x] F053 - Translation contribution workflow (`docs/i18n.md`, template/validation CLI, GitHub issue template)
 
 ## State Of The Repo
 
@@ -79,8 +80,8 @@ Non-negotiables:
 - Language and runtime: Python 3.x, Tkinter desktop UI, Windows-first assumptions, PowerShell launcher.
 - Entry points: `hosts_editor.py` for GUI and CLI, `PythonLauncher.ps1` for elevated launch/bootstrap, `HostsFileGet.spec` for PyInstaller.
 - Packaging: PyInstaller one-file Windows EXE with `uac_admin=True`; build artifacts exist locally under `build/` and `dist/` but are not tracked.
-- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, `tests/test_benchmarks.py`, and `tests/test_package_manifests.py` contain 283 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation, migration importer fixtures, export-format fixtures, DNS integration fixtures, cloud DNS adapter fixtures, source adapter plugin fixtures, local REST API fixtures, package manifest render fixtures, adblock syntax lint/quarantine fixtures, rule tier fixtures, IDN/homograph fixtures, threat-feed pack fixtures, CNAME cloaking workflow fixtures, encrypted-DNS bypass pack fixtures, DNS rebinding report fixtures, SafeSearch/restricted-mode template fixtures, profile activation schedule fixtures, profile quick-switch/tray dependency fixtures, source-bundle manifest fixtures, filter-builder query-history fixtures, watch-expression fixtures, source metrics fixtures, virtual-list fixtures, parallel import retry/order fixtures, provenance filter/export fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, NextDNS/Control D CSV logs, and find/replace.
-- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/cloud-dns-adapters.md`, `docs/adblock-lint.md`, `docs/rule-tiers.md`, `docs/idn-homograph.md`, `docs/threat-feed-packs.md`, `docs/cname-cloaking.md`, `docs/encrypted-dns-bypass.md`, `docs/dns-rebinding.md`, `docs/safesearch-restricted-mode.md`, `docs/profile-activation-schedule.md`, `docs/profile-quick-switch.md`, `docs/source-adapter-plugins.md`, `docs/local-rest-api.md`, `docs/package-managers.md`, `docs/source-bundles.md`, `docs/filter-builder.md`, `docs/watch-expressions.md`, `docs/source-metrics.md`, `docs/parallel-imports.md`, `docs/virtualized-lists.md`, `docs/provenance-log.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `LICENSE`, and this roadmap.
+- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, `tests/test_benchmarks.py`, and `tests/test_package_manifests.py` contain 286 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation and contribution fixtures, migration importer fixtures, export-format fixtures, DNS integration fixtures, cloud DNS adapter fixtures, source adapter plugin fixtures, local REST API fixtures, package manifest render fixtures, adblock syntax lint/quarantine fixtures, rule tier fixtures, IDN/homograph fixtures, threat-feed pack fixtures, CNAME cloaking workflow fixtures, encrypted-DNS bypass pack fixtures, DNS rebinding report fixtures, SafeSearch/restricted-mode template fixtures, profile activation schedule fixtures, profile quick-switch/tray dependency fixtures, source-bundle manifest fixtures, filter-builder query-history fixtures, watch-expression fixtures, source metrics fixtures, virtual-list fixtures, parallel import retry/order fixtures, provenance filter/export fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, NextDNS/Control D CSV logs, and find/replace.
+- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `data/i18n/README.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/cloud-dns-adapters.md`, `docs/adblock-lint.md`, `docs/rule-tiers.md`, `docs/idn-homograph.md`, `docs/threat-feed-packs.md`, `docs/cname-cloaking.md`, `docs/encrypted-dns-bypass.md`, `docs/dns-rebinding.md`, `docs/safesearch-restricted-mode.md`, `docs/profile-activation-schedule.md`, `docs/profile-quick-switch.md`, `docs/source-adapter-plugins.md`, `docs/local-rest-api.md`, `docs/package-managers.md`, `docs/source-bundles.md`, `docs/filter-builder.md`, `docs/watch-expressions.md`, `docs/source-metrics.md`, `docs/parallel-imports.md`, `docs/virtualized-lists.md`, `docs/provenance-log.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `.github/ISSUE_TEMPLATE/translation.yml`, `LICENSE`, and this roadmap.
 - License: MIT.
 
 ### Product Reality
@@ -103,6 +104,7 @@ HostsFileGet already provides:
 - `--config-location` and `--portable-export` make local-user versus portable bundle config paths explicit.
 - `--integration-list` and `--integration-export` provide file-only Pi-hole, AdGuard Home/DNS, Technitium, and blocky DNS export handoffs.
 - `--api-serve` exposes an opt-in loopback-only bearer-auth API with read-only status and clean-preview endpoints.
+- `--i18n-template` and `--i18n-validate` generate and review translation contribution catalogs without launching the GUI.
 - `--cloud-adapter-list`, `--cloud-adapter-plan`, and `--cloud-log-import` provide plan-only NextDNS/Control D adapter artifacts and local CSV log extraction without storing credentials or performing remote writes.
 - The release workflow renders Winget and Chocolatey manifest files from the release URL and SHA-256 into a package-manifest zip.
 - `--adblock-lint`, `--adblock-lint-output`, and `--adblock-quarantine` review mixed filter lists and quarantine browser-only rules before hosts-file conversion.
@@ -347,12 +349,13 @@ Legend:
 28. Completed - Source adapter plugin interface: F045.
 29. Completed - Local REST facade with bearer auth: F046.
 30. Completed - Winget and Chocolatey manifests: F052.
+31. Completed - Translation contribution workflow: F053.
 
 Rationale: these items reduce maintenance risk, make the current product more trustworthy, and create the internal contracts needed for the larger profile/integration work.
 
 ### Next
 
-1. Translation and collaboration growth: F053, F054, F055.
+1. Translation and collaboration growth: F054, F055.
 2. Recovery spike: F044.
 
 Rationale: these are valuable and well-supported by the market, but most require the Now-phase source manifest, profile model, and test/release foundations.
