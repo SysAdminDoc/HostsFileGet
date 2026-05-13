@@ -80,6 +80,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - loopback-only local HTTP block page server and static preview export for reviewed blocked-site explanations
   - plan-only advanced DNS rewrite/CNAME/private-domain exports for Control D and Technitium DNS Server review
   - export-only mobile DNS profile bundles for Android Private DNS, Apple DNS Settings `.mobileconfig`, and QR-ready resolver payload handoffs
+  - strategy-only roaming endpoint plans that assign off-network enforcement to OS DNS profiles, provider endpoints, managed agents, apps, or gateways
   - RPZ, Unbound, Privoxy, gzip-compressed hosts, and bzip2-compressed hosts
 - Operational utilities:
   - DNS cache flush
@@ -378,6 +379,14 @@ python hosts_editor.py --mobile-dns-profile-export nextdns .\mobile-dns --mobile
 python hosts_editor.py --mobile-dns-profile-export generic-dot .\mobile-dns --mobile-dns-hostname dns.example.com --mobile-dns-display-name "Lab DNS"
 ```
 
+Write a roaming endpoint strategy plan without installing endpoint agents, MDM payloads, provider apps, or DNS settings:
+
+```powershell
+python hosts_editor.py --roaming-endpoint-strategy-list
+python hosts_editor.py --roaming-endpoint-strategy-plan all .\roaming-endpoint-strategy.json
+python hosts_editor.py --roaming-endpoint-strategy-plan agent .\managed-agent-strategy.json
+```
+
 Lint mixed adblock lists and write a hosts-safe quarantine copy:
 
 ```powershell
@@ -499,6 +508,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - DNS interoperability pack: `docs/dns-integrations.md`
 - Cloud DNS adapters: `docs/cloud-dns-adapters.md`
 - Mobile DNS profile export: `docs/mobile-dns-profile-export.md`
+- Roaming endpoint strategy: `docs/roaming-endpoint-strategy.md`
 - Adblock syntax lint: `docs/adblock-lint.md`
 - Rule tier report: `docs/rule-tiers.md`
 - IDN and homograph report: `docs/idn-homograph.md`

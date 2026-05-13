@@ -140,6 +140,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F068 complete. Next roadmap item: F069 mobile DNS profile export QR.
 - Completed F069: added export-only mobile DNS profile bundles for Android Private DNS, Apple DNS Settings `.mobileconfig`, and QR-ready resolver payload handoffs; added CLI/GUI catalog surfaces, docs, and regression tests.
 - Updated `ROADMAP.md` to mark F069 complete. Next roadmap item: F070 roaming endpoint strategy.
+- Completed F070: added strategy-only roaming endpoint plans for native encrypted DNS profiles, provider endpoint/profile mapping, managed roaming clients, router/gateway fallback, and provider app/local VPN clients; added CLI/GUI catalog surfaces, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F070 complete. Next roadmap item: no remaining active Now/Next/Later item before rejected/under-consideration review.
 
 ## Scope
 

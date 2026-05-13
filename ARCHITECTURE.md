@@ -38,6 +38,8 @@ LLM-assisted why-blocked summaries are offline review artifacts. HostsFileGet ca
 
 Mobile DNS profile exports are artifact-first. HostsFileGet can write Android Private DNS handoff metadata, unsigned Apple DNS Settings `.mobileconfig` files, and QR-ready resolver payload text, but it does not install mobile profiles, call provider APIs, generate bitmap QR images, change device DNS settings, or imply that a Windows hosts file roams to mobile devices.
 
+Roaming endpoint strategy support is a decision-record surface, not an enforcement surface. HostsFileGet can document whether off-network protection belongs to OS encrypted DNS profiles, provider endpoint/profile mapping, commercial roaming agents, router/gateway fallback, or provider apps, but it does not install agents, enroll MDM/RMM payloads, store enrollment credentials, or make provider dashboard changes.
+
 DNS rebinding protection is also advisory. HostsFileGet can report static hosts entries that map external-looking names to private, local, loopback, link-local, ULA, CGNAT, or special-use ranges, but live DNS rebinding enforcement belongs in the resolver, router, or managed endpoint policy.
 
 SafeSearch and restricted-mode templates follow the same boundary. HostsFileGet can produce reviewable hosts-line and DNS CNAME plans for Google, Bing, DuckDuckGo, and YouTube, but it does not apply parental controls, create DNS records, install browser policy, or enforce account/device controls.
@@ -121,6 +123,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `docs/dns-integrations.md` | Pi-hole, AdGuard Home/DNS, Technitium, and blocky file-first interoperability presets |
 | `docs/cloud-dns-adapters.md` | Plan-only NextDNS and Control D adapters plus local CSV log import behavior |
 | `docs/mobile-dns-profile-export.md` | Export-only Android Private DNS, Apple DNS Settings profile, and QR-ready payload handoff behavior |
+| `docs/roaming-endpoint-strategy.md` | Strategy-only off-network endpoint ownership and roaming DNS enforcement boundaries |
 | `docs/adblock-lint.md` | Adblock syntax lint and browser-only rule quarantine behavior |
 | `docs/rule-tiers.md` | Exact, subdomain, wildcard, regex, path, exception, and browser-only tier reporting |
 | `docs/idn-homograph.md` | IDN/Punycode decoding and deterministic homograph-risk report behavior |
@@ -208,6 +211,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - CTI enrichment planning: `parse_cti_enrichment_iocs`, `build_cti_enrichment_plan`, `build_cti_enrichment_stix_bundle`, `format_cti_enrichment_plan`.
 - Why-blocked summaries: `build_why_blocked_summary`, `format_why_blocked_summary`, `format_why_blocked_summary_catalog`, `extract_whitelist_domains_from_text`.
 - Mobile DNS profile exports: `list_mobile_dns_profile_targets`, `build_mobile_dns_profile_export`, `build_mobile_dns_apple_mobileconfig`, `write_mobile_dns_profile_export_bundle`, `format_mobile_dns_profile_catalog`.
+- Roaming endpoint strategy: `list_roaming_endpoint_strategies`, `build_roaming_endpoint_strategy_plan`, `format_roaming_endpoint_strategy_catalog`, `format_roaming_endpoint_strategy_plan`.
 - Threat feed pack planning: `list_threat_feed_packs`, `build_threat_feed_pack_plan`, `format_threat_feed_pack_catalog`, `format_threat_feed_pack_plan`.
 - CNAME cloaking workflow planning: `list_cname_cloaking_packs`, `build_cname_cloaking_plan`, `format_cname_cloaking_catalog`, `format_cname_cloaking_plan`.
 - Encrypted-DNS bypass pack planning: `list_encrypted_dns_bypass_packs`, `build_encrypted_dns_bypass_pack_plan`, `format_encrypted_dns_bypass_catalog`, `format_encrypted_dns_bypass_pack_plan`.
@@ -316,6 +320,8 @@ The CLI functions live near the bottom of `hosts_editor.py` and intentionally sh
 - `_cli_cloud_log_import`
 - `_cli_mobile_dns_profile_list`
 - `_cli_mobile_dns_profile_export`
+- `_cli_roaming_endpoint_strategy_list`
+- `_cli_roaming_endpoint_strategy_plan`
 - `_cli_adblock_lint`
 - `_cli_adblock_quarantine`
 - `_cli_rule_tier_report`
