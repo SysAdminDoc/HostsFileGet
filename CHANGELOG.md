@@ -4,6 +4,13 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Modularization — v2.26.0 (Phases 3-5)**
+- New `hostsfileget.adblock` (~280 lines): the adblock-syntax classifier (`classify_adblock_rule_line`), the cosmetic-marker tuple, the quarantine helpers (`quarantine_adblock_rule_lines`, `_find_adblock_cosmetic_marker`, `_adblock_pattern_has_url_path`), and the syntax-lint report builder/formatter. Used by the importer to skip browser-only rules instead of broadening them.
+- New `hostsfileget.idn_homograph` (~370 lines): `classify_idn_domain`, `extract_idn_domain_candidates`, `build_idn_homograph_report`, `format_idn_homograph_report`, the curated `CONFUSABLE_ASCII_MAP`, the `_script_bucket`/`_label_scripts`/`_confusable_ascii_skeleton` Unicode helpers, and the IDN-candidate token extractor.
+- New `hostsfileget.normalize` (~90 lines): the keystone `parse_hosts_line_entries` plus the two thin wrappers (`normalize_line_to_hosts_entries`, `normalize_line_to_hosts_entry`) that every cleaner, importer, and stats calculator funnels through. This finally closes the seam between parsing and adblock — the adblock classifier is now a proper dependency of the normalizer, not a peer.
+- `hosts_editor.py` re-exports all three modules so the 341-test suite, the launcher, and external consumers keep working without changes.
+- `hosts_editor.py` shrunk from 28,426 → 27,844 lines this round (≈580 lines lifted). Package now totals 1,464 lines across 8 focused submodules.
+
 **Modularization — v2.25.0 (Phase 2)**
 - New `hostsfileget.parsing` module owns the leaf-level domain/IP regex (`DOMAIN_REGEX`, `IPV4_REGEX`, `IPV6_REGEX`, `WILDCARD_STRIPPER`, `TOKEN_SPLITTER`, `DNSMASQ_RULE_REGEX`, `HOST_LABEL_REGEX`), the comment-prefix tuple, the standard blocking-IP / local-domain sets, and the small inspection helpers (`looks_like_domain`, `_looks_like_ip_token`, `_is_comment_line`, `_normalize_mapping_ip`, `_extract_domain_from_token`, `_domain_shape_matches`) plus the IDN encode/decode/non-ASCII primitives. ~190 lines lifted from `hosts_editor.py` and re-exported so existing imports keep working.
 - New `hostsfileget.theme` module owns the Catppuccin-inspired `PALETTE`, the `ACCESSIBILITY_CONTRAST_PAIRS` fixture, the sRGB math (`_hex_to_srgb`, `_linearize_srgb_channel`, `relative_luminance`, `contrast_ratio`), and the audit report builder/formatter. ~165 lines lifted and re-exported. The GUI continues to pull `PALETTE` and the audit dialog through the `hosts_editor` namespace so the breakdown is invisible to the existing call sites.
