@@ -4,6 +4,10 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Local block page server**
+- Added `--block-page-preview` and `--block-page-serve` for explicit loopback-only blocked-site explanation pages.
+- The server serves the same informational HTML on all paths plus a JSON health endpoint, stays HTTP-only, and does not write the hosts file, expose LAN services, redirect paths, or manage certificates.
+
 **Optional prompt_toolkit TUI**
 - Added `--tui-status` and dependency-gated `--tui` for a keyboard-first prompt shell covering status, profiles, config paths, source bundles, and local clean-preview summaries.
 - Added `requirements-tui.txt` and docs so `prompt_toolkit` remains optional; the TUI does not write the Windows hosts file, run source-health workers, start the local API, or replace reviewed GUI/admin CLI write paths.

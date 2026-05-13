@@ -75,6 +75,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - plan-only Intune, Group Policy, PDQ Deploy, and Configuration Manager package export bundles with hash-verified install/detect/uninstall wrappers
   - export-only VS Code companion extension scaffolds that use the opt-in loopback REST API for status and clean-preview commands
   - optional `prompt_toolkit` TUI shell for keyboard-first status, profile, source-bundle, and clean-preview review
+  - loopback-only local HTTP block page server and static preview export for reviewed blocked-site explanations
   - RPZ, Unbound, Privoxy, gzip-compressed hosts, and bzip2-compressed hosts
 - Operational utilities:
   - DNS cache flush
@@ -297,6 +298,13 @@ python hosts_editor.py --tui-status
 python hosts_editor.py --tui
 ```
 
+Preview or run the explicit loopback-only local block page server:
+
+```powershell
+python hosts_editor.py --block-page-preview .\block-page-preview.html
+python hosts_editor.py --block-page-serve --block-page-port 8088
+```
+
 Export or import encrypted profile sync bundles through a Git worktree:
 
 ```powershell
@@ -436,6 +444,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Managed package exports: `docs/managed-package-exports.md`
 - VS Code companion export: `docs/vscode-companion.md`
 - Optional prompt_toolkit TUI: `docs/tui.md`
+- Local block page server: `docs/block-page-server.md`
 - Optional Git history: `docs/git-history.md`
 - Scheduler activity report: `docs/scheduler-activity.md`
 - Portable bundle config: `docs/portable-config.md`

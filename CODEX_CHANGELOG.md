@@ -126,6 +126,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F061 complete. Next roadmap item: F062 prompt_toolkit TUI.
 - Completed F062: added optional `prompt_toolkit` TUI status and launch paths through `--tui-status` and `--tui`, plus `requirements-tui.txt`, docs, and regression tests. The TUI is dependency-gated, keyboard-first, and limited to status/config/profile/source-bundle review plus local clean-preview summaries; it does not write the Windows hosts file or start background services.
 - Updated `ROADMAP.md` to mark F062 complete. Next roadmap item: F063 local custom block page server.
+- Completed F063: added `--block-page-preview` and loopback-only `--block-page-serve` for local HTTP blocked-site explanation pages, including escaped HTML rendering, all-route responses, a JSON health endpoint, explicit HTTPS/path limitation warnings, docs, and regression tests. The server does not write the hosts file, expose LAN services, redirect paths, or manage certificates.
+- Updated `ROADMAP.md` to mark F063 complete. Next roadmap item: F064 advanced DNS rewrites/CNAME/private domains.
 
 ## Scope
 

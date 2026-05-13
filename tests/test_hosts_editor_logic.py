@@ -16,6 +16,7 @@ import datetime
 import hosts_editor
 from hosts_editor import (
     AGH_BLOCK_REASONS,
+    BLOCK_PAGE_SCHEMA,
     BLOCK_SINK_IPS,
     CONFIG_SCHEMA_VERSION,
     DEFAULT_PROFILE_ID,
@@ -50,6 +51,8 @@ from hosts_editor import (
     build_i18n_catalog_report,
     build_i18n_contribution_report,
     build_i18n_contribution_template,
+    build_block_page_request_context,
+    build_block_page_server_config,
     build_local_api_clean_preview_payload,
     build_local_api_status_payload,
     build_managed_hosts_block,
@@ -88,6 +91,7 @@ from hosts_editor import (
     classify_source_freshness,
     collect_recent_windows_dns_client_queries,
     collect_dns_bypass_policy_snapshot,
+    create_block_page_server,
     create_local_api_server,
     contrast_ratio,
     dns_bypass_policy_status,
@@ -170,6 +174,7 @@ from hosts_editor import (
     format_false_positive_triage_report,
     format_accessibility_audit_report,
     format_adblock_syntax_report,
+    format_block_page_server_report,
     format_idn_homograph_report,
     format_i18n_catalog_report,
     format_i18n_contribution_report,
@@ -299,6 +304,7 @@ from hosts_editor import (
     verify_share_patch_signature,
     write_portable_bundle_config,
     write_managed_package_export_bundle,
+    write_block_page_preview_html,
     write_vscode_companion_export,
     write_text_file_atomic,
     write_bytes_file_atomic,
@@ -961,6 +967,93 @@ class HostsEditorLogicTests(unittest.TestCase):
             create_local_api_server(host="0.0.0.0", port=0, token="0123456789abcdef")
         with self.assertRaises(ValueError):
             create_local_api_server(host="127.0.0.1", port=0, token="short")
+
+    def test_block_page_context_and_rendering_are_local_and_escaped(self):
+        config = build_block_page_server_config(
+            host="127.0.0.1",
+            port=8088,
+            title="Blocked <site>",
+            message="Ask IT before allowing this domain.",
+            support_url="https://support.example/allowlist",
+        )
+        context = build_block_page_request_context(
+            "/ads?<script>alert(1)</script>",
+            {"Host": "Tracker.Example:80"},
+            title=config["title"],
+            message=config["message"],
+            support_url=config["support_url"],
+            now=datetime.datetime(2026, 5, 13, 15, 30, tzinfo=datetime.timezone.utc),
+        )
+        html = hosts_editor.render_block_page_html(context)
+        formatted = format_block_page_server_report(config)
+
+        self.assertEqual(config["schema"], BLOCK_PAGE_SCHEMA)
+        self.assertTrue(config["loopback_only"])
+        self.assertFalse(config["writes_hosts_file"])
+        self.assertFalse(config["https_supported"])
+        self.assertEqual(context["requested_domain"], "tracker.example")
+        self.assertIn("Blocked &lt;site&gt;", html)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
+        self.assertNotIn("<script>alert(1)</script>", html)
+        self.assertIn("Roadmap source IDs", formatted)
+        self.assertIn("C14", formatted)
+        self.assertIn("C15", formatted)
+        self.assertIn("O28", formatted)
+
+    def test_block_page_server_serves_all_routes_and_health_without_writes(self):
+        server = create_block_page_server(
+            host="127.0.0.1",
+            port=0,
+            title="Blocked locally",
+            support_url="https://support.example/help",
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            host, port = server.server_address[:2]
+            base_url = f"http://{host}:{port}"
+            request = urllib.request.Request(
+                f"{base_url}/nested/path?x=1",
+                headers={"Host": "blocked.example.test"},
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                body = response.read().decode("utf-8")
+                content_type = response.headers.get("Content-Type", "")
+                csp = response.headers.get("Content-Security-Policy", "")
+            self.assertIn("text/html", content_type)
+            self.assertIn("default-src 'none'", csp)
+            self.assertIn("blocked.example.test", body)
+            self.assertIn("/nested/path?x=1", body)
+
+            with urllib.request.urlopen(f"{base_url}/__hostsfileget_block_page_health", timeout=5) as response:
+                health = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(health["schema"], BLOCK_PAGE_SCHEMA)
+            self.assertFalse(health["writes_hosts_file"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_block_page_server_rejects_non_loopback_and_preview_writes_html(self):
+        import tempfile
+        from pathlib import Path
+
+        with self.assertRaises(ValueError):
+            create_block_page_server(host="0.0.0.0", port=8088)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "block-page.html"
+            context = write_block_page_preview_html(
+                str(output),
+                title="Preview block",
+                requested_host="ads.example",
+                request_path="/ad.js",
+            )
+            html = output.read_text(encoding="utf-8")
+
+        self.assertEqual(context["requested_domain"], "ads.example")
+        self.assertIn("Preview block", html)
+        self.assertIn("/ad.js", html)
 
     def test_source_bundle_catalog_sanitizes_manifest_references(self):
         manifest = {
@@ -2926,6 +3019,45 @@ profile:
         with mock.patch.object(hosts_editor, "_cli_tui", return_value=0) as mocked_tui:
             self.assertEqual(hosts_editor._handle_cli_args(["--tui"]), 0)
             mocked_tui.assert_called_once_with(hosts_editor._default_hosts_file_path())
+
+        with mock.patch.object(hosts_editor, "_cli_block_page_preview", return_value=0) as mocked_preview:
+            self.assertEqual(
+                hosts_editor._handle_cli_args([
+                    "--block-page-preview", "blocked.html",
+                    "--block-page-title", "Blocked locally",
+                    "--block-page-message", "Contact IT.",
+                    "--block-page-support-url", "https://support.example/ticket",
+                    "--block-page-preview-host", "ads.example",
+                    "--block-page-preview-path", "/ad.js",
+                ]),
+                0,
+            )
+            mocked_preview.assert_called_once_with(
+                "blocked.html",
+                "Blocked locally",
+                "Contact IT.",
+                "https://support.example/ticket",
+                "ads.example",
+                "/ad.js",
+            )
+
+        with mock.patch.object(hosts_editor, "_cli_block_page_serve", return_value=0) as mocked_server:
+            self.assertEqual(
+                hosts_editor._handle_cli_args([
+                    "--block-page-serve",
+                    "--block-page-host", "127.0.0.1",
+                    "--block-page-port", "0",
+                    "--block-page-title", "Blocked locally",
+                ]),
+                0,
+            )
+            mocked_server.assert_called_once_with(
+                "127.0.0.1",
+                0,
+                "Blocked locally",
+                hosts_editor.BLOCK_PAGE_DEFAULT_MESSAGE,
+                None,
+            )
 
     def test_handle_cli_args_routes_cloud_dns_flags(self):
         with mock.patch.object(hosts_editor, "_cli_cloud_adapter_list", return_value=0) as mocked_list:

@@ -33,7 +33,9 @@ import glob
 import unicodedata
 import importlib
 import shlex
+import html
 import http.server
+import http.client
 import socketserver
 import secrets
 import string
@@ -115,6 +117,20 @@ LOCAL_API_DEFAULT_HOST = "127.0.0.1"
 LOCAL_API_DEFAULT_PORT = 8765
 LOCAL_API_MAX_BODY_BYTES = 512 * 1024
 LOCAL_API_MIN_TOKEN_LENGTH = 16
+BLOCK_PAGE_SCHEMA = "hostsfileget.block-page.v1"
+BLOCK_PAGE_DEFAULT_HOST = "127.0.0.1"
+BLOCK_PAGE_DEFAULT_PORT = 8088
+BLOCK_PAGE_DEFAULT_TITLE = "Blocked by HostsFileGet"
+BLOCK_PAGE_DEFAULT_MESSAGE = (
+    "This request resolved to the local HostsFileGet block page. "
+    "Review the active hosts profile, source list, or allowlist if this was unexpected."
+)
+BLOCK_PAGE_DEFAULT_PREVIEW_HOST = "blocked.example.test"
+BLOCK_PAGE_DEFAULT_PREVIEW_PATH = "/blocked"
+BLOCK_PAGE_HEALTH_PATH = "/__hostsfileget_block_page_health"
+BLOCK_PAGE_MAX_TEXT_LENGTH = 600
+BLOCK_PAGE_MAX_URL_LENGTH = 2048
+BLOCK_PAGE_REFERENCES = ("C1", "C3", "C5", "C14", "C15", "O28")
 I18N_CATALOG_SCHEMA_VERSION = 1
 DEFAULT_LOCALE = "en-US"
 I18N_CATALOG_RELATIVE_PATH = os.path.join("data", "i18n", f"{DEFAULT_LOCALE}.json")
@@ -15022,6 +15038,358 @@ def build_local_api_clean_preview_payload(payload: dict) -> dict:
     }
 
 
+def sanitize_block_page_bind_host(host: str | None = None) -> str:
+    value = str(host or BLOCK_PAGE_DEFAULT_HOST).strip()
+    if not is_loopback_api_host(value):
+        raise ValueError("Block page server host must be loopback-only: localhost, 127.0.0.1, or ::1.")
+    return value
+
+
+def sanitize_block_page_port(port: int | str | None = None) -> int:
+    try:
+        value = int(BLOCK_PAGE_DEFAULT_PORT if port is None else port)
+    except (TypeError, ValueError):
+        raise ValueError("Block page server port must be an integer.")
+    if value < 0 or value > 65535:
+        raise ValueError("Block page server port must be between 0 and 65535.")
+    return value
+
+
+def sanitize_block_page_text(value: str | None, default: str, label: str) -> str:
+    text = str(default if value in (None, "") else value).strip()
+    if not text:
+        text = default
+    if _contains_control_chars(text):
+        raise ValueError(f"Block page {label} must not contain control characters.")
+    if len(text) > BLOCK_PAGE_MAX_TEXT_LENGTH:
+        raise ValueError(f"Block page {label} must be {BLOCK_PAGE_MAX_TEXT_LENGTH} characters or fewer.")
+    return text
+
+
+def sanitize_block_page_support_url(url: str | None = None) -> str:
+    value = str(url or "").strip()
+    if not value:
+        return ""
+    if _contains_control_chars(value) or len(value) > BLOCK_PAGE_MAX_URL_LENGTH:
+        raise ValueError("Block page support URL is too long or contains control characters.")
+    parsed = urllib.parse.urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("Block page support URL must be an absolute http or https URL.")
+    return value
+
+
+def _block_page_requested_host(headers: dict | http.client.HTTPMessage | None) -> str:
+    raw_host = ""
+    if headers is not None:
+        try:
+            raw_host = headers.get("Host", "")
+        except AttributeError:
+            raw_host = ""
+    raw_host = str(raw_host or "").strip()
+    if _contains_control_chars(raw_host):
+        raw_host = ""
+    return raw_host[:255]
+
+
+def _block_page_domain_from_host(host_header: str) -> str:
+    host_header = str(host_header or "").strip()
+    if not host_header:
+        return ""
+    if host_header.startswith("[") and "]" in host_header:
+        candidate = host_header[1:host_header.index("]")]
+    else:
+        candidate = host_header.split(":", 1)[0]
+    candidate = candidate.strip().lower().rstrip(".")
+    if looks_like_domain(candidate, allow_single_label=True):
+        return candidate
+    return ""
+
+
+def sanitize_block_page_request_path(path: str | None = None) -> str:
+    raw_path = str(path or "/").strip()
+    if not raw_path:
+        raw_path = "/"
+    if _contains_control_chars(raw_path):
+        raw_path = "/"
+    parsed = urllib.parse.urlsplit(raw_path)
+    display_path = parsed.path or "/"
+    if parsed.query:
+        display_path = f"{display_path}?{parsed.query}"
+    if not display_path.startswith("/"):
+        display_path = f"/{display_path}"
+    return display_path[:1024]
+
+
+def build_block_page_server_config(
+    host: str | None = None,
+    port: int | str | None = None,
+    title: str | None = None,
+    message: str | None = None,
+    support_url: str | None = None,
+) -> dict:
+    sanitized_host = sanitize_block_page_bind_host(host)
+    sanitized_port = sanitize_block_page_port(port)
+    return {
+        "schema": BLOCK_PAGE_SCHEMA,
+        "app": APP_NAME,
+        "version": APP_VERSION,
+        "host": sanitized_host,
+        "port": sanitized_port,
+        "url": f"http://{sanitized_host}:{sanitized_port}/",
+        "loopback_only": True,
+        "serves_all_routes": True,
+        "health_path": BLOCK_PAGE_HEALTH_PATH,
+        "writes_hosts_file": False,
+        "https_supported": False,
+        "requires_admin_for_port_80": sanitized_port == 80,
+        "title": sanitize_block_page_text(title, BLOCK_PAGE_DEFAULT_TITLE, "title"),
+        "message": sanitize_block_page_text(message, BLOCK_PAGE_DEFAULT_MESSAGE, "message"),
+        "support_url": sanitize_block_page_support_url(support_url),
+        "warnings": [
+            "The server is HTTP-only; HTTPS blocked sites will show browser certificate or TLS errors unless the operator adds a trusted TLS front end.",
+            "The hosts file can map names to an IP address but cannot redirect URL paths or ports.",
+            "The server binds to loopback only; LAN/router custom block pages need an explicitly managed web server and DNS policy.",
+            "The server does not write the Windows hosts file or modify source lists.",
+        ],
+        "references": list(BLOCK_PAGE_REFERENCES),
+    }
+
+
+def build_block_page_request_context(
+    path: str | None = None,
+    headers: dict | http.client.HTTPMessage | None = None,
+    *,
+    title: str | None = None,
+    message: str | None = None,
+    support_url: str | None = None,
+    now: datetime.datetime | None = None,
+) -> dict:
+    requested_host = _block_page_requested_host(headers)
+    requested_path = sanitize_block_page_request_path(path)
+    requested_domain = _block_page_domain_from_host(requested_host)
+    timestamp = now or datetime.datetime.now(datetime.timezone.utc)
+    return {
+        "schema": BLOCK_PAGE_SCHEMA,
+        "app": APP_NAME,
+        "version": APP_VERSION,
+        "generated_at": timestamp.isoformat(),
+        "title": sanitize_block_page_text(title, BLOCK_PAGE_DEFAULT_TITLE, "title"),
+        "message": sanitize_block_page_text(message, BLOCK_PAGE_DEFAULT_MESSAGE, "message"),
+        "support_url": sanitize_block_page_support_url(support_url),
+        "requested_host": requested_host,
+        "requested_domain": requested_domain,
+        "requested_path": requested_path,
+        "writes_hosts_file": False,
+        "https_supported": False,
+        "references": list(BLOCK_PAGE_REFERENCES),
+    }
+
+
+def render_block_page_html(context: dict) -> str:
+    if not isinstance(context, dict):
+        raise ValueError("Block page context must be a dictionary.")
+    title = html.escape(str(context.get("title") or BLOCK_PAGE_DEFAULT_TITLE))
+    app = html.escape(str(context.get("app") or APP_NAME))
+    message = html.escape(str(context.get("message") or BLOCK_PAGE_DEFAULT_MESSAGE))
+    requested_host = html.escape(str(context.get("requested_host") or "(no Host header)"))
+    requested_domain = html.escape(str(context.get("requested_domain") or "(unknown)"))
+    requested_path = html.escape(str(context.get("requested_path") or "/"))
+    generated_at = html.escape(str(context.get("generated_at") or ""))
+    support_url = str(context.get("support_url") or "").strip()
+    support_html = ""
+    if support_url:
+        escaped_url = html.escape(support_url, quote=True)
+        support_html = f'<p><a href="{escaped_url}" rel="noreferrer">Support or allowlist request</a></p>'
+    return "\n".join([
+        "<!doctype html>",
+        '<html lang="en">',
+        "<head>",
+        '  <meta charset="utf-8">',
+        '  <meta name="viewport" content="width=device-width, initial-scale=1">',
+        f"  <title>{title}</title>",
+        "  <style>",
+        "    :root { color-scheme: light dark; font-family: Segoe UI, Arial, sans-serif; }",
+        "    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f6f7f9; color: #171a1f; }",
+        "    main { width: min(760px, calc(100% - 32px)); border: 1px solid #d8dee8; border-radius: 8px; background: #ffffff; padding: 28px; box-shadow: 0 16px 40px rgba(20, 33, 56, 0.12); }",
+        "    h1 { margin: 0 0 12px; font-size: 1.65rem; line-height: 1.2; }",
+        "    p { line-height: 1.5; }",
+        "    dl { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 20px 0; }",
+        "    dt { font-weight: 700; }",
+        "    dd { margin: 0; overflow-wrap: anywhere; }",
+        "    .note { border-left: 4px solid #b45309; padding-left: 12px; color: #3c2a0a; }",
+        "    a { color: #0f5bd7; }",
+        "    @media (prefers-color-scheme: dark) { body { background: #101418; color: #edf1f7; } main { background: #171d24; border-color: #303a46; box-shadow: none; } .note { color: #f6d9a6; } a { color: #8ab4ff; } }",
+        "  </style>",
+        "</head>",
+        "<body>",
+        "  <main>",
+        f"    <h1>{title}</h1>",
+        f"    <p>{message}</p>",
+        "    <dl>",
+        f"      <dt>Requested host</dt><dd>{requested_host}</dd>",
+        f"      <dt>Requested domain</dt><dd>{requested_domain}</dd>",
+        f"      <dt>Requested path</dt><dd>{requested_path}</dd>",
+        f"      <dt>Responder</dt><dd>{app} local block page</dd>",
+        f"      <dt>Generated</dt><dd>{generated_at}</dd>",
+        "    </dl>",
+        "    <p class=\"note\">This local HTTP page is informational only. Hosts files cannot redirect URL paths, and HTTPS requests require separate certificate-aware infrastructure.</p>",
+        f"    {support_html}",
+        "  </main>",
+        "</body>",
+        "</html>",
+        "",
+    ])
+
+
+def write_block_page_preview_html(
+    output_path: str,
+    *,
+    title: str | None = None,
+    message: str | None = None,
+    support_url: str | None = None,
+    requested_host: str | None = None,
+    request_path: str | None = None,
+) -> dict:
+    headers = {"Host": requested_host or BLOCK_PAGE_DEFAULT_PREVIEW_HOST}
+    context = build_block_page_request_context(
+        request_path or BLOCK_PAGE_DEFAULT_PREVIEW_PATH,
+        headers,
+        title=title,
+        message=message,
+        support_url=support_url,
+    )
+    write_text_file_atomic(output_path, render_block_page_html(context))
+    return context
+
+
+def format_block_page_server_report(config: dict) -> str:
+    lines = [
+        "HostsFileGet local block page server",
+        f"Schema: {config.get('schema', BLOCK_PAGE_SCHEMA)}",
+        f"URL: {config.get('url')}",
+        f"Loopback only: {'yes' if config.get('loopback_only') else 'no'}",
+        f"Serves all routes: {'yes' if config.get('serves_all_routes') else 'no'}",
+        f"Health path: {config.get('health_path')}",
+        f"Writes hosts file: {'yes' if config.get('writes_hosts_file') else 'no'}",
+        f"HTTPS supported: {'yes' if config.get('https_supported') else 'no'}",
+        f"Port 80 admin note: {'likely required' if config.get('requires_admin_for_port_80') else 'not applicable'}",
+        f"Title: {config.get('title')}",
+    ]
+    support_url = config.get("support_url")
+    if support_url:
+        lines.append(f"Support URL: {support_url}")
+    lines.append("")
+    lines.append("Warnings:")
+    for warning in config.get("warnings", []):
+        lines.append(f"- {warning}")
+    lines.append("")
+    lines.append(f"Roadmap source IDs: {', '.join(config.get('references', []))}")
+    return "\n".join(lines)
+
+
+class BlockPageServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
+class BlockPageRequestHandler(http.server.BaseHTTPRequestHandler):
+    server_version = f"{APP_SLUG}BlockPage/{APP_VERSION}"
+
+    def log_message(self, _format, *_args):  # pragma: no cover - avoids noisy CLI tests
+        return
+
+    def _headers(self, content_type: str, content_length: int) -> None:
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(content_length))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+
+    def _send_html(self, status_code: int, body: str, include_body: bool = True) -> None:
+        raw = body.encode("utf-8")
+        self.send_response(status_code)
+        self._headers("text/html; charset=utf-8", len(raw))
+        self.end_headers()
+        if include_body:
+            self.wfile.write(raw)
+
+    def _send_json(self, status_code: int, payload: dict, include_body: bool = True) -> None:
+        raw = json.dumps(payload, indent=2).encode("utf-8")
+        self.send_response(status_code)
+        self._headers("application/json; charset=utf-8", len(raw))
+        self.end_headers()
+        if include_body:
+            self.wfile.write(raw)
+
+    def _render_context(self) -> dict:
+        config = getattr(self.server, "block_page_config", {})
+        return build_block_page_request_context(
+            self.path,
+            self.headers,
+            title=config.get("title"),
+            message=config.get("message"),
+            support_url=config.get("support_url"),
+        )
+
+    def do_GET(self):
+        path = urllib.parse.urlparse(self.path).path
+        if path == BLOCK_PAGE_HEALTH_PATH:
+            config = getattr(self.server, "block_page_config", {})
+            self._send_json(200, {
+                "schema": BLOCK_PAGE_SCHEMA,
+                "status": "ok",
+                "loopback_only": True,
+                "writes_hosts_file": False,
+                "url": config.get("url"),
+            })
+            return
+        self._send_html(200, render_block_page_html(self._render_context()))
+
+    def do_HEAD(self):
+        path = urllib.parse.urlparse(self.path).path
+        if path == BLOCK_PAGE_HEALTH_PATH:
+            self._send_json(200, {
+                "schema": BLOCK_PAGE_SCHEMA,
+                "status": "ok",
+                "loopback_only": True,
+                "writes_hosts_file": False,
+            }, include_body=False)
+            return
+        self._send_html(200, render_block_page_html(self._render_context()), include_body=False)
+
+    def do_POST(self):
+        self._send_json(405, {
+            "schema": BLOCK_PAGE_SCHEMA,
+            "error": "The block page server is read-only and only serves GET/HEAD responses.",
+            "writes_hosts_file": False,
+        })
+
+
+def create_block_page_server(
+    host: str = BLOCK_PAGE_DEFAULT_HOST,
+    port: int = BLOCK_PAGE_DEFAULT_PORT,
+    *,
+    title: str | None = None,
+    message: str | None = None,
+    support_url: str | None = None,
+):
+    config = build_block_page_server_config(
+        host=host,
+        port=port,
+        title=title,
+        message=message,
+        support_url=support_url,
+    )
+    server = BlockPageServer((config["host"], config["port"]), BlockPageRequestHandler)
+    actual_host, actual_port = server.server_address[:2]
+    config["host"] = actual_host
+    config["port"] = actual_port
+    config["url"] = f"http://{actual_host}:{actual_port}/"
+    server.block_page_config = config
+    return server
+
+
 class LocalApiServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -23101,6 +23469,64 @@ def _cli_api_serve(host: str, port: int, token: str | None) -> int:
     return 0
 
 
+def _cli_block_page_preview(
+    output_path: str,
+    title: str | None,
+    message: str | None,
+    support_url: str | None,
+    requested_host: str | None,
+    request_path: str | None,
+) -> int:
+    try:
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        context = write_block_page_preview_html(
+            output_path,
+            title=title,
+            message=message,
+            support_url=support_url,
+            requested_host=requested_host,
+            request_path=request_path,
+        )
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Block page preview failed: {exc}")
+        return 2
+    _cli_print(f"Wrote block page preview to {output_path}")
+    _cli_print(f"Preview requested host: {context['requested_host'] or '(none)'}")
+    _cli_print("No hosts file changes were made.")
+    return 0
+
+
+def _cli_block_page_serve(
+    host: str,
+    port: int,
+    title: str | None,
+    message: str | None,
+    support_url: str | None,
+) -> int:
+    try:
+        server = create_block_page_server(
+            host=host,
+            port=port,
+            title=title,
+            message=message,
+            support_url=support_url,
+        )
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Block page server failed to start: {exc}")
+        return 2
+    _cli_print(format_block_page_server_report(server.block_page_config))
+    _cli_print("Press Ctrl+C to stop.")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        _cli_print("Block page server stopped.")
+    finally:
+        server.server_close()
+    return 0
+
+
 def _cli_i18n_template(locale: str, output_path: str) -> int:
     try:
         template = build_i18n_contribution_template(locale)
@@ -24093,6 +24519,15 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--vscode-api-base-url",
         "--tui",
         "--tui-status",
+        "--block-page-serve",
+        "--block-page-preview",
+        "--block-page-host",
+        "--block-page-port",
+        "--block-page-title",
+        "--block-page-message",
+        "--block-page-support-url",
+        "--block-page-preview-host",
+        "--block-page-preview-path",
         "--profile-schedule-list",
         "--profile-schedule-add",
         "--profile-schedule-days",
@@ -24194,6 +24629,14 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--vscode-extension-name=",
         "--vscode-extension-version=",
         "--vscode-api-base-url=",
+        "--block-page-preview=",
+        "--block-page-host=",
+        "--block-page-port=",
+        "--block-page-title=",
+        "--block-page-message=",
+        "--block-page-support-url=",
+        "--block-page-preview-host=",
+        "--block-page-preview-path=",
         "--profile-schedule-add=",
         "--profile-schedule-days=",
         "--profile-schedule-name=",
@@ -24329,6 +24772,15 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     )
     parser.add_argument("--tui", action="store_true", help="Start the optional prompt_toolkit TUI. Requires requirements-tui.txt.")
     parser.add_argument("--tui-status", action="store_true", help="Print optional prompt_toolkit TUI dependency and safety status without launching it.")
+    parser.add_argument("--block-page-serve", action="store_true", help="Start the loopback-only local HTTP block page server. It does not write the hosts file.")
+    parser.add_argument("--block-page-preview", metavar="OUTPUT", help="Write a static HTML preview of the local block page to OUTPUT without starting a server.")
+    parser.add_argument("--block-page-host", default=BLOCK_PAGE_DEFAULT_HOST, metavar="HOST", help="Loopback host for --block-page-serve; defaults to 127.0.0.1.")
+    parser.add_argument("--block-page-port", type=int, default=BLOCK_PAGE_DEFAULT_PORT, metavar="PORT", help="Port for --block-page-serve; defaults to 8088. Use 80 only after reviewing admin/URL reservation requirements.")
+    parser.add_argument("--block-page-title", default=BLOCK_PAGE_DEFAULT_TITLE, metavar="TEXT", help="Title for --block-page-serve or --block-page-preview.")
+    parser.add_argument("--block-page-message", default=BLOCK_PAGE_DEFAULT_MESSAGE, metavar="TEXT", help="Message for --block-page-serve or --block-page-preview.")
+    parser.add_argument("--block-page-support-url", metavar="URL", help="Optional absolute http/https support or allowlist URL shown on the block page.")
+    parser.add_argument("--block-page-preview-host", default=BLOCK_PAGE_DEFAULT_PREVIEW_HOST, metavar="HOST", help="Host header to show in --block-page-preview output.")
+    parser.add_argument("--block-page-preview-path", default=BLOCK_PAGE_DEFAULT_PREVIEW_PATH, metavar="PATH", help="Request path to show in --block-page-preview output.")
     parser.add_argument("--profile-schedule-list", action="store_true", help="Show the time-bound profile activation schedule without writing files.")
     parser.add_argument(
         "--profile-schedule-add",
@@ -24614,6 +25066,36 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         return _cli_tui_status()
     if args.tui:
         return _cli_tui(hosts_path)
+    block_page_options = [
+        args.block_page_host != BLOCK_PAGE_DEFAULT_HOST,
+        args.block_page_port != BLOCK_PAGE_DEFAULT_PORT,
+        args.block_page_title != BLOCK_PAGE_DEFAULT_TITLE,
+        args.block_page_message != BLOCK_PAGE_DEFAULT_MESSAGE,
+        args.block_page_support_url,
+        args.block_page_preview_host != BLOCK_PAGE_DEFAULT_PREVIEW_HOST,
+        args.block_page_preview_path != BLOCK_PAGE_DEFAULT_PREVIEW_PATH,
+    ]
+    if any(block_page_options) and not (args.block_page_serve or args.block_page_preview):
+        parser.error("--block-page-* options require --block-page-serve or --block-page-preview OUTPUT")
+    if (args.block_page_preview_host != BLOCK_PAGE_DEFAULT_PREVIEW_HOST or args.block_page_preview_path != BLOCK_PAGE_DEFAULT_PREVIEW_PATH) and not args.block_page_preview:
+        parser.error("--block-page-preview-host and --block-page-preview-path require --block-page-preview OUTPUT")
+    if args.block_page_preview:
+        return _cli_block_page_preview(
+            args.block_page_preview,
+            args.block_page_title,
+            args.block_page_message,
+            args.block_page_support_url,
+            args.block_page_preview_host,
+            args.block_page_preview_path,
+        )
+    if args.block_page_serve:
+        return _cli_block_page_serve(
+            args.block_page_host,
+            args.block_page_port,
+            args.block_page_title,
+            args.block_page_message,
+            args.block_page_support_url,
+        )
     if args.profile_schedule_add:
         return _cli_profile_schedule_add(
             args.profile_schedule_add[0],
