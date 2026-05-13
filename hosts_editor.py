@@ -342,6 +342,25 @@ VSCODE_COMPANION_WARNINGS = (
     "Review and package with the normal VS Code extension tooling before distributing.",
 )
 VSCODE_COMPANION_REFERENCES = ("O1", "O2", "S31", "S32", "S33", "S34", "S35", "S36")
+TUI_SCHEMA = "hostsfileget.tui.v1"
+TUI_OPTIONAL_REQUIREMENT = "prompt_toolkit>=3.0.52,<4"
+TUI_REFERENCES = ("O9", "O14", "D7", "S37", "S38", "S39")
+TUI_COMMANDS = (
+    {"command": "status", "description": "Show TUI dependency, safety boundary, and available actions."},
+    {"command": "profiles", "description": "List saved app profiles without writing the hosts file."},
+    {"command": "config", "description": "Show active config location and sidecar paths."},
+    {"command": "sources", "description": "List manifest-defined source bundles for review."},
+    {"command": "clean-preview <path>", "description": "Preview normalized hosts-like input from a local file without writing output."},
+    {"command": "health", "description": "Print the non-interactive source-health command to run outside the TUI."},
+    {"command": "api", "description": "Print the opt-in local REST API startup command."},
+    {"command": "quit", "description": "Exit the TUI."},
+)
+TUI_WARNINGS = (
+    "The prompt_toolkit TUI is optional and is launched only with --tui.",
+    "The TUI does not write the Windows hosts file; use existing reviewed GUI or CLI apply paths for writes.",
+    "The TUI does not run background imports, source health checks, API servers, or schedulers by itself.",
+    "Install the optional requirements-tui.txt dependency before launching --tui from a source checkout.",
+)
 SCHEDULED_TASK_NAME = "HostsFileGet Auto-Update"
 CLI_LOG_FILENAME = "cli.log"
 CLI_ACTIVITY_FILENAME = "cli-activity.jsonl"
@@ -6425,6 +6444,182 @@ def format_vscode_companion_export_plan(plan: dict) -> str:
     if references:
         lines.extend(["", "Roadmap source IDs:", f"- {', '.join(references)}"])
     return "\n".join(lines)
+
+
+def probe_prompt_toolkit_dependency(importer=importlib.import_module) -> dict:
+    try:
+        module = importer("prompt_toolkit")
+    except Exception as exc:
+        return {
+            "package": "prompt_toolkit",
+            "requirement": TUI_OPTIONAL_REQUIREMENT,
+            "available": False,
+            "version": None,
+            "error": str(exc) or exc.__class__.__name__,
+        }
+    return {
+        "package": "prompt_toolkit",
+        "requirement": TUI_OPTIONAL_REQUIREMENT,
+        "available": True,
+        "version": str(getattr(module, "__version__", "unknown")),
+        "error": None,
+    }
+
+
+def build_tui_launch_report(prompt_toolkit_probe: dict | None = None, now=None) -> dict:
+    created_at = now or datetime.datetime.now()
+    if isinstance(created_at, datetime.datetime):
+        created_at = created_at.isoformat(timespec="seconds")
+    probe = dict(prompt_toolkit_probe or probe_prompt_toolkit_dependency())
+    probe.setdefault("package", "prompt_toolkit")
+    probe.setdefault("requirement", TUI_OPTIONAL_REQUIREMENT)
+    probe["available"] = bool(probe.get("available"))
+    return {
+        "schema": TUI_SCHEMA,
+        "app_version": APP_VERSION,
+        "created_at": str(created_at),
+        "launch_flag": "--tui",
+        "status_flag": "--tui-status",
+        "optional_dependency": True,
+        "dependency": probe,
+        "writes_hosts_file": False,
+        "requires_admin": False,
+        "commands": [dict(command) for command in TUI_COMMANDS],
+        "warnings": list(TUI_WARNINGS),
+        "references": list(TUI_REFERENCES),
+    }
+
+
+def format_tui_launch_report(report: dict) -> str:
+    dependency = report.get("dependency") or {}
+    lines = [
+        "HostsFileGet prompt_toolkit TUI",
+        f"Schema: {report.get('schema')}",
+        f"Launch flag: {report.get('launch_flag')}",
+        f"Status flag: {report.get('status_flag')}",
+        f"Optional dependency: {dependency.get('requirement')}",
+        f"Dependency available: {'yes' if dependency.get('available') else 'no'}",
+    ]
+    if dependency.get("version"):
+        lines.append(f"Dependency version: {dependency.get('version')}")
+    if dependency.get("error"):
+        lines.append(f"Dependency error: {dependency.get('error')}")
+    lines.extend([
+        f"Writes hosts file: {'yes' if report.get('writes_hosts_file') else 'no'}",
+        f"Requires admin: {'yes' if report.get('requires_admin') else 'no'}",
+        "",
+        "Commands:",
+    ])
+    for command in report.get("commands") or []:
+        lines.append(f"- {command.get('command')}: {command.get('description')}")
+    lines.extend(["", "Warnings:"])
+    for warning in report.get("warnings") or []:
+        lines.append(f"- {warning}")
+    references = report.get("references") or []
+    if references:
+        lines.extend(["", "Roadmap source IDs:", f"- {', '.join(references)}"])
+    if not dependency.get("available"):
+        lines.extend(["", "Install:", "python -m pip install -r requirements-tui.txt"])
+    return "\n".join(lines)
+
+
+def _format_tui_clean_preview_result(input_path: str, payload: dict, limit: int = 12) -> str:
+    cleaned_lines = payload.get("cleaned_lines") or []
+    stats = payload.get("stats") or {}
+    summary = summarize_clean_changes(payload.get("discarded_line_count", 0), stats.get("transformed", 0))
+    lines = [
+        f"Clean preview: {input_path}",
+        f"Input lines: {payload.get('input_line_count')}",
+        f"Cleaned lines: {payload.get('cleaned_line_count')}",
+        f"Summary: {summary}",
+    ]
+    if cleaned_lines:
+        lines.extend(["", f"First {min(limit, len(cleaned_lines))} cleaned line(s):"])
+        lines.extend(cleaned_lines[:limit])
+        if len(cleaned_lines) > limit:
+            lines.append(f"... {len(cleaned_lines) - limit} more line(s) not shown.")
+    return "\n".join(lines)
+
+
+def run_prompt_toolkit_tui(hosts_path: str | None = None) -> int:
+    try:
+        prompt_toolkit = importlib.import_module("prompt_toolkit")
+        completion = importlib.import_module("prompt_toolkit.completion")
+        formatted_text = importlib.import_module("prompt_toolkit.formatted_text")
+    except Exception as exc:
+        raise RuntimeError(f"prompt_toolkit is unavailable: {exc}") from exc
+
+    PromptSession = getattr(prompt_toolkit, "PromptSession")
+    print_formatted_text = getattr(prompt_toolkit, "print_formatted_text")
+    WordCompleter = getattr(completion, "WordCompleter")
+    HTML = getattr(formatted_text, "HTML")
+
+    command_names = [command["command"].split()[0] for command in TUI_COMMANDS]
+    session = PromptSession(
+        completer=WordCompleter(command_names, ignore_case=True),
+        complete_while_typing=True,
+    )
+
+    print_formatted_text(HTML(f"<b>{APP_NAME} TUI</b>"))
+    print_formatted_text("Type help for commands. This TUI is read-only/config-only and never writes the hosts file.")
+
+    while True:
+        try:
+            raw = session.prompt("hostsfileget> ", bottom_toolbar="quit exits; clean-preview <path> previews local text only")
+        except KeyboardInterrupt:
+            print_formatted_text("Use quit to exit.")
+            continue
+        except EOFError:
+            print_formatted_text("")
+            return 0
+
+        try:
+            parts = shlex.split(raw.strip()) if raw.strip() else []
+        except ValueError as exc:
+            print_formatted_text(f"Could not parse command: {exc}")
+            continue
+        if not parts:
+            continue
+        command = parts[0].lower()
+
+        if command in {"quit", "exit", "q"}:
+            return 0
+        if command in {"help", "?"}:
+            print_formatted_text(format_tui_launch_report(build_tui_launch_report()))
+            continue
+        if command == "status":
+            print_formatted_text(format_tui_launch_report(build_tui_launch_report()))
+            continue
+        if command == "profiles":
+            config_path = get_primary_config_path(CONFIG_FILENAME)
+            print_formatted_text(format_profile_list_summary(_read_cli_config_payload(config_path)))
+            continue
+        if command == "config":
+            print_formatted_text(format_config_location_report(build_config_location_report()))
+            continue
+        if command in {"sources", "bundles"}:
+            print_formatted_text(format_source_bundle_catalog(load_source_bundle_catalog()))
+            continue
+        if command == "health":
+            print_formatted_text("Run outside the TUI: python hosts_editor.py --source-health --source-health-output source-health-report.json")
+            continue
+        if command == "api":
+            print_formatted_text('Set HOSTSFILEGET_API_TOKEN, then run outside the TUI: python hosts_editor.py --api-serve')
+            continue
+        if command == "clean-preview":
+            if len(parts) < 2:
+                print_formatted_text("Usage: clean-preview <path>")
+                continue
+            input_path = parts[1]
+            try:
+                payload = build_local_api_clean_preview_payload({"lines": read_text_file_lines(input_path)})
+            except (OSError, ValueError) as exc:
+                print_formatted_text(f"Clean preview failed: {exc}")
+                continue
+            print_formatted_text(_format_tui_clean_preview_result(input_path, payload))
+            continue
+
+        print_formatted_text(f"Unknown command: {command}. Type help for commands.")
 
 
 def _parse_valid_http_source_url(url: str):
@@ -23693,6 +23888,23 @@ def _cli_vscode_companion_export(
     return 0
 
 
+def _cli_tui_status() -> int:
+    _cli_print(format_tui_launch_report(build_tui_launch_report()))
+    return 0
+
+
+def _cli_tui(hosts_path: str) -> int:
+    report = build_tui_launch_report()
+    if not (report.get("dependency") or {}).get("available"):
+        _cli_print(format_tui_launch_report(report))
+        return 2
+    try:
+        return run_prompt_toolkit_tui(hosts_path)
+    except RuntimeError as exc:
+        _cli_print(f"TUI launch failed: {exc}")
+        return 2
+
+
 def _cli_profile_schedule_list(at_value: str | None = None) -> int:
     try:
         config_path = get_primary_config_path("hosts_editor_config.json")
@@ -23879,6 +24091,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--vscode-extension-name",
         "--vscode-extension-version",
         "--vscode-api-base-url",
+        "--tui",
+        "--tui-status",
         "--profile-schedule-list",
         "--profile-schedule-add",
         "--profile-schedule-days",
@@ -24113,6 +24327,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         metavar="URL",
         help="Loopback API base URL for --vscode-extension-export.",
     )
+    parser.add_argument("--tui", action="store_true", help="Start the optional prompt_toolkit TUI. Requires requirements-tui.txt.")
+    parser.add_argument("--tui-status", action="store_true", help="Print optional prompt_toolkit TUI dependency and safety status without launching it.")
     parser.add_argument("--profile-schedule-list", action="store_true", help="Show the time-bound profile activation schedule without writing files.")
     parser.add_argument(
         "--profile-schedule-add",
@@ -24394,6 +24610,10 @@ def _handle_cli_args(argv: list[str]) -> int | None:
             args.vscode_extension_version,
             args.vscode_api_base_url,
         )
+    if args.tui_status:
+        return _cli_tui_status()
+    if args.tui:
+        return _cli_tui(hosts_path)
     if args.profile_schedule_add:
         return _cli_profile_schedule_add(
             args.profile_schedule_add[0],

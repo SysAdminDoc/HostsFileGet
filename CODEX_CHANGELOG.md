@@ -124,6 +124,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F060 complete. Next roadmap item: F061 VS Code companion extension.
 - Completed F061: added `--vscode-extension-export` for a guarded VS Code companion extension scaffold with `package.json`, `extension.js`, `README.md`, `.vscodeignore`, and a JSON review plan. The generated extension uses SecretStorage or `HOSTSFILEGET_API_TOKEN`, enforces loopback API URLs, exposes status and clean-preview commands only, and does not write the Windows hosts file.
 - Updated `ROADMAP.md` to mark F061 complete. Next roadmap item: F062 prompt_toolkit TUI.
+- Completed F062: added optional `prompt_toolkit` TUI status and launch paths through `--tui-status` and `--tui`, plus `requirements-tui.txt`, docs, and regression tests. The TUI is dependency-gated, keyboard-first, and limited to status/config/profile/source-bundle review plus local clean-preview summaries; it does not write the Windows hosts file or start background services.
+- Updated `ROADMAP.md` to mark F062 complete. Next roadmap item: F063 local custom block page server.
 
 ## Scope
 
