@@ -85,6 +85,7 @@ Non-negotiables:
 - [x] F063 - Local custom block page server (`docs/block-page-server.md`, loopback-only HTTP page server, static preview, HTTPS/path limitation warnings)
 - [x] F064 - Advanced DNS rewrites/CNAME/private domains (`docs/dns-rewrites.md`, Control D and Technitium review plans, CNAME/private-domain guards)
 - [x] F065 - Certificate Transparency and typosquat watchdog (`docs/ct-typosquat-watchdog.md`, plan-only CT query queues, deterministic typo candidates, no automatic hosts writes)
+- [x] F066 - VirusTotal, URLhaus, MISP, STIX enrichment (`docs/cti-enrichment.md`, plan-only CTI request templates, local STIX bundle, no API-key storage)
 
 ## State Of The Repo
 
@@ -93,8 +94,8 @@ Non-negotiables:
 - Language and runtime: Python 3.x, Tkinter desktop UI, Windows-first assumptions, PowerShell launcher.
 - Entry points: `hosts_editor.py` for GUI and CLI, `PythonLauncher.ps1` for elevated launch/bootstrap, `HostsFileGet.spec` for PyInstaller.
 - Packaging: PyInstaller one-file Windows EXE with `uac_admin=True`; build artifacts exist locally under `build/` and `dist/` but are not tracked. `requirements-tui.txt` keeps the prompt_toolkit terminal UI dependency optional.
-- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, `tests/test_benchmarks.py`, and `tests/test_package_manifests.py` contain 314 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation and contribution fixtures, encrypted profile sync fixtures, signed share patch fixtures, recovery-plan fixtures, WFP blocker companion fixtures, NRPT policy export fixtures, sandbox/VM hosts bundle fixtures, router/gateway bundle fixtures, managed package export fixtures, VS Code companion export fixtures, prompt_toolkit TUI dependency fixtures, local block page server fixtures, advanced DNS rewrite plan fixtures, CT/typosquat watchdog fixtures, migration importer fixtures, export-format fixtures, DNS integration fixtures, cloud DNS adapter fixtures, source adapter plugin fixtures, local REST API fixtures, package manifest render fixtures, adblock syntax lint/quarantine fixtures, rule tier fixtures, IDN/homograph fixtures, threat-feed pack fixtures, CNAME cloaking workflow fixtures, encrypted-DNS bypass pack fixtures, DNS rebinding report fixtures, SafeSearch/restricted-mode template fixtures, profile activation schedule fixtures, profile quick-switch/tray dependency fixtures, source-bundle manifest fixtures, filter-builder query-history fixtures, watch-expression fixtures, source metrics fixtures, virtual-list fixtures, parallel import retry/order fixtures, provenance filter/export fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, NextDNS/Control D CSV logs, and find/replace.
-- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `data/i18n/README.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/cloud-dns-adapters.md`, `docs/router-gateway-adapters.md`, `docs/managed-package-exports.md`, `docs/vscode-companion.md`, `docs/tui.md`, `docs/block-page-server.md`, `docs/dns-rewrites.md`, `docs/ct-typosquat-watchdog.md`, `docs/adblock-lint.md`, `docs/rule-tiers.md`, `docs/idn-homograph.md`, `docs/threat-feed-packs.md`, `docs/cname-cloaking.md`, `docs/encrypted-dns-bypass.md`, `docs/encrypted-sync.md`, `docs/share-patches.md`, `docs/recovery-plan.md`, `docs/wfp-blocker-companion.md`, `docs/nrpt-policy-export.md`, `docs/sandbox-vm-hosts.md`, `docs/dns-rebinding.md`, `docs/safesearch-restricted-mode.md`, `docs/profile-activation-schedule.md`, `docs/profile-quick-switch.md`, `docs/source-adapter-plugins.md`, `docs/local-rest-api.md`, `docs/package-managers.md`, `docs/source-bundles.md`, `docs/filter-builder.md`, `docs/watch-expressions.md`, `docs/source-metrics.md`, `docs/parallel-imports.md`, `docs/virtualized-lists.md`, `docs/provenance-log.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `.github/ISSUE_TEMPLATE/translation.yml`, `LICENSE`, and this roadmap.
+- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, `tests/test_benchmarks.py`, and `tests/test_package_manifests.py` contain 316 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation and contribution fixtures, encrypted profile sync fixtures, signed share patch fixtures, recovery-plan fixtures, WFP blocker companion fixtures, NRPT policy export fixtures, sandbox/VM hosts bundle fixtures, router/gateway bundle fixtures, managed package export fixtures, VS Code companion export fixtures, prompt_toolkit TUI dependency fixtures, local block page server fixtures, advanced DNS rewrite plan fixtures, CT/typosquat watchdog fixtures, CTI enrichment fixtures, migration importer fixtures, export-format fixtures, DNS integration fixtures, cloud DNS adapter fixtures, source adapter plugin fixtures, local REST API fixtures, package manifest render fixtures, adblock syntax lint/quarantine fixtures, rule tier fixtures, IDN/homograph fixtures, threat-feed pack fixtures, CNAME cloaking workflow fixtures, encrypted-DNS bypass pack fixtures, DNS rebinding report fixtures, SafeSearch/restricted-mode template fixtures, profile activation schedule fixtures, profile quick-switch/tray dependency fixtures, source-bundle manifest fixtures, filter-builder query-history fixtures, watch-expression fixtures, source metrics fixtures, virtual-list fixtures, parallel import retry/order fixtures, provenance filter/export fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, NextDNS/Control D CSV logs, and find/replace.
+- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `data/i18n/README.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/cloud-dns-adapters.md`, `docs/router-gateway-adapters.md`, `docs/managed-package-exports.md`, `docs/vscode-companion.md`, `docs/tui.md`, `docs/block-page-server.md`, `docs/dns-rewrites.md`, `docs/ct-typosquat-watchdog.md`, `docs/cti-enrichment.md`, `docs/adblock-lint.md`, `docs/rule-tiers.md`, `docs/idn-homograph.md`, `docs/threat-feed-packs.md`, `docs/cname-cloaking.md`, `docs/encrypted-dns-bypass.md`, `docs/encrypted-sync.md`, `docs/share-patches.md`, `docs/recovery-plan.md`, `docs/wfp-blocker-companion.md`, `docs/nrpt-policy-export.md`, `docs/sandbox-vm-hosts.md`, `docs/dns-rebinding.md`, `docs/safesearch-restricted-mode.md`, `docs/profile-activation-schedule.md`, `docs/profile-quick-switch.md`, `docs/source-adapter-plugins.md`, `docs/local-rest-api.md`, `docs/package-managers.md`, `docs/source-bundles.md`, `docs/filter-builder.md`, `docs/watch-expressions.md`, `docs/source-metrics.md`, `docs/parallel-imports.md`, `docs/virtualized-lists.md`, `docs/provenance-log.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `.github/ISSUE_TEMPLATE/translation.yml`, `LICENSE`, and this roadmap.
 - License: MIT.
 
 ### Product Reality
@@ -141,6 +142,7 @@ HostsFileGet already provides:
 - `--block-page-preview` and `--block-page-serve` expose an explicit loopback-only local HTTP block page for reviewed blocked-site explanations without writing hosts entries, redirecting paths, handling HTTPS certificates, or exposing LAN services.
 - `--dns-rewrite-provider-list` and `--dns-rewrite-plan` expose plan-only Control D and Technitium DNS rewrite/CNAME/private-domain exports without provider API calls, credentials, zone imports, or resolver reloads.
 - `--ct-watchdog-list` and `--ct-watchdog-plan` expose plan-only Certificate Transparency search queues and typosquat candidates without polling CT logs, storing OSINT credentials, or writing hosts entries.
+- `--cti-enrichment-list` and `--cti-enrichment-plan` expose plan-only VirusTotal, URLhaus, MISP, and STIX enrichment templates without executing provider requests, storing API keys, or converting scores directly into hosts entries.
 - `--profile-schedule-list`, `--profile-schedule-add`, `--profile-schedule-apply`, and `--profile-schedule-at` expose guarded time-bound profile activation that switches app config only and never writes the system hosts file.
 - **Tools > Profile Quick Switch...** and optional **Tools > Start Tray Quick Switch...** expose config-only saved-profile switching without writing the system hosts file.
 - Optional local Git-backed history commands for snapshot, status, and admin-gated rollback with normal `.bak` backup creation.
@@ -315,7 +317,7 @@ Legend:
 | F063 | Local custom block page server | UX, diagnostics | common in DNS products | Guarded | 2 | 4 | Hosts cannot redirect paths; local server must be explicit. | Later | C1, C5, C3, C14, C15, O28 |
 | F064 | Advanced DNS rewrites/CNAME/private domains | Platform, integrations | common | Guarded | 3 | 4 | Hosts can map A/AAAA only; richer rewrites belong to export adapters. | Later | C3, O8, S40 |
 | F065 | Certificate Transparency and typosquat watchdog | Security, OSINT | emerging | Guarded | 4 | 5 | External service dependency and false positives. | Later | C1, A1, A2, A7, S41-S43, O29 |
-| F066 | VirusTotal, URLhaus, MISP, STIX enrichment | Security, OSINT | common in security tools | Guarded | 4 | 5 | API keys, quotas, licensing, and privacy. | Later | C6, A1, A2 |
+| F066 | VirusTotal, URLhaus, MISP, STIX enrichment | Security, OSINT | common in security tools | Guarded | 4 | 5 | API keys, quotas, licensing, and privacy. | Later | C6, A1, A2, S44-S49 |
 | F067 | TLS certificate preview | Security, UX | emerging | Guarded | 3 | 4 | Network side effects; must be explicit and cached minimally. | Later | A8 |
 | F068 | LLM-assisted "why blocked" summaries | UX, data | rare | Guarded | 2 | 5 | Privacy/cost; prefer offline metadata before any API. | Later | C4, O17 |
 | F069 | Mobile DNS profile export QR | Mobile, distribution | common | Guarded | 3 | 4 | Hosts file does not roam; export DNS/provider config instead. | Later | C1, C5, K5 |
@@ -389,18 +391,19 @@ Legend:
 42. Completed - Local custom block page server: F063.
 43. Completed - Advanced DNS rewrites/CNAME/private domains: F064.
 44. Completed - Certificate Transparency and typosquat watchdog: F065.
+45. Completed - VirusTotal, URLhaus, MISP, STIX enrichment: F066.
 
 Rationale: these items reduce maintenance risk, make the current product more trustworthy, and create the internal contracts needed for the larger profile/integration work.
 
 ### Next
 
-1. Later-stage platform and enterprise items: F066-F070.
+1. Later-stage platform and enterprise items: F067-F070.
 
 Rationale: these are valuable and well-supported by the market, but most require the Now-phase source manifest, profile model, and test/release foundations.
 
 ### Later
 
-1. Advanced DNS/security enrichment: F066, F067, F068, F069, F070.
+1. Advanced DNS/security enrichment: F067, F068, F069, F070.
 
 Rationale: these are plausible directions, but they either introduce credentials, services, signing, network-stack risk, or product-scope expansion.
 
@@ -584,6 +587,12 @@ A hostile reviewer would likely object to four things:
 | S41 | https://www.rfc-editor.org/rfc/rfc9162.html | Certificate Transparency v2 log, audit, and client behavior model |
 | S42 | https://developer.mozilla.org/en-US/docs/Web/Security/Defenses/Certificate_Transparency | Certificate Transparency overview and public append-only certificate log context |
 | S43 | https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/01-Information_Gathering/04-Attack_Surface_Identification | CT log review for attack-surface discovery with validation and scope cautions |
+| S44 | https://docs.virustotal.com/reference/domain-info | VirusTotal API v3 domain-report endpoint and `x-apikey` requirement |
+| S45 | https://docs.virustotal.com/reference/domains-object | VirusTotal domain object fields and relationship surface for enrichment review |
+| S46 | https://urlhaus-api.abuse.ch/ | URLhaus host, URL, payload, blacklist, and VirusTotal-link API response model |
+| S47 | https://www.misp-project.org/openapi/ | MISP OpenAPI surface for event and attribute API review |
+| S48 | https://pymisp.readthedocs.io/en/main/modules.html | PyMISP `search`/restSearch parameters for value and attribute-type queries |
+| S49 | https://docs.oasis-open.org/cti/stix/v2.1/stix-v2.1.html | STIX 2.1 bundle and cyber-observable object model for local handoff artifacts |
 
 ### Academic, Research, And Engineering Sources
 

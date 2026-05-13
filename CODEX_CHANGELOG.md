@@ -132,6 +132,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F064 complete. Next roadmap item: F065 certificate transparency and typosquat watchdog.
 - Completed F065: added plan-only Certificate Transparency and typosquat watchdog helpers, GUI catalog entry, `--ct-watchdog-list`, `--ct-watchdog-plan`, deterministic typo candidate generation, crt.sh review URLs, CSV review queue output, docs, and regression tests. HostsFileGet does not poll CT logs, store OSINT credentials, or auto-write hosts entries from matches.
 - Updated `ROADMAP.md` to mark F065 complete. Next roadmap item: F066 VirusTotal, URLhaus, MISP, STIX enrichment.
+- Completed F066: added plan-only CTI enrichment helpers, GUI catalog entry, `--cti-enrichment-list`, `--cti-enrichment-plan`, VirusTotal/URLhaus/MISP request templates, local STIX 2.1 observable bundle output, CSV review queue output, docs, and regression tests. HostsFileGet does not execute external enrichment requests, store API keys, or auto-write hosts entries from provider results.
+- Updated `ROADMAP.md` to mark F066 complete. Next roadmap item: F067 TLS certificate preview.
 
 ## Scope
 

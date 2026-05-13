@@ -393,6 +393,13 @@ python hosts_editor.py --ct-watchdog-list
 python hosts_editor.py --ct-watchdog-plan .\protected-domains.txt .\ct-watchdog-plan.json --ct-watchdog-max-variants 40
 ```
 
+Build a plan-only CTI enrichment queue for VirusTotal, URLhaus, MISP, and local STIX handoff:
+
+```powershell
+python hosts_editor.py --cti-enrichment-list
+python hosts_editor.py --cti-enrichment-plan .\iocs.txt .\cti-enrichment-plan.json --cti-enrichment-provider vt --cti-enrichment-provider stix
+```
+
 List guarded NRD/DGA/TIF threat feed packs or write a local review plan:
 
 ```powershell
@@ -470,6 +477,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Rule tier report: `docs/rule-tiers.md`
 - IDN and homograph report: `docs/idn-homograph.md`
 - Certificate Transparency / typosquat watchdog: `docs/ct-typosquat-watchdog.md`
+- CTI enrichment plans: `docs/cti-enrichment.md`
 - NRD/DGA threat feed packs: `docs/threat-feed-packs.md`
 - CNAME cloaking workflow: `docs/cname-cloaking.md`
 - Encrypted DNS bypass packs: `docs/encrypted-dns-bypass.md`
