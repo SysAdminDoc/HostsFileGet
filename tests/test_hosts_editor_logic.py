@@ -32,6 +32,7 @@ from hosts_editor import (
     SOURCE_MANIFEST_SCHEMA_VERSION,
     STALE_FRESH_HOURS,
     STALE_WARN_HOURS,
+    NRPT_POLICY_PLAN_SCHEMA,
     WFP_BLOCKER_PLAN_SCHEMA,
     append_provenance_event,
     append_cli_activity_event,
@@ -51,6 +52,7 @@ from hosts_editor import (
     build_profile_share_patch,
     build_recovery_apply_plan,
     build_restore_point_command,
+    build_nrpt_policy_export_plan,
     build_wfp_blocker_companion_plan,
     build_entry_provenance_report,
     build_pinned_export_payload,
@@ -117,6 +119,7 @@ from hosts_editor import (
     parse_switchhosts_export_text,
     parse_allowlist_patch_text,
     parse_windows_dns_client_events_xml,
+    parse_nrpt_policy_namespaces,
     parse_wfp_blocker_targets,
     sanitize_git_history_ref,
     summarize_source_contributions,
@@ -165,6 +168,7 @@ from hosts_editor import (
     format_profile_list_summary,
     format_profile_sync_report,
     format_share_patch_summary,
+    format_nrpt_policy_export_plan,
     format_recovery_apply_plan,
     format_wfp_blocker_companion_plan,
     format_git_history_status_report,
@@ -2779,6 +2783,27 @@ profile:
             )
             mocked_wfp.assert_called_once_with("ips.txt", "wfp.json", "Corp Block")
 
+        with mock.patch.object(hosts_editor, "_cli_nrpt_policy_plan", return_value=0) as mocked_nrpt:
+            self.assertEqual(
+                hosts_editor._handle_cli_args([
+                    "--nrpt-plan", "namespaces.txt", "nrpt.json",
+                    "--nrpt-name-server", "10.0.0.53",
+                    "--nrpt-name-server", "2001:4860:4860::8888",
+                    "--nrpt-rule-prefix", "Corp NRPT",
+                    "--nrpt-gpo-name", "Corp Policy",
+                    "--nrpt-server", "dc01",
+                ]),
+                0,
+            )
+            mocked_nrpt.assert_called_once_with(
+                "namespaces.txt",
+                "nrpt.json",
+                ["10.0.0.53", "2001:4860:4860::8888"],
+                "Corp NRPT",
+                "Corp Policy",
+                "dc01",
+            )
+
     def test_handle_cli_args_routes_cloud_dns_flags(self):
         with mock.patch.object(hosts_editor, "_cli_cloud_adapter_list", return_value=0) as mocked_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--cloud-adapter-list"]), 0)
@@ -3379,6 +3404,72 @@ profile:
         self.assertEqual(payload["rejected_count"], 1)
         self.assertIn("private", payload["risk_summary"])
         self.assertIn("New-NetFirewallRule", payload["powershell_script"])
+
+    def test_nrpt_policy_export_plan_is_plan_only_and_encodes_namespaces(self):
+        parsed = parse_nrpt_policy_namespaces(
+            ".corp.example.com\n"
+            "m\u00fcnich.example\n"
+            "*.wild.example\n"
+            "10.0.0.0/24\n"
+            "corp.example.com\n"
+        )
+        plan = build_nrpt_policy_export_plan(
+            "\n".join(parsed["namespaces"]),
+            ["10.0.0.53", "2001:4860:4860::8888"],
+            rule_prefix="Test NRPT",
+            gpo_name="Corp Policy",
+            server="dc01",
+            now=datetime.datetime(2026, 5, 12, 13, 0, 0),
+            chunk_size=1,
+        )
+        formatted = format_nrpt_policy_export_plan(plan)
+
+        self.assertEqual(parsed["namespaces"], ["corp.example.com", "xn--mnich-kva.example"])
+        self.assertEqual(len(parsed["rejected"]), 2)
+        self.assertEqual(plan["schema"], NRPT_POLICY_PLAN_SCHEMA)
+        self.assertTrue(plan["plan_only"])
+        self.assertEqual(plan["scope"], "group-policy")
+        self.assertEqual(plan["namespace_count"], 2)
+        self.assertEqual(plan["rule_count"], 2)
+        self.assertEqual(len(plan["commands"]), 3)
+        self.assertIn("Add-DnsClientNrptRule", plan["powershell_script"])
+        self.assertIn("Remove-DnsClientNrptRule", plan["powershell_script"])
+        self.assertIn("-NameEncoding 'Punycode'", plan["powershell_script"])
+        self.assertIn("-GpoName 'Corp Policy'", plan["powershell_script"])
+        self.assertIn("private", plan["resolver_risk_summary"])
+        self.assertIn("S1", plan["references"])
+        self.assertIn("S2", plan["references"])
+        self.assertIn("S16", plan["references"])
+        self.assertIn("Plan only: yes", formatted)
+
+    def test_cli_nrpt_policy_plan_writes_json_without_policy_changes(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "namespaces.txt"
+            plan_path = Path(tmpdir) / "nrpt-plan.json"
+            input_path.write_text(
+                "corp.example.com\nm\u00fcnich.example\n*.bad.example\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(hosts_editor, "_cli_print"):
+                result = hosts_editor._cli_nrpt_policy_plan(
+                    str(input_path),
+                    str(plan_path),
+                    ["10.0.0.53"],
+                    "Unit NRPT",
+                )
+            payload = json.loads(plan_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result, 0)
+        self.assertTrue(payload["plan_only"])
+        self.assertEqual(payload["namespace_count"], 2)
+        self.assertEqual(payload["rejected_count"], 1)
+        self.assertEqual(payload["name_servers"], ["10.0.0.53"])
+        self.assertIn("Get-DnsClientNrptRule", payload["powershell_script"])
+        self.assertIn("Add-DnsClientNrptRule", payload["powershell_script"])
 
     def test_cli_history_restore_refuses_when_hosts_file_is_disabled(self):
         import tempfile

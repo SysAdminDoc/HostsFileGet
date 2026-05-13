@@ -12,6 +12,8 @@ CNAME cloaking is handled inside that boundary: HostsFileGet can catalog disguis
 
 Encrypted-DNS bypass blocking follows the same rule: HostsFileGet can plan hosts imports for resolver hostnames and explain router/firewall handoffs, but it does not install firewall rules, network routes, VPN controls, or endpoint enforcement.
 
+NRPT policy export follows the same guarded pattern. HostsFileGet can generate reviewed namespace-to-resolver PowerShell plans for local client or GPO workflows, but it does not apply NRPT rules or mutate Group Policy.
+
 DNS rebinding protection is also advisory. HostsFileGet can report static hosts entries that map external-looking names to private, local, loopback, link-local, ULA, CGNAT, or special-use ranges, but live DNS rebinding enforcement belongs in the resolver, router, or managed endpoint policy.
 
 SafeSearch and restricted-mode templates follow the same boundary. HostsFileGet can produce reviewable hosts-line and DNS CNAME plans for Google, Bing, DuckDuckGo, and YouTube, but it does not apply parental controls, create DNS records, install browser policy, or enforce account/device controls.
@@ -80,6 +82,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `docs/share-patches.md` | Detached-signature allowlist/profile patch sharing workflow |
 | `docs/recovery-plan.md` | Plan-only restore-point/VSS recovery spike for high-risk apply reviews |
 | `docs/wfp-blocker-companion.md` | Plan-only Windows Firewall/WFP IP/CIDR blocker companion export |
+| `docs/nrpt-policy-export.md` | Plan-only Windows DNS Client NRPT namespace routing export |
 | `docs/git-history.md` | Optional local Git-backed hosts snapshot and restore behavior |
 | `docs/scheduler-activity.md` | Scheduled-update silent logging and activity report behavior |
 | `docs/portable-config.md` | Local-vs-portable config resolution and portable bundle export behavior |
@@ -144,6 +147,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Signed share patch helpers: `build_allowlist_share_patch`, `build_profile_share_patch`, `sanitize_share_patch_payload`, `apply_share_patch_payload_to_config`, `sign_share_patch_file`, `verify_share_patch_signature`, `format_share_patch_summary`.
 - Recovery plan helpers: `build_recovery_apply_plan`, `build_restore_point_command`, `format_recovery_apply_plan`.
 - WFP blocker companion helpers: `parse_wfp_blocker_targets`, `build_wfp_blocker_companion_plan`, `format_wfp_blocker_companion_plan`.
+- NRPT policy export helpers: `parse_nrpt_policy_namespaces`, `build_nrpt_policy_export_plan`, `format_nrpt_policy_export_plan`.
 - Scheduler activity helpers: `build_scheduler_update_command`, `query_scheduled_task_status`, `append_cli_activity_event`, `build_scheduler_activity_report`, `format_scheduler_activity_report`.
 - Transactional hosts enable/disable helpers: `disable_hosts_file_transactionally`, `enable_hosts_file_transactionally`.
 - Download guards: `read_http_body_limited`, `decode_downloaded_lines`, `looks_like_html_document`.
@@ -234,6 +238,7 @@ The CLI functions live near the bottom of `hosts_editor.py` and intentionally sh
 - `_cli_patch_apply`
 - `_cli_recovery_plan`
 - `_cli_wfp_blocker_plan`
+- `_cli_nrpt_policy_plan`
 - `_cli_profile_schedule_list`
 - `_cli_profile_schedule_add`
 - `_cli_profile_schedule_apply`
