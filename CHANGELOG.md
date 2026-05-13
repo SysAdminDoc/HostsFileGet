@@ -4,6 +4,10 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Roaming endpoint strategy**
+- Added `--roaming-endpoint-strategy-list` and `--roaming-endpoint-strategy-plan` for strategy-only off-network protection decision records.
+- Plans compare native OS encrypted DNS profiles, provider endpoint/profile mapping, commercial roaming agents, router/gateway fallback, and provider app/local VPN clients while documenting that HostsFileGet does not install agents, deploy MDM/RMM payloads, enroll devices, or change DNS settings.
+
 **Mobile DNS profile exports**
 - Added `--mobile-dns-profile-list` and `--mobile-dns-profile-export` for export-only Android Private DNS, Apple DNS Settings, and QR-ready resolver handoff bundles.
 - Bundles include JSON review metadata, unsigned `.mobileconfig` output when possible, QR-ready payload text, setup steps, and warnings that HostsFileGet does not install mobile profiles, call provider APIs, or make hosts files roam.

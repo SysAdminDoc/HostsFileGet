@@ -24,6 +24,7 @@ from hosts_editor import (
     CT_WATCHDOG_PLAN_SCHEMA,
     CTI_ENRICHMENT_PLAN_SCHEMA,
     MOBILE_DNS_PROFILE_EXPORT_SCHEMA,
+    ROAMING_ENDPOINT_STRATEGY_SCHEMA,
     TLS_CERTIFICATE_PREVIEW_PLAN_SCHEMA,
     WHY_BLOCKED_SUMMARY_SCHEMA,
     DOMAIN_CATEGORY_RULES,
@@ -156,6 +157,7 @@ from hosts_editor import (
     build_dns_integration_export,
     build_dns_rewrite_plan,
     build_mobile_dns_profile_export,
+    build_roaming_endpoint_strategy_plan,
     build_ct_typosquat_watchdog_plan,
     build_cti_enrichment_plan,
     build_tls_certificate_preview_plan,
@@ -221,6 +223,8 @@ from hosts_editor import (
     format_dns_rewrite_provider_catalog,
     format_mobile_dns_profile_catalog,
     format_mobile_dns_profile_export,
+    format_roaming_endpoint_strategy_catalog,
+    format_roaming_endpoint_strategy_plan,
     format_ct_typosquat_watchdog_catalog,
     format_ct_typosquat_watchdog_plan,
     format_cti_enrichment_catalog,
@@ -264,6 +268,7 @@ from hosts_editor import (
     list_safesearch_templates,
     list_cloud_dns_adapters,
     list_mobile_dns_profile_targets,
+    list_roaming_endpoint_strategies,
     list_dns_integration_packs,
     list_dns_rewrite_providers,
     list_cti_enrichment_providers,
@@ -3201,6 +3206,17 @@ profile:
                 ["example.com"],
             )
 
+        with mock.patch.object(hosts_editor, "_cli_roaming_endpoint_strategy_list", return_value=0) as mocked_roaming_list:
+            self.assertEqual(hosts_editor._handle_cli_args(["--roaming-endpoint-strategy-list"]), 0)
+            mocked_roaming_list.assert_called_once_with()
+
+        with mock.patch.object(hosts_editor, "_cli_roaming_endpoint_strategy_plan", return_value=0) as mocked_roaming_plan:
+            self.assertEqual(
+                hosts_editor._handle_cli_args(["--roaming-endpoint-strategy-plan", "agent", "roaming.json"]),
+                0,
+            )
+            mocked_roaming_plan.assert_called_once_with("agent", "roaming.json")
+
         with mock.patch.object(hosts_editor, "_cli_dns_rewrite_provider_list", return_value=0) as mocked_rewrite_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--dns-rewrite-provider-list"]), 0)
             mocked_rewrite_list.assert_called_once_with()
@@ -5009,6 +5025,56 @@ profile:
 
         self.assertEqual(payload["schema"], MOBILE_DNS_PROFILE_EXPORT_SCHEMA)
         self.assertIn("resolver1.dns.controld.com", payload["qr_payloads_text"])
+
+    def test_roaming_endpoint_strategy_catalog_and_plan_are_boundary_only(self):
+        strategy_ids = {strategy["id"] for strategy in list_roaming_endpoint_strategies()}
+        catalog = format_roaming_endpoint_strategy_catalog()
+        plan = build_roaming_endpoint_strategy_plan("all")
+        rendered = format_roaming_endpoint_strategy_plan(plan)
+
+        self.assertEqual(
+            strategy_ids,
+            {
+                "os-encrypted-dns-profile",
+                "provider-endpoint-profile",
+                "managed-roaming-client",
+                "network-gateway-fallback",
+                "app-vpn-dns-client",
+            },
+        )
+        self.assertEqual(plan["schema"], ROAMING_ENDPOINT_STRATEGY_SCHEMA)
+        self.assertTrue(plan["plan_only"])
+        self.assertTrue(plan["offline"])
+        self.assertEqual(plan["strategy_count"], 5)
+        self.assertIn("does not install endpoint agents", catalog)
+        self.assertIn("No endpoint software is installed", rendered)
+        self.assertIn("S61", plan["references"])
+        self.assertIn("S65", plan["references"])
+
+        agent_plan = build_roaming_endpoint_strategy_plan("agent")
+        self.assertEqual(agent_plan["strategy_id"], "managed-roaming-client")
+        self.assertEqual(agent_plan["strategy_count"], 1)
+        self.assertIn("VPN conflicts", agent_plan["strategies"][0]["failure_modes"])
+
+        with self.assertRaises(ValueError):
+            build_roaming_endpoint_strategy_plan("unknown-roaming-strategy")
+
+    def test_cli_roaming_endpoint_strategy_plan_writes_review_file(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plan_path = Path(tmpdir) / "roaming-endpoint-strategy.json"
+
+            with mock.patch.object(hosts_editor, "_cli_print"):
+                self.assertEqual(hosts_editor._cli_roaming_endpoint_strategy_plan("native", str(plan_path)), 0)
+
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(plan["schema"], ROAMING_ENDPOINT_STRATEGY_SCHEMA)
+        self.assertEqual(plan["strategy_id"], "os-encrypted-dns-profile")
+        self.assertEqual(plan["strategy_count"], 1)
+        self.assertIn("docs/mobile-dns-profile-export.md", "\n".join(plan["handoff_artifacts"]))
 
     def test_dns_rewrite_parser_accepts_hosts_explicit_and_arrow_forms(self):
         text = "\n".join([

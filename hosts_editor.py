@@ -11116,6 +11116,97 @@ MOBILE_DNS_PROFILE_TARGET_ALIASES = {
     "control-dns": "controld",
     "cd": "controld",
 }
+ROAMING_ENDPOINT_STRATEGY_SCHEMA = "hostsfileget.roaming-endpoint-strategy.v1"
+ROAMING_ENDPOINT_STRATEGY_SOURCE_IDS = (
+    "C1", "C2", "C5", "C6", "K5", "S56", "S57", "S59", "S60", "S61", "S62", "S63", "S64", "S65", "S66",
+)
+ROAMING_ENDPOINT_STRATEGY_WARNINGS = (
+    "Strategy-only: HostsFileGet documents roaming endpoint choices but does not install agents, MDM profiles, VPNs, or provider apps.",
+    "Windows hosts files do not protect devices after they leave the Windows machine; roaming coverage must be owned by OS DNS settings, provider profiles, endpoint agents, MDM, or a gateway.",
+    "VPNs, browser Secure DNS, iCloud Private Relay, captive portals, split DNS, and local-domain resolution can bypass or conflict with roaming DNS controls.",
+    "Commercial roaming clients add licensing, updater, privacy, diagnostics, and support obligations that stay outside HostsFileGet's local editor scope.",
+)
+ROAMING_ENDPOINT_STRATEGIES = (
+    {
+        "id": "os-encrypted-dns-profile",
+        "label": "OS encrypted DNS profile handoff",
+        "fit": "BYOD phones, tablets, and laptops where native encrypted DNS is enough.",
+        "owner": "End user, OS, and DNS provider.",
+        "hostsfileget_role": "Use F069 mobile DNS profile export bundles and reviewed provider endpoint text.",
+        "recommended_for": ("Android 9+ Private DNS", "iOS/iPadOS 14+ DNS Settings profiles", "macOS Big Sur+ DNS profiles", "Windows 11 DoH where manually configured"),
+        "prerequisites": ("Provider DoT hostname or DoH URL", "Per-device/profile resolver ID", "Manual verification in provider status or activity log"),
+        "handoffs": ("Android Private DNS hostname", "Apple .mobileconfig profile", "QR-ready setup payloads", "Provider setup URL"),
+        "failure_modes": ("Captive portals", "Browser Secure DNS override", "iCloud Private Relay", "VPN DNS override", "Local split-DNS domains"),
+        "source_ids": ("C1", "C2", "C5", "K5", "S56", "S57", "S59", "S60", "S63", "S64", "S65"),
+    },
+    {
+        "id": "provider-endpoint-profile",
+        "label": "Provider endpoint/profile mapping",
+        "fit": "Households or small teams that need per-device policy without installing a managed agent.",
+        "owner": "DNS provider dashboard.",
+        "hostsfileget_role": "Keep local hosts cleanups exportable, then document which provider profile or endpoint should own roaming enforcement.",
+        "recommended_for": ("NextDNS profile IDs", "Control D Endpoints and Profiles", "AdGuard DNS device IDs"),
+        "prerequisites": ("Profile per user/device class", "Endpoint assignment", "Query-log verification", "False-positive bypass process"),
+        "handoffs": ("Profile ID", "Endpoint setup link", "Device ID", "Allow/deny review notes"),
+        "failure_modes": ("Shared profile attribution gaps", "Linked-IP drift", "Endpoint reassignment mistakes", "Dashboard policy precedence surprises"),
+        "source_ids": ("C1", "C2", "C5", "K5", "S63", "S65"),
+    },
+    {
+        "id": "managed-roaming-client",
+        "label": "Commercial roaming client or managed DNS agent",
+        "fit": "Managed fleets that require tamper resistance, device identity, reporting, and supportable deployment.",
+        "owner": "Commercial DNS/security provider plus IT/RMM/MDM owner.",
+        "hostsfileget_role": "Document an integration boundary and keep hosts-file exports separate from endpoint-agent deployment.",
+        "recommended_for": ("Windows roaming clients", "macOS roaming clients", "ChromeOS clients", "Supervised iOS/Android fleets"),
+        "prerequisites": ("Provider license tier", "RMM/MDM deployment path", "Admin removal controls", "Diagnostics and update process"),
+        "handoffs": ("Deployment guide URL", "Policy/profile name", "Support owner", "Rollback and captive-portal procedure"),
+        "failure_modes": ("VPN conflicts", "Captive portal breakage", "Local-domain resolution issues", "Agent update regressions", "Privacy review gaps"),
+        "source_ids": ("C6", "S61", "S62", "S66"),
+    },
+    {
+        "id": "network-gateway-fallback",
+        "label": "Router/gateway fallback for fixed networks",
+        "fit": "Home, lab, or office networks where devices are normally behind a controlled resolver.",
+        "owner": "Router, resolver, or gateway administrator.",
+        "hostsfileget_role": "Reuse router/gateway plan exports for fixed-network coverage and state clearly that off-network devices need another strategy.",
+        "recommended_for": ("OpenWrt dnsmasq", "Generic dnsmasq", "Unbound", "Provider router deployment"),
+        "prerequisites": ("Gateway admin access", "Known upstream encrypted resolver", "Local-domain exception plan", "Guest/captive network policy"),
+        "handoffs": ("Router export bundle", "Resolver upstream endpoint", "DHCP DNS policy", "Fallback resolver notes"),
+        "failure_modes": ("No off-network coverage", "Client hardcoded DNS", "Private DNS override", "Guest network bypass", "Router lockout risk"),
+        "source_ids": ("C2", "C5", "S20", "S21", "S22", "S63"),
+    },
+    {
+        "id": "app-vpn-dns-client",
+        "label": "Provider app or local VPN DNS client",
+        "fit": "Devices that need protocols or onboarding UX not exposed through native OS DNS settings.",
+        "owner": "Provider app and device owner.",
+        "hostsfileget_role": "Export resolver details and document that the provider app owns runtime enforcement.",
+        "recommended_for": ("AdGuard DNS app", "AdGuard Ad Blocker DNS protection", "AdGuard VPN DNS setting", "Provider local VPN clients"),
+        "prerequisites": ("App installation consent", "VPN profile approval where required", "Protocol selection", "User-facing enable/disable guidance"),
+        "handoffs": ("DoH URL", "Setup ID", "QR/setup link", "Enablement checklist"),
+        "failure_modes": ("VPN slot contention", "User disables protection", "Provider app update behavior", "Battery/background restrictions"),
+        "source_ids": ("C5", "S64", "S65"),
+    },
+)
+ROAMING_ENDPOINT_STRATEGY_ALIASES = {
+    "all": "all",
+    "native": "os-encrypted-dns-profile",
+    "os": "os-encrypted-dns-profile",
+    "mobile-profile": "os-encrypted-dns-profile",
+    "profile": "provider-endpoint-profile",
+    "provider-profile": "provider-endpoint-profile",
+    "endpoint": "provider-endpoint-profile",
+    "agent": "managed-roaming-client",
+    "client": "managed-roaming-client",
+    "managed": "managed-roaming-client",
+    "roaming-client": "managed-roaming-client",
+    "gateway": "network-gateway-fallback",
+    "router": "network-gateway-fallback",
+    "network": "network-gateway-fallback",
+    "app": "app-vpn-dns-client",
+    "vpn": "app-vpn-dns-client",
+    "local-vpn": "app-vpn-dns-client",
+}
 DNS_REWRITE_PLAN_SCHEMA = "hostsfileget.dns-rewrite-plan.v1"
 DNS_REWRITE_DEFAULT_TTL = 300
 DNS_REWRITE_MAX_RECORDS = 1000
@@ -12698,6 +12789,123 @@ def write_mobile_dns_profile_export_bundle(plan: dict, output_dir: str) -> dict:
         write_text_file_atomic(mobileconfig_path, plan["apple_mobileconfig"])
         paths["apple_mobileconfig"] = mobileconfig_path
     return paths
+
+
+def normalize_roaming_endpoint_strategy_id(strategy_id: str | None = None) -> str:
+    normalized = str(strategy_id or "all").strip().lower().replace("_", "-")
+    return ROAMING_ENDPOINT_STRATEGY_ALIASES.get(normalized, normalized)
+
+
+def list_roaming_endpoint_strategies() -> list[dict]:
+    return [dict(strategy) for strategy in ROAMING_ENDPOINT_STRATEGIES]
+
+
+def find_roaming_endpoint_strategy(strategy_id: str) -> dict:
+    normalized = normalize_roaming_endpoint_strategy_id(strategy_id)
+    for strategy in ROAMING_ENDPOINT_STRATEGIES:
+        if strategy["id"] == normalized:
+            return dict(strategy)
+    known = ", ".join(strategy["id"] for strategy in ROAMING_ENDPOINT_STRATEGIES)
+    raise ValueError(f"Unknown roaming endpoint strategy: {strategy_id!r}. Known strategies: all, {known}")
+
+
+def build_roaming_endpoint_strategy_plan(strategy_id: str | None = None) -> dict:
+    normalized = normalize_roaming_endpoint_strategy_id(strategy_id)
+    if normalized == "all":
+        strategies = list_roaming_endpoint_strategies()
+    else:
+        strategies = [find_roaming_endpoint_strategy(normalized)]
+    references = sorted(set(ROAMING_ENDPOINT_STRATEGY_SOURCE_IDS).union(*(set(strategy.get("source_ids") or ()) for strategy in strategies)))
+    return {
+        "schema": ROAMING_ENDPOINT_STRATEGY_SCHEMA,
+        "plan_only": True,
+        "offline": True,
+        "strategy_id": normalized,
+        "strategy_count": len(strategies),
+        "strategies": strategies,
+        "recommended_sequence": [
+            "Classify each endpoint as BYOD, managed fleet, fixed-network, or app/VPN-owned.",
+            "Prefer native OS encrypted DNS profiles for simple roaming devices before adding an always-on agent.",
+            "Use provider endpoint/profile mapping for per-device policy and query-log attribution.",
+            "Reserve commercial roaming clients for managed fleets that need tamper resistance, reporting, and support workflows.",
+            "Keep router/gateway DNS as fixed-network coverage only; pair it with a roaming strategy for mobile or laptop off-network use.",
+            "Document bypass and conflict cases before rollout: VPN, browser Secure DNS, iCloud Private Relay, captive portals, and split DNS.",
+        ],
+        "hostsfileget_boundaries": [
+            "No endpoint software is installed or configured.",
+            "No MDM, RMM, Intune, Jamf, Android Enterprise, or provider-dashboard writes are performed.",
+            "No credentials, API keys, enrollment tokens, or device identifiers are stored by this strategy plan.",
+            "HostsFileGet can generate local review artifacts and handoff notes; runtime enforcement belongs to OS, provider, gateway, or managed endpoint tooling.",
+        ],
+        "handoff_artifacts": [
+            "Use docs/mobile-dns-profile-export.md and --mobile-dns-profile-export for OS encrypted DNS profile handoffs.",
+            "Use docs/router-gateway-adapters.md and --router-push-plan for fixed-network resolver handoffs.",
+            "Use docs/cloud-dns-adapters.md and --cloud-adapter-plan for provider allow/deny replay planning.",
+            "Use this plan as the project-level decision record for roaming ownership and exclusions.",
+        ],
+        "warnings": list(ROAMING_ENDPOINT_STRATEGY_WARNINGS),
+        "references": references,
+    }
+
+
+def format_roaming_endpoint_strategy_catalog() -> str:
+    lines = [
+        "Roaming endpoint strategy",
+        "",
+        "Strategy-only guidance for devices that leave the Windows hosts-file boundary. HostsFileGet documents choices and handoffs; it does not install endpoint agents or managed profiles.",
+        "",
+        "Supported strategies:",
+    ]
+    for strategy in ROAMING_ENDPOINT_STRATEGIES:
+        lines.extend([
+            f"- {strategy['id']}: {strategy['label']}",
+            f"  Fit: {strategy['fit']}",
+            f"  Owner: {strategy['owner']}",
+            f"  HostsFileGet role: {strategy['hostsfileget_role']}",
+        ])
+    lines.extend(["", "Warnings:"])
+    for warning in ROAMING_ENDPOINT_STRATEGY_WARNINGS:
+        lines.append(f"- {warning}")
+    lines.extend(["", "Roadmap source IDs:", f"- {', '.join(ROAMING_ENDPOINT_STRATEGY_SOURCE_IDS)}"])
+    return "\n".join(lines)
+
+
+def format_roaming_endpoint_strategy_plan(plan: dict) -> str:
+    lines = [
+        "Roaming Endpoint Strategy Plan",
+        f"Schema: {plan.get('schema')}",
+        f"Strategy: {plan.get('strategy_id')}",
+        f"Plan only: {'yes' if plan.get('plan_only') else 'no'}",
+        f"Strategies: {plan.get('strategy_count')}",
+        "",
+        "Recommended sequence:",
+    ]
+    for index, step in enumerate(plan.get("recommended_sequence") or [], 1):
+        lines.append(f"{index}. {step}")
+    lines.extend(["", "Strategies:"])
+    for strategy in plan.get("strategies") or []:
+        lines.extend([
+            f"- {strategy.get('id')}: {strategy.get('label')}",
+            f"  Fit: {strategy.get('fit')}",
+            f"  Owner: {strategy.get('owner')}",
+            f"  HostsFileGet role: {strategy.get('hostsfileget_role')}",
+            f"  Recommended for: {', '.join(strategy.get('recommended_for') or [])}",
+            f"  Prerequisites: {', '.join(strategy.get('prerequisites') or [])}",
+            f"  Handoffs: {', '.join(strategy.get('handoffs') or [])}",
+            f"  Failure modes: {', '.join(strategy.get('failure_modes') or [])}",
+        ])
+    lines.extend(["", "HostsFileGet boundaries:"])
+    for boundary in plan.get("hostsfileget_boundaries") or []:
+        lines.append(f"- {boundary}")
+    lines.extend(["", "Handoff artifacts:"])
+    for artifact in plan.get("handoff_artifacts") or []:
+        lines.append(f"- {artifact}")
+    lines.extend(["", "Warnings:"])
+    for warning in plan.get("warnings") or []:
+        lines.append(f"- {warning}")
+    if plan.get("references"):
+        lines.extend(["", "Roadmap source IDs:", f"- {', '.join(plan.get('references') or [])}"])
+    return "\n".join(lines)
 
 
 def normalize_dns_rewrite_provider_id(provider_id: str) -> str:
@@ -19673,6 +19881,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="DNS Interoperability Pack...", command=self.show_dns_integration_pack)
         tools_menu.add_command(label="Cloud DNS Adapters...", command=self.show_cloud_dns_adapters)
         tools_menu.add_command(label="Mobile DNS Profile Export...", command=self.show_mobile_dns_profile_export)
+        tools_menu.add_command(label="Roaming Endpoint Strategy...", command=self.show_roaming_endpoint_strategy)
         tools_menu.add_command(label="Source Adapter Plugins...", command=self.show_source_adapter_plugins)
         tools_menu.add_command(label="Source Bundle Selector...", command=self.show_source_bundle_selector)
         tools_menu.add_command(label="Filter Builder...", command=self.show_filter_builder)
@@ -21281,6 +21490,16 @@ class HostsFileEditor:
             tone="info",
             width=920,
             height=700,
+        )
+
+    def show_roaming_endpoint_strategy(self):
+        self._show_text_report_dialog(
+            "Roaming endpoint strategy",
+            "Strategy-only handoff guidance for devices outside the Windows hosts-file boundary.",
+            format_roaming_endpoint_strategy_catalog(),
+            tone="warning",
+            width=960,
+            height=720,
         )
 
     def show_source_adapter_plugins(self):
@@ -26380,6 +26599,26 @@ def _cli_mobile_dns_profile_export(
     return 0
 
 
+def _cli_roaming_endpoint_strategy_list() -> int:
+    _cli_print(format_roaming_endpoint_strategy_catalog())
+    return 0
+
+
+def _cli_roaming_endpoint_strategy_plan(strategy_id: str, output_path: str) -> int:
+    try:
+        plan = build_roaming_endpoint_strategy_plan(strategy_id)
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        write_text_file_atomic(output_path, json.dumps(plan, indent=2))
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Roaming endpoint strategy plan failed: {exc}")
+        return 2
+    _cli_print(format_roaming_endpoint_strategy_plan(plan))
+    _cli_print(f"Wrote roaming endpoint strategy plan to {output_path}")
+    return 0
+
+
 def _cli_dns_rewrite_provider_list() -> int:
     _cli_print(format_dns_rewrite_provider_catalog())
     return 0
@@ -27463,6 +27702,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--mobile-dns-doh-url",
         "--mobile-dns-display-name",
         "--mobile-dns-match-domain",
+        "--roaming-endpoint-strategy-list",
+        "--roaming-endpoint-strategy-plan",
         "--dns-rewrite-provider-list",
         "--dns-rewrite-plan",
         "--dns-rewrite-profile-id",
@@ -27591,6 +27832,7 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--mobile-dns-doh-url=",
         "--mobile-dns-display-name=",
         "--mobile-dns-match-domain=",
+        "--roaming-endpoint-strategy-plan=",
         "--dns-rewrite-plan=",
         "--dns-rewrite-profile-id=",
         "--dns-rewrite-zone=",
@@ -27795,6 +28037,13 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--mobile-dns-doh-url", metavar="URL", help="DNS-over-HTTPS URL for Apple HTTPS profiles and QR payloads.")
     parser.add_argument("--mobile-dns-display-name", metavar="TEXT", help="Display name for generated mobile DNS profile artifacts.")
     parser.add_argument("--mobile-dns-match-domain", action="append", metavar="DOMAIN", help="Optional Apple SupplementalMatchDomains value. Repeat or comma-separate.")
+    parser.add_argument("--roaming-endpoint-strategy-list", action="store_true", help="List guarded roaming endpoint strategies and ownership boundaries.")
+    parser.add_argument(
+        "--roaming-endpoint-strategy-plan",
+        nargs=2,
+        metavar=("STRATEGY", "OUTPUT"),
+        help="Write a local JSON strategy plan for roaming endpoints. Use STRATEGY=all for every strategy.",
+    )
     parser.add_argument("--dns-rewrite-provider-list", action="store_true", help="List plan-only advanced DNS rewrite providers.")
     parser.add_argument(
         "--dns-rewrite-plan",
@@ -28177,6 +28426,13 @@ def _handle_cli_args(argv: list[str]) -> int | None:
             args.mobile_dns_doh_url,
             args.mobile_dns_display_name,
             args.mobile_dns_match_domain,
+        )
+    if args.roaming_endpoint_strategy_list:
+        return _cli_roaming_endpoint_strategy_list()
+    if args.roaming_endpoint_strategy_plan:
+        return _cli_roaming_endpoint_strategy_plan(
+            args.roaming_endpoint_strategy_plan[0],
+            args.roaming_endpoint_strategy_plan[1],
         )
     dns_rewrite_options = [
         args.dns_rewrite_profile_id != "PROFILE_ID",
