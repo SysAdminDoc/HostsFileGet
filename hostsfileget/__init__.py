@@ -19,6 +19,27 @@ Phase 2 extractions (v2.25.0):
       encoding/decoding primitives that every higher-level parser uses.
     - :mod:`hostsfileget.theme` — ``PALETTE``, the WCAG contrast helpers, and
       the accessibility audit report builder/formatter.
+
+Phase 3-5 extractions (v2.26.0):
+    - :mod:`hostsfileget.adblock` — adblock-syntax classifier, quarantine
+      helpers, and the syntax-lint report. Used by the importer to skip
+      browser-only rules instead of broadening them into unsafe domain blocks.
+    - :mod:`hostsfileget.idn_homograph` — IDN/Punycode and Unicode-homograph
+      detection: ``classify_idn_domain``, ``extract_idn_domain_candidates``,
+      ``build_idn_homograph_report``, plus the curated confusable map.
+    - :mod:`hostsfileget.normalize` — the single canonical "raw hosts line
+      to normalised entries" entry point (``parse_hosts_line_entries``,
+      ``normalize_line_to_hosts_entries``, ``normalize_line_to_hosts_entry``).
+      Now able to live next to its dependencies because the adblock seam
+      has been broken.
 """
 
-__all__ = ["compression", "atomic_io", "parsing", "theme"]
+__all__ = [
+    "compression",
+    "atomic_io",
+    "parsing",
+    "theme",
+    "adblock",
+    "idn_homograph",
+    "normalize",
+]
