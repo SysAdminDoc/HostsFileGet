@@ -386,6 +386,13 @@ Review IDN/Punycode and mixed-script homograph candidates with:
 python hosts_editor.py --idn-report .\filters.txt --idn-output .\idn-report.json
 ```
 
+Build a plan-only Certificate Transparency and typosquat watchdog queue for domains you own or are authorized to monitor:
+
+```powershell
+python hosts_editor.py --ct-watchdog-list
+python hosts_editor.py --ct-watchdog-plan .\protected-domains.txt .\ct-watchdog-plan.json --ct-watchdog-max-variants 40
+```
+
 List guarded NRD/DGA/TIF threat feed packs or write a local review plan:
 
 ```powershell
@@ -462,6 +469,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Adblock syntax lint: `docs/adblock-lint.md`
 - Rule tier report: `docs/rule-tiers.md`
 - IDN and homograph report: `docs/idn-homograph.md`
+- Certificate Transparency / typosquat watchdog: `docs/ct-typosquat-watchdog.md`
 - NRD/DGA threat feed packs: `docs/threat-feed-packs.md`
 - CNAME cloaking workflow: `docs/cname-cloaking.md`
 - Encrypted DNS bypass packs: `docs/encrypted-dns-bypass.md`

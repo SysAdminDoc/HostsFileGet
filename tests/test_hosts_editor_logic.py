@@ -21,6 +21,7 @@ from hosts_editor import (
     CONFIG_SCHEMA_VERSION,
     DEFAULT_PROFILE_ID,
     DNS_REWRITE_PLAN_SCHEMA,
+    CT_WATCHDOG_PLAN_SCHEMA,
     DOMAIN_CATEGORY_RULES,
     FTL_BLOCKED_STATUS_CODES,
     HostsFileEditor,
@@ -98,6 +99,7 @@ from hosts_editor import (
     dns_bypass_policy_status,
     parse_cloud_dns_log_export,
     parse_controld_activity_csv,
+    parse_ct_watchdog_domains,
     parse_dns_rewrite_records,
     parse_pinned_import_payload,
     read_provenance_events,
@@ -147,6 +149,7 @@ from hosts_editor import (
     build_config_location_report,
     build_dns_integration_export,
     build_dns_rewrite_plan,
+    build_ct_typosquat_watchdog_plan,
     build_portable_bundle_readme,
     build_scheduler_activity_report,
     build_scheduler_update_command,
@@ -205,6 +208,8 @@ from hosts_editor import (
     format_dns_integration_pack_report,
     format_dns_rewrite_plan,
     format_dns_rewrite_provider_catalog,
+    format_ct_typosquat_watchdog_catalog,
+    format_ct_typosquat_watchdog_plan,
     format_cname_cloaking_catalog,
     format_cname_cloaking_plan,
     format_dns_rebinding_report,
@@ -3109,6 +3114,20 @@ profile:
                 600,
             )
 
+        with mock.patch.object(hosts_editor, "_cli_ct_watchdog_list", return_value=0) as mocked_ct_list:
+            self.assertEqual(hosts_editor._handle_cli_args(["--ct-watchdog-list"]), 0)
+            mocked_ct_list.assert_called_once_with()
+
+        with mock.patch.object(hosts_editor, "_cli_ct_watchdog_plan", return_value=0) as mocked_ct_plan:
+            self.assertEqual(
+                hosts_editor._handle_cli_args([
+                    "--ct-watchdog-plan", "domains.txt", "ct-plan.json",
+                    "--ct-watchdog-max-variants", "40",
+                ]),
+                0,
+            )
+            mocked_ct_plan.assert_called_once_with("domains.txt", "ct-plan.json", 40)
+
     def test_handle_cli_args_routes_threat_feed_flags(self):
         with mock.patch.object(hosts_editor, "_cli_threat_feed_list", return_value=0) as mocked_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--threat-feed-list"]), 0)
@@ -4826,6 +4845,39 @@ profile:
 
         with self.assertRaises(ValueError):
             build_dns_rewrite_plan(text, "unknown-rewrite-provider")
+
+    def test_ct_watchdog_plan_extracts_domains_and_generates_review_queue(self):
+        text = "\n".join([
+            "example.com",
+            "https://login.example.com/path",
+            "0.0.0.0 portal.example.co.uk",
+            "not-a-domain",
+        ])
+
+        parsed = parse_ct_watchdog_domains(text)
+        plan = build_ct_typosquat_watchdog_plan(text, max_variants=80)
+        rendered = format_ct_typosquat_watchdog_plan(plan)
+
+        self.assertEqual(plan["schema"], CT_WATCHDOG_PLAN_SCHEMA)
+        self.assertTrue(plan["plan_only"])
+        self.assertEqual({row["base_domain"] for row in parsed["domains"]}, {"example.com", "example.co.uk"})
+        self.assertEqual(plan["base_domain_count"], 2)
+        self.assertLessEqual(max(target["variant_count"] for target in plan["targets"]), 80)
+        example_target = next(target for target in plan["targets"] if target["base_domain"] == "example.com")
+        self.assertIn("q=%25.example.com", example_target["queries"]["subdomain_json_url"])
+        self.assertIn("typosquat-candidate", plan["artifacts"]["review_csv"])
+        self.assertIn("examp1e.com", plan["artifacts"]["watchlist_domains"])
+        self.assertIn("Plan only: yes", rendered)
+        self.assertIn("Roadmap source IDs", rendered)
+        self.assertTrue(any("does not query CT services" in warning for warning in plan["warnings"]))
+
+    def test_ct_watchdog_catalog_is_guarded_and_plan_only(self):
+        catalog = format_ct_typosquat_watchdog_catalog()
+
+        self.assertIn("Certificate Transparency", catalog)
+        self.assertIn("plan-only OSINT workflow", catalog)
+        self.assertIn("Permutation families", catalog)
+        self.assertIn("S41", catalog)
 
     def test_threat_feed_catalog_lists_guarded_packs_and_sources(self):
         pack_ids = {pack["id"] for pack in list_threat_feed_packs()}

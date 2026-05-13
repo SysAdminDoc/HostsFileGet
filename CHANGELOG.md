@@ -4,6 +4,10 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Certificate Transparency / typosquat watchdog**
+- Added `--ct-watchdog-list` and `--ct-watchdog-plan` for plan-only CT search queues and deterministic typosquat candidate generation.
+- The plan exports crt.sh review URLs, a deduplicated watchlist, and CSV review rows while warning that CT matches and typo permutations are OSINT leads, not automatic hosts-file blocks.
+
 **Advanced DNS rewrites**
 - Added `--dns-rewrite-provider-list` and `--dns-rewrite-plan` for review-only Control D and Technitium DNS rewrite/CNAME/private-domain plans.
 - The parser accepts hosts-style IP mappings, explicit `A`/`AAAA`/`CNAME` declarations, and arrow-form rewrites while documenting that CNAME/private-domain behavior is DNS-provider work, not hosts-file behavior.
