@@ -72,6 +72,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - Pi-hole, AdGuard Home/DNS, Technitium DNS Server, and blocky interoperability presets
   - plan-only NextDNS and Control D cloud DNS adapter plans that never store API keys or execute remote writes
   - plan-only router/gateway adapter bundles for OpenWrt dnsmasq, generic dnsmasq, and Unbound that generate reviewable SSH scripts without executing them
+  - plan-only Intune, Group Policy, PDQ Deploy, and Configuration Manager package export bundles with hash-verified install/detect/uninstall wrappers
   - RPZ, Unbound, Privoxy, gzip-compressed hosts, and bzip2-compressed hosts
 - Operational utilities:
   - DNS cache flush
@@ -244,6 +245,13 @@ python hosts_editor.py --router-adapter-list
 python hosts_editor.py --router-push-plan openwrt-dnsmasq .\cleaned-hosts.txt .\router-bundle --router-host router.lan --router-user root
 ```
 
+Generate managed deployment handoff bundles without uploading to Intune, editing GPOs, importing PDQ packages, or creating Configuration Manager applications:
+
+```powershell
+python hosts_editor.py --managed-package-list
+python hosts_editor.py --managed-package-export intune-win32 .\managed-hosts.txt .\managed-bundle --managed-package-version 2.20.0 --managed-installer-url https://github.com/SysAdminDoc/HostsFileGet/releases/download/v2.20.0/HostsFileGet.exe --managed-sha256 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA --managed-label "Corp Managed"
+```
+
 Inspect active config location or create a managed portable bundle config:
 
 ```powershell
@@ -409,6 +417,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - WFP blocker companion: `docs/wfp-blocker-companion.md`
 - NRPT policy export: `docs/nrpt-policy-export.md`
 - Windows Sandbox / VM hosts bundle: `docs/sandbox-vm-hosts.md`
+- Managed package exports: `docs/managed-package-exports.md`
 - Optional Git history: `docs/git-history.md`
 - Scheduler activity report: `docs/scheduler-activity.md`
 - Portable bundle config: `docs/portable-config.md`

@@ -18,6 +18,8 @@ Windows Sandbox and VM hosts bundles are lab staging artifacts. HostsFileGet can
 
 Router/gateway push adapters follow the same artifact-first boundary. HostsFileGet can generate dnsmasq or Unbound config fragments plus a guarded SSH script, but it does not execute `scp`, `ssh`, router APIs, DNS service reloads, or credential prompts.
 
+Managed package exports also stay artifact-first. HostsFileGet can generate Intune, Group Policy startup script, PDQ Deploy, and Configuration Manager handoff bundles with install/detect/uninstall wrappers, but it does not upload packages, mutate Group Policy, import PDQ packages, create Configuration Manager applications, call Microsoft Graph, or store tenant credentials.
+
 DNS rebinding protection is also advisory. HostsFileGet can report static hosts entries that map external-looking names to private, local, loopback, link-local, ULA, CGNAT, or special-use ranges, but live DNS rebinding enforcement belongs in the resolver, router, or managed endpoint policy.
 
 SafeSearch and restricted-mode templates follow the same boundary. HostsFileGet can produce reviewable hosts-line and DNS CNAME plans for Google, Bing, DuckDuckGo, and YouTube, but it does not apply parental controls, create DNS records, install browser policy, or enforce account/device controls.
@@ -89,6 +91,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `docs/nrpt-policy-export.md` | Plan-only Windows DNS Client NRPT namespace routing export |
 | `docs/sandbox-vm-hosts.md` | Plan-only Windows Sandbox and Hyper-V VM hosts staging bundle |
 | `docs/router-gateway-adapters.md` | Plan-only router/gateway DNS config bundles and guarded SSH script behavior |
+| `docs/managed-package-exports.md` | Plan-only Intune, Group Policy, PDQ Deploy, and Configuration Manager package export bundles |
 | `docs/git-history.md` | Optional local Git-backed hosts snapshot and restore behavior |
 | `docs/scheduler-activity.md` | Scheduled-update silent logging and activity report behavior |
 | `docs/portable-config.md` | Local-vs-portable config resolution and portable bundle export behavior |
@@ -179,7 +182,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Encrypted-DNS bypass pack planning: `list_encrypted_dns_bypass_packs`, `build_encrypted_dns_bypass_pack_plan`, `format_encrypted_dns_bypass_catalog`, `format_encrypted_dns_bypass_pack_plan`.
 - DNS rebinding checks: `classify_dns_rebinding_mapping`, `build_dns_rebinding_report`, `format_dns_rebinding_report`.
 - SafeSearch and restricted-mode templates: `list_safesearch_templates`, `build_safesearch_template_plan`, `format_safesearch_template_catalog`, `format_safesearch_template_plan`.
-- Cleanup/export/search helpers: `remove_lines_by_indices`, `rewrite_block_sink_ip`, `scan_suspicious_redirects`, `build_export_domain_records`, `build_dns_integration_export`, `build_cloud_dns_adapter_plan`, `format_dns_integration_pack_report`, `format_cloud_dns_adapter_catalog`, `export_lines_as_format`, `export_lines_as_bytes`, `strip_lines_by_category`.
+- Cleanup/export/search helpers: `remove_lines_by_indices`, `rewrite_block_sink_ip`, `scan_suspicious_redirects`, `build_export_domain_records`, `build_dns_integration_export`, `build_cloud_dns_adapter_plan`, `build_managed_package_export_plan`, `write_managed_package_export_bundle`, `format_dns_integration_pack_report`, `format_cloud_dns_adapter_catalog`, `format_managed_package_export_plan`, `export_lines_as_format`, `export_lines_as_bytes`, `strip_lines_by_category`.
 - Large-list helpers: `build_virtual_list_page`; `MatchRemovalDialog` uses it to page checkbox rows while preserving global selection state.
 - Source analytics: `find_sources_containing_domain`, `summarize_source_contributions`, `build_source_domain_index`, `build_source_overlap_report`, `sanitize_source_metrics_history`, `record_source_metrics_snapshot`, `build_source_metrics_report`, `format_source_metrics_report`, `build_filter_builder_report`, `format_filter_builder_report`, `sanitize_watch_expressions`, `build_watch_expression_report`, `format_watch_expression_report`, `categorize_entries_by_domain_hint`, `classify_source_freshness`.
 - Local REST API: `create_local_api_server`, `LocalApiRequestHandler`, `build_local_api_status_payload`, `build_local_api_clean_preview_payload`, `local_api_authorization_valid`.
@@ -250,6 +253,8 @@ The CLI functions live near the bottom of `hosts_editor.py` and intentionally sh
 - `_cli_sandbox_vm_hosts_plan`
 - `_cli_router_gateway_adapter_list`
 - `_cli_router_gateway_push_plan`
+- `_cli_managed_package_target_list`
+- `_cli_managed_package_export`
 - `_cli_profile_schedule_list`
 - `_cli_profile_schedule_add`
 - `_cli_profile_schedule_apply`

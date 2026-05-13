@@ -23,6 +23,7 @@ from hosts_editor import (
     FTL_BLOCKED_STATUS_CODES,
     HostsFileEditor,
     I18N_CATALOG_SCHEMA_VERSION,
+    MANAGED_PACKAGE_PLAN_SCHEMA,
     PROFILE_SYNC_PAYLOAD_SCHEMA,
     PROVENANCE_EVENT_KINDS,
     PROFILE_SCHEMA_VERSION,
@@ -49,6 +50,8 @@ from hosts_editor import (
     build_i18n_contribution_template,
     build_local_api_clean_preview_payload,
     build_local_api_status_payload,
+    build_managed_hosts_block,
+    build_managed_package_export_plan,
     build_profile_sync_payload,
     build_allowlist_share_patch,
     build_profile_share_patch,
@@ -166,6 +169,8 @@ from hosts_editor import (
     format_idn_homograph_report,
     format_i18n_catalog_report,
     format_i18n_contribution_report,
+    format_managed_package_export_plan,
+    format_managed_package_target_catalog,
     format_rule_tier_report,
     format_declarative_config_payload,
     format_declarative_profile_summary,
@@ -219,6 +224,7 @@ from hosts_editor import (
     list_safesearch_templates,
     list_cloud_dns_adapters,
     list_dns_integration_packs,
+    list_managed_package_targets,
     list_router_gateway_adapters,
     list_threat_feed_packs,
     list_threat_feed_sources,
@@ -286,6 +292,7 @@ from hosts_editor import (
     sign_share_patch_file,
     verify_share_patch_signature,
     write_portable_bundle_config,
+    write_managed_package_export_bundle,
     write_text_file_atomic,
     write_bytes_file_atomic,
 )
@@ -2859,6 +2866,35 @@ profile:
                 "Lab Router",
             )
 
+        with mock.patch.object(hosts_editor, "_cli_managed_package_target_list", return_value=0) as mocked_managed_list:
+            self.assertEqual(hosts_editor._handle_cli_args(["--managed-package-list"]), 0)
+            mocked_managed_list.assert_called_once_with()
+
+        with mock.patch.object(hosts_editor, "_cli_managed_package_export", return_value=0) as mocked_managed_export:
+            self.assertEqual(
+                hosts_editor._handle_cli_args([
+                    "--managed-package-export", "intune", "managed.txt", "managed-bundle",
+                    "--managed-package-version", "2.20.0",
+                    "--managed-installer-url", "https://example.com/HostsFileGet.exe",
+                    "--managed-sha256", "c" * 64,
+                    "--managed-label", "Corp Managed",
+                    "--managed-install-dir", r"C:\Program Files\HostsFileGet",
+                    "--managed-exe-name", "HostsFileGet.exe",
+                ]),
+                0,
+            )
+            mocked_managed_export.assert_called_once_with(
+                "intune",
+                "managed.txt",
+                "managed-bundle",
+                "2.20.0",
+                "https://example.com/HostsFileGet.exe",
+                "c" * 64,
+                "Corp Managed",
+                r"C:\Program Files\HostsFileGet",
+                "HostsFileGet.exe",
+            )
+
     def test_handle_cli_args_routes_cloud_dns_flags(self):
         with mock.patch.object(hosts_editor, "_cli_cloud_adapter_list", return_value=0) as mocked_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--cloud-adapter-list"]), 0)
@@ -3625,6 +3661,84 @@ profile:
         self.assertIn("S20", plan["references"])
         self.assertIn("Plan only: yes", formatted)
         self.assertIn("openwrt-dnsmasq", catalog)
+
+    def test_managed_package_targets_are_guarded_exports(self):
+        target_ids = {target["id"] for target in list_managed_package_targets()}
+        self.assertEqual(target_ids, {"intune-win32", "gpo-startup", "pdq-deploy", "sccm-application"})
+
+        catalog = format_managed_package_target_catalog()
+
+        self.assertIn("Managed package export targets", catalog)
+        self.assertIn("does not deploy", catalog)
+        self.assertIn("Intune", catalog)
+
+    def test_managed_package_export_plan_generates_scripts_and_managed_block(self):
+        block = build_managed_hosts_block(
+            ["0.0.0.0 Ads.EXAMPLE", "0.0.0.0 ads.example", "10.0.0.5 intranet.example"],
+            "Corp Managed",
+        )
+        plan = build_managed_package_export_plan(
+            block,
+            "intune",
+            version="2.20.0",
+            installer_url="https://github.com/SysAdminDoc/HostsFileGet/releases/download/v2.20.0/HostsFileGet.exe",
+            sha256="a" * 64,
+            label="Corp Managed",
+            now=datetime.datetime(2026, 5, 13, 12, 0, 0),
+        )
+        formatted = format_managed_package_export_plan(plan)
+
+        self.assertEqual(plan["schema"], MANAGED_PACKAGE_PLAN_SCHEMA)
+        self.assertTrue(plan["plan_only"])
+        self.assertTrue(plan["bundle_only"])
+        self.assertEqual(plan["execution"], "not-run")
+        self.assertEqual(plan["target"]["id"], "intune-win32")
+        self.assertEqual(plan["release"]["sha256"], "A" * 64)
+        self.assertEqual(plan["managed_hosts"]["entry_count"], 2)
+        self.assertIn("# --- HostsFileGet Managed Start: Corp Managed ---", plan["managed_hosts"]["content"])
+        self.assertIn("0.0.0.0 ads.example", plan["managed_hosts"]["content"])
+        self.assertIn("10.0.0.5 intranet.example", plan["managed_hosts"]["content"])
+        self.assertIn("-ApplyManagedHosts", plan["commands"]["install"])
+        self.assertIn("IntuneWinAppUtil.exe", plan["target_export_content"])
+        self.assertIn("Get-FileHash", plan["install_script"])
+        self.assertIn("Copy-Item -LiteralPath $sourcePath", plan["install_script"])
+        self.assertIn("Roadmap source IDs", formatted)
+
+    def test_cli_managed_package_export_writes_bundle_without_deploying(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source = root / "managed-hosts.txt"
+            bundle = root / "bundle"
+            source.write_text("0.0.0.0 ads.example\n", encoding="utf-8")
+
+            with mock.patch.object(hosts_editor, "_cli_print"):
+                result = hosts_editor._cli_managed_package_export(
+                    "pdq",
+                    str(source),
+                    str(bundle),
+                    "2.20.0",
+                    "https://github.com/SysAdminDoc/HostsFileGet/releases/download/v2.20.0/HostsFileGet.exe",
+                    "b" * 64,
+                    "PDQ Pilot",
+                )
+
+            plan = json.loads((bundle / "managed-package-export-plan.json").read_text(encoding="utf-8"))
+            managed_hosts_text = (bundle / "managed-hosts-lines.txt").read_text(encoding="utf-8")
+            artifacts_exist = [
+                (bundle / "Install-HostsFileGetManaged.ps1").exists(),
+                (bundle / "Detect-HostsFileGetManaged.ps1").exists(),
+                (bundle / "Uninstall-HostsFileGetManaged.ps1").exists(),
+                (bundle / "pdq-package-fields.json").exists(),
+            ]
+
+        self.assertEqual(result, 0)
+        self.assertEqual(plan["target"]["id"], "pdq-deploy")
+        self.assertEqual(plan["execution"], "not-run")
+        self.assertEqual(artifacts_exist, [True, True, True, True])
+        self.assertIn("0.0.0.0 ads.example", managed_hosts_text)
 
     def test_cli_router_gateway_push_plan_writes_bundle_without_remote_actions(self):
         import tempfile

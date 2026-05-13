@@ -236,6 +236,93 @@ ROUTER_GATEWAY_ADAPTER_ALIASES = {
     "unbound-router": "generic-unbound",
     "gateway-unbound": "generic-unbound",
 }
+MANAGED_PACKAGE_PLAN_SCHEMA = "hostsfileget.managed-package-plan.v1"
+MANAGED_PACKAGE_PLAN_JSON_NAME = "managed-package-export-plan.json"
+MANAGED_PACKAGE_README_NAME = "MANAGED_PACKAGE_EXPORT.md"
+MANAGED_PACKAGE_INSTALL_SCRIPT_NAME = "Install-HostsFileGetManaged.ps1"
+MANAGED_PACKAGE_DETECT_SCRIPT_NAME = "Detect-HostsFileGetManaged.ps1"
+MANAGED_PACKAGE_UNINSTALL_SCRIPT_NAME = "Uninstall-HostsFileGetManaged.ps1"
+MANAGED_PACKAGE_MANAGED_HOSTS_NAME = "managed-hosts-lines.txt"
+MANAGED_PACKAGE_DEFAULT_LABEL = "HostsFileGet Enterprise Managed Lines"
+MANAGED_PACKAGE_DEFAULT_INSTALL_DIR = r"%ProgramFiles%\HostsFileGet"
+MANAGED_PACKAGE_DEFAULT_EXE_NAME = "HostsFileGet.exe"
+MANAGED_PACKAGE_DEFAULT_PUBLISHER = "SysAdminDoc"
+MANAGED_PACKAGE_LABEL_MAX_LENGTH = 80
+MANAGED_PACKAGE_INSTALL_DIR_MAX_LENGTH = 240
+MANAGED_PACKAGE_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?$")
+MANAGED_PACKAGE_SHA256_RE = re.compile(r"^[A-Fa-f0-9]{64}$")
+MANAGED_HOSTS_START_TEMPLATE = "# --- HostsFileGet Managed Start: {label} ---"
+MANAGED_HOSTS_END_TEMPLATE = "# --- HostsFileGet Managed End: {label} ---"
+MANAGED_PACKAGE_WARNINGS = (
+    "Export-only: HostsFileGet writes deployment artifacts but does not upload to Intune, edit GPOs, import PDQ packages, or create Configuration Manager applications.",
+    "Use signed official release artifacts for broad deployment; unsigned local builds are suitable only for lab validation.",
+    "Managed hosts lines are applied by the generated wrapper only when the operator passes -ApplyManagedHosts.",
+    "Test detection, uninstall, and managed-hosts rollback on a small pilot group before assigning packages broadly.",
+)
+MANAGED_PACKAGE_TARGETS = (
+    {
+        "id": "intune-win32",
+        "label": "Microsoft Intune Win32 app bundle",
+        "target_system": "Microsoft Intune",
+        "artifact_name": "intune-win32-app.json",
+        "command_shape": "Win32 app content prep plus install/uninstall/detection commands",
+        "source_urls": (
+            "https://learn.microsoft.com/en-us/intune/intune-service/apps/apps-win32-prepare",
+            "https://learn.microsoft.com/en-us/mem/intune-service/apps/apps-win32-add",
+        ),
+        "references": ("C6", "S23", "S24"),
+    },
+    {
+        "id": "gpo-startup",
+        "label": "Group Policy startup script bundle",
+        "target_system": "Active Directory Group Policy",
+        "artifact_name": "gpo-startup-deployment.md",
+        "command_shape": "Computer startup PowerShell script using a UNC-staged bundle",
+        "source_urls": (
+            "https://learn.microsoft.com/en-us/troubleshoot/windows-server/group-policy/use-group-policy-to-install-software",
+            "https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2012-r2-and-2012/dn789196(v=ws.11)",
+        ),
+        "references": ("S25", "S26"),
+    },
+    {
+        "id": "pdq-deploy",
+        "label": "PDQ Deploy package field export",
+        "target_system": "PDQ Deploy",
+        "artifact_name": "pdq-package-fields.json",
+        "command_shape": "Custom package fields and PowerShell step command",
+        "source_urls": (
+            "https://docs.pdq.com/current-version/deploy/manage-packages.htm",
+            "https://docs.pdq.com/current-version/deploy/deploy-cli.htm",
+        ),
+        "references": ("S27", "S28"),
+    },
+    {
+        "id": "sccm-application",
+        "label": "Configuration Manager application field export",
+        "target_system": "Microsoft Configuration Manager",
+        "artifact_name": "configmgr-application-fields.json",
+        "command_shape": "Application/deployment-type fields with script detection",
+        "source_urls": (
+            "https://learn.microsoft.com/mem/configmgr/apps/deploy-use/create-applications",
+            "https://learn.microsoft.com/en-us/troubleshoot/mem/configmgr/app-management/understand/deployment-install-technical-reference",
+        ),
+        "references": ("S29", "S30"),
+    },
+)
+MANAGED_PACKAGE_TARGET_ALIASES = {
+    "intune": "intune-win32",
+    "intune-win": "intune-win32",
+    "win32": "intune-win32",
+    "gpo": "gpo-startup",
+    "group-policy": "gpo-startup",
+    "startup-script": "gpo-startup",
+    "pdq": "pdq-deploy",
+    "pdqdeploy": "pdq-deploy",
+    "configmgr": "sccm-application",
+    "configuration-manager": "sccm-application",
+    "sccm": "sccm-application",
+    "mecm": "sccm-application",
+}
 SCHEDULED_TASK_NAME = "HostsFileGet Auto-Update"
 CLI_LOG_FILENAME = "cli.log"
 CLI_ACTIVITY_FILENAME = "cli-activity.jsonl"
@@ -5322,6 +5409,604 @@ def format_router_gateway_push_plan(plan: dict) -> str:
     lines.extend(["", "Commands:"])
     for command in plan.get("commands") or []:
         lines.append(f"- {command.get('id')}: {_format_command_for_display(command.get('command'))}")
+    lines.extend(["", "Warnings:"])
+    for warning in plan.get("warnings") or []:
+        lines.append(f"- {warning}")
+    references = plan.get("references") or []
+    if references:
+        lines.extend(["", "Roadmap source IDs:", f"- {', '.join(references)}"])
+    return "\n".join(lines)
+
+
+def normalize_managed_package_target_id(target_id: str) -> str:
+    normalized = (target_id or "").strip().lower().replace("_", "-")
+    return MANAGED_PACKAGE_TARGET_ALIASES.get(normalized, normalized)
+
+
+def list_managed_package_targets() -> list[dict[str, str]]:
+    return [dict(target) for target in MANAGED_PACKAGE_TARGETS]
+
+
+def find_managed_package_target(target_id: str) -> dict[str, str]:
+    normalized = normalize_managed_package_target_id(target_id)
+    for target in MANAGED_PACKAGE_TARGETS:
+        if target["id"] == normalized:
+            return dict(target)
+    known = ", ".join(target["id"] for target in MANAGED_PACKAGE_TARGETS)
+    raise ValueError(f"Unknown managed package target: {target_id!r}. Known targets: {known}")
+
+
+def sanitize_managed_package_label(value: str | None = None) -> str:
+    candidate = re.sub(r"\s+", " ", str(value or MANAGED_PACKAGE_DEFAULT_LABEL).strip())
+    if not candidate or _contains_control_chars(candidate):
+        candidate = MANAGED_PACKAGE_DEFAULT_LABEL
+    return candidate[:MANAGED_PACKAGE_LABEL_MAX_LENGTH]
+
+
+def sanitize_managed_package_version(value: str | None = None) -> str:
+    candidate = str(value or APP_VERSION).strip().lstrip("v")
+    if not MANAGED_PACKAGE_VERSION_RE.match(candidate):
+        raise ValueError("managed package version must look like MAJOR.MINOR.PATCH")
+    return candidate
+
+
+def sanitize_managed_package_sha256(value: str) -> str:
+    candidate = str(value or "").strip()
+    if not MANAGED_PACKAGE_SHA256_RE.match(candidate):
+        raise ValueError("managed package SHA-256 must be a 64-character hex digest")
+    return candidate.upper()
+
+
+def sanitize_managed_package_installer_url(value: str) -> str:
+    candidate = str(value or "").strip()
+    if not candidate or _contains_control_chars(candidate) or len(candidate) > 2083:
+        raise ValueError("managed package installer URL is required and must not contain control characters")
+    try:
+        parsed = urllib.parse.urlsplit(candidate)
+    except ValueError as exc:
+        raise ValueError("managed package installer URL is invalid") from exc
+    if parsed.scheme.lower() != "https" or not parsed.hostname:
+        raise ValueError("managed package installer URL must use https and include a host")
+    return candidate
+
+
+def sanitize_managed_package_install_dir(value: str | None = None) -> str:
+    candidate = str(value or MANAGED_PACKAGE_DEFAULT_INSTALL_DIR).strip()
+    if (
+        not candidate
+        or _contains_control_chars(candidate)
+        or len(candidate) > MANAGED_PACKAGE_INSTALL_DIR_MAX_LENGTH
+        or candidate.startswith("\\\\")
+    ):
+        raise ValueError("managed package install dir must be a local Windows path without control characters")
+    return candidate
+
+
+def sanitize_managed_package_exe_name(value: str | None = None) -> str:
+    candidate = str(value or MANAGED_PACKAGE_DEFAULT_EXE_NAME).strip()
+    if (
+        not candidate
+        or _contains_control_chars(candidate)
+        or len(candidate) > 80
+        or "/" in candidate
+        or "\\" in candidate
+        or candidate in (".", "..")
+        or not candidate.lower().endswith(".exe")
+    ):
+        raise ValueError("managed package executable name must be a simple .exe filename")
+    return candidate
+
+
+def build_managed_hosts_block(lines, label: str | None = None) -> list[str]:
+    source_lines = str(lines or "").splitlines() if isinstance(lines, str) else list(lines or [])
+    safe_label = sanitize_managed_package_label(label)
+    normalized_entries: list[str] = []
+    seen: set[str] = set()
+    for line in source_lines:
+        entries, _, _ = normalize_line_to_hosts_entries(str(line))
+        for entry in entries:
+            clean = entry.strip()
+            key = clean.lower()
+            if clean and key not in seen:
+                normalized_entries.append(clean)
+                seen.add(key)
+    return [
+        MANAGED_HOSTS_START_TEMPLATE.format(label=safe_label),
+        *normalized_entries,
+        MANAGED_HOSTS_END_TEMPLATE.format(label=safe_label),
+    ]
+
+
+def build_managed_package_install_script(plan: dict) -> str:
+    release = plan.get("release") or {}
+    managed_hosts = plan.get("managed_hosts") or {}
+    install_dir = release.get("install_dir") or MANAGED_PACKAGE_DEFAULT_INSTALL_DIR
+    exe_name = release.get("exe_name") or MANAGED_PACKAGE_DEFAULT_EXE_NAME
+    sha256 = release.get("sha256") or ""
+    version = release.get("version") or APP_VERSION
+    managed_hosts_filename = managed_hosts.get("filename") or MANAGED_PACKAGE_MANAGED_HOSTS_NAME
+    return "\n".join([
+        "[CmdletBinding()]",
+        "param(",
+        f"  [string]$InstallDir = {_powershell_single_quote(install_dir)},",
+        f"  [string]$StagedExecutablePath = (Join-Path $PSScriptRoot {_powershell_single_quote(exe_name)}),",
+        f"  [string]$ManagedHostsPath = (Join-Path $PSScriptRoot {_powershell_single_quote(managed_hosts_filename)}),",
+        f"  [string]$ExpectedSha256 = {_powershell_single_quote(sha256)},",
+        "  [switch]$ApplyManagedHosts",
+        ")",
+        "$ErrorActionPreference = 'Stop'",
+        "",
+        "function Expand-ManagedPath {",
+        "  param([string]$PathValue)",
+        "  return [Environment]::ExpandEnvironmentVariables($PathValue)",
+        "}",
+        "",
+        "function Assert-Administrator {",
+        "  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()",
+        "  $principal = [Security.Principal.WindowsPrincipal]::new($identity)",
+        "  if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {",
+        "    throw 'HostsFileGet managed installation must run elevated or as LocalSystem.'",
+        "  }",
+        "}",
+        "",
+        "function Set-ManagedHostsBlock {",
+        "  param([string]$BlockPath)",
+        "  if (-not (Test-Path -LiteralPath $BlockPath)) { throw \"Managed hosts block not found: $BlockPath\" }",
+        "  $hostsPath = Join-Path $env:SystemRoot 'System32\\drivers\\etc\\hosts'",
+        "  $blockLines = @(Get-Content -LiteralPath $BlockPath -ErrorAction Stop)",
+        "  if ($blockLines.Count -lt 2 -or $blockLines[0] -notlike '# --- HostsFileGet Managed Start:*') {",
+        "    throw 'Managed hosts block is missing the HostsFileGet start marker.'",
+        "  }",
+        "  $current = @()",
+        "  if (Test-Path -LiteralPath $hostsPath) { $current = @(Get-Content -LiteralPath $hostsPath -ErrorAction Stop) }",
+        "  $kept = [System.Collections.Generic.List[string]]::new()",
+        "  $skip = $false",
+        "  foreach ($line in $current) {",
+        "    if ($line -like '# --- HostsFileGet Managed Start:*') { $skip = $true; continue }",
+        "    if ($skip -and $line -like '# --- HostsFileGet Managed End:*') { $skip = $false; continue }",
+        "    if (-not $skip) { [void]$kept.Add($line) }",
+        "  }",
+        "  if ($kept.Count -gt 0 -and $kept[$kept.Count - 1].Trim().Length -ne 0) { [void]$kept.Add('') }",
+        "  foreach ($line in $blockLines) { [void]$kept.Add($line) }",
+        "  Set-Content -LiteralPath $hostsPath -Value $kept -Encoding ASCII",
+        "}",
+        "",
+        "Assert-Administrator",
+        "$resolvedInstallDir = Expand-ManagedPath $InstallDir",
+        "if (-not (Test-Path -LiteralPath $StagedExecutablePath)) { throw \"Staged executable not found: $StagedExecutablePath\" }",
+        "$actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $StagedExecutablePath).Hash.ToUpperInvariant()",
+        "if ($actualHash -ne $ExpectedSha256.ToUpperInvariant()) { throw \"SHA-256 mismatch for $StagedExecutablePath\" }",
+        "New-Item -ItemType Directory -Path $resolvedInstallDir -Force | Out-Null",
+        "$installedExe = Join-Path $resolvedInstallDir " + _powershell_single_quote(exe_name),
+        "Copy-Item -LiteralPath $StagedExecutablePath -Destination $installedExe -Force",
+        "$bundleFiles = @(",
+        f"  {_powershell_single_quote(MANAGED_PACKAGE_INSTALL_SCRIPT_NAME)},",
+        f"  {_powershell_single_quote(MANAGED_PACKAGE_DETECT_SCRIPT_NAME)},",
+        f"  {_powershell_single_quote(MANAGED_PACKAGE_UNINSTALL_SCRIPT_NAME)},",
+        f"  {_powershell_single_quote(managed_hosts_filename)}",
+        ")",
+        "foreach ($bundleFile in $bundleFiles) {",
+        "  $sourcePath = Join-Path $PSScriptRoot $bundleFile",
+        "  if (Test-Path -LiteralPath $sourcePath) {",
+        "    Copy-Item -LiteralPath $sourcePath -Destination (Join-Path $resolvedInstallDir $bundleFile) -Force",
+        "  }",
+        "}",
+        f"$installedUninstallScript = Join-Path $resolvedInstallDir {_powershell_single_quote(MANAGED_PACKAGE_UNINSTALL_SCRIPT_NAME)}",
+        "$uninstallKey = 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\HostsFileGet'",
+        "New-Item -Path $uninstallKey -Force | Out-Null",
+        "Set-ItemProperty -Path $uninstallKey -Name DisplayName -Value 'HostsFileGet'",
+        f"Set-ItemProperty -Path $uninstallKey -Name DisplayVersion -Value {_powershell_single_quote(version)}",
+        f"Set-ItemProperty -Path $uninstallKey -Name Publisher -Value {_powershell_single_quote(MANAGED_PACKAGE_DEFAULT_PUBLISHER)}",
+        "Set-ItemProperty -Path $uninstallKey -Name InstallLocation -Value $resolvedInstallDir",
+        "Set-ItemProperty -Path $uninstallKey -Name DisplayIcon -Value $installedExe",
+        "Set-ItemProperty -Path $uninstallKey -Name UninstallString -Value \"powershell.exe -NoProfile -ExecutionPolicy Bypass -File `\"$installedUninstallScript`\"\"",
+        "if ($ApplyManagedHosts) { Set-ManagedHostsBlock -BlockPath $ManagedHostsPath }",
+        "Write-Host \"HostsFileGet managed install complete: $installedExe\"",
+    ]) + "\n"
+
+
+def build_managed_package_detect_script(plan: dict) -> str:
+    release = plan.get("release") or {}
+    install_dir = release.get("install_dir") or MANAGED_PACKAGE_DEFAULT_INSTALL_DIR
+    exe_name = release.get("exe_name") or MANAGED_PACKAGE_DEFAULT_EXE_NAME
+    sha256 = release.get("sha256") or ""
+    return "\n".join([
+        "[CmdletBinding()]",
+        "param(",
+        f"  [string]$InstallDir = {_powershell_single_quote(install_dir)},",
+        f"  [string]$ExeName = {_powershell_single_quote(exe_name)},",
+        f"  [string]$ExpectedSha256 = {_powershell_single_quote(sha256)}",
+        ")",
+        "$ErrorActionPreference = 'Stop'",
+        "$resolvedInstallDir = [Environment]::ExpandEnvironmentVariables($InstallDir)",
+        "$installedExe = Join-Path $resolvedInstallDir $ExeName",
+        "if (-not (Test-Path -LiteralPath $installedExe)) { exit 1 }",
+        "$actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installedExe).Hash.ToUpperInvariant()",
+        "if ($actualHash -ne $ExpectedSha256.ToUpperInvariant()) { exit 1 }",
+        "exit 0",
+    ]) + "\n"
+
+
+def build_managed_package_uninstall_script(plan: dict) -> str:
+    release = plan.get("release") or {}
+    install_dir = release.get("install_dir") or MANAGED_PACKAGE_DEFAULT_INSTALL_DIR
+    return "\n".join([
+        "[CmdletBinding()]",
+        "param(",
+        f"  [string]$InstallDir = {_powershell_single_quote(install_dir)},",
+        "  [switch]$RemoveManagedHosts",
+        ")",
+        "$ErrorActionPreference = 'Stop'",
+        "",
+        "function Assert-Administrator {",
+        "  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()",
+        "  $principal = [Security.Principal.WindowsPrincipal]::new($identity)",
+        "  if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {",
+        "    throw 'HostsFileGet managed uninstall must run elevated or as LocalSystem.'",
+        "  }",
+        "}",
+        "",
+        "function Remove-ManagedHostsBlock {",
+        "  $hostsPath = Join-Path $env:SystemRoot 'System32\\drivers\\etc\\hosts'",
+        "  if (-not (Test-Path -LiteralPath $hostsPath)) { return }",
+        "  $current = @(Get-Content -LiteralPath $hostsPath -ErrorAction Stop)",
+        "  $kept = [System.Collections.Generic.List[string]]::new()",
+        "  $skip = $false",
+        "  foreach ($line in $current) {",
+        "    if ($line -like '# --- HostsFileGet Managed Start:*') { $skip = $true; continue }",
+        "    if ($skip -and $line -like '# --- HostsFileGet Managed End:*') { $skip = $false; continue }",
+        "    if (-not $skip) { [void]$kept.Add($line) }",
+        "  }",
+        "  Set-Content -LiteralPath $hostsPath -Value $kept -Encoding ASCII",
+        "}",
+        "",
+        "Assert-Administrator",
+        "$resolvedInstallDir = [Environment]::ExpandEnvironmentVariables($InstallDir)",
+        "if (Test-Path -LiteralPath $resolvedInstallDir) { Remove-Item -LiteralPath $resolvedInstallDir -Recurse -Force }",
+        "$uninstallKey = 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\HostsFileGet'",
+        "if (Test-Path -LiteralPath $uninstallKey) { Remove-Item -LiteralPath $uninstallKey -Recurse -Force }",
+        "if ($RemoveManagedHosts) { Remove-ManagedHostsBlock }",
+        "Write-Host 'HostsFileGet managed uninstall complete.'",
+    ]) + "\n"
+
+
+def _managed_package_common_commands() -> dict[str, str]:
+    return {
+        "install": (
+            "powershell.exe -NoProfile -ExecutionPolicy Bypass "
+            f"-File .\\{MANAGED_PACKAGE_INSTALL_SCRIPT_NAME} -ApplyManagedHosts"
+        ),
+        "uninstall": (
+            "powershell.exe -NoProfile -ExecutionPolicy Bypass "
+            f"-File .\\{MANAGED_PACKAGE_UNINSTALL_SCRIPT_NAME} -RemoveManagedHosts"
+        ),
+        "detect": (
+            "powershell.exe -NoProfile -ExecutionPolicy Bypass "
+            f"-File .\\{MANAGED_PACKAGE_DETECT_SCRIPT_NAME}"
+        ),
+    }
+
+
+def build_managed_package_target_export(plan: dict) -> str:
+    target = plan.get("target") or {}
+    release = plan.get("release") or {}
+    commands = plan.get("commands") or _managed_package_common_commands()
+    target_id = target.get("id")
+    if target_id == "intune-win32":
+        payload = {
+            "schema": "hostsfileget.intune-win32-fields.v1",
+            "app_name": "HostsFileGet",
+            "publisher": MANAGED_PACKAGE_DEFAULT_PUBLISHER,
+            "version": release.get("version"),
+            "content_prep": {
+                "tool": "IntuneWinAppUtil.exe",
+                "source_folder": ".",
+                "setup_file": MANAGED_PACKAGE_INSTALL_SCRIPT_NAME,
+                "example_command": (
+                    "IntuneWinAppUtil.exe -c . "
+                    f"-s {MANAGED_PACKAGE_INSTALL_SCRIPT_NAME} -o .\\intune-output -q"
+                ),
+            },
+            "program": {
+                "install_command": commands["install"],
+                "uninstall_command": commands["uninstall"],
+                "install_behavior": "system",
+                "device_restart_behavior": "no specific action",
+            },
+            "detection": {
+                "type": "PowerShell script",
+                "script_file": MANAGED_PACKAGE_DETECT_SCRIPT_NAME,
+                "success_exit_code": 0,
+            },
+            "assignments": "Create assignments in Intune after pilot testing; this export does not call Graph or store tenant credentials.",
+        }
+        return json.dumps(payload, indent=2) + "\n"
+    if target_id == "gpo-startup":
+        return "\n".join([
+            "# HostsFileGet GPO Startup Script Export",
+            "",
+            "Copy this bundle to a read-only UNC share available to target computer accounts.",
+            "",
+            "Startup script command:",
+            "",
+            "```powershell",
+            commands["install"],
+            "```",
+            "",
+            "Removal script command:",
+            "",
+            "```powershell",
+            commands["uninstall"],
+            "```",
+            "",
+            "Notes:",
+            "- Group Policy Software Installation is MSI-oriented; this bundle uses a computer startup script because HostsFileGet ships as a signed executable artifact.",
+            "- Assign to a pilot OU first and confirm the managed hosts block can be removed with the uninstall script.",
+            "- Keep the staged executable and generated scripts together in the same share folder.",
+        ]) + "\n"
+    if target_id == "pdq-deploy":
+        payload = {
+            "schema": "hostsfileget.pdq-deploy-fields.v1",
+            "package_name": "HostsFileGet",
+            "version": release.get("version"),
+            "package_source": "custom",
+            "steps": [
+                {
+                    "name": "Install HostsFileGet managed bundle",
+                    "type": "PowerShell",
+                    "command": commands["install"],
+                    "success_codes": [0],
+                },
+                {
+                    "name": "Detect HostsFileGet managed bundle",
+                    "type": "PowerShell",
+                    "command": commands["detect"],
+                    "success_codes": [0],
+                },
+            ],
+            "uninstall_step": {
+                "type": "PowerShell",
+                "command": commands["uninstall"],
+                "success_codes": [0],
+            },
+            "operator_notes": [
+                "Create or import a custom PDQ package, attach/copy this bundle into the PDQ repository, and paste these commands into PowerShell steps.",
+                "PDQ XML exports contain package definitions only; this JSON is an auditable field map rather than a proprietary XML schema guess.",
+            ],
+        }
+        return json.dumps(payload, indent=2) + "\n"
+    if target_id == "sccm-application":
+        payload = {
+            "schema": "hostsfileget.configmgr-application-fields.v1",
+            "application": {
+                "name": "HostsFileGet",
+                "publisher": MANAGED_PACKAGE_DEFAULT_PUBLISHER,
+                "software_version": release.get("version"),
+            },
+            "deployment_type": {
+                "type": "Script Installer",
+                "content_location": "Copy this bundle to a Configuration Manager content source share.",
+                "install_command": commands["install"],
+                "uninstall_command": commands["uninstall"],
+                "installation_behavior": "Install for system",
+                "logon_requirement": "Whether or not a user is logged on",
+                "user_interaction_mode": "Hidden",
+            },
+            "detection": {
+                "type": "PowerShell script",
+                "script_file": MANAGED_PACKAGE_DETECT_SCRIPT_NAME,
+                "success_exit_code": 0,
+            },
+            "operator_notes": [
+                "Create the Configuration Manager application and deployment type from these fields or translate them into ConfigurationManager PowerShell cmdlets.",
+                "Distribute content to a pilot distribution point before broad deployment.",
+            ],
+        }
+        return json.dumps(payload, indent=2) + "\n"
+    raise ValueError(f"Unsupported managed package target export: {target_id!r}")
+
+
+def build_managed_package_readme(plan: dict) -> str:
+    target = plan.get("target") or {}
+    release = plan.get("release") or {}
+    artifacts = plan.get("artifacts") or {}
+    commands = plan.get("commands") or {}
+    lines = [
+        "# HostsFileGet Managed Package Export",
+        "",
+        f"Target: {target.get('id')} - {target.get('label')}",
+        f"Version: {release.get('version')}",
+        f"Installer URL: {release.get('installer_url')}",
+        f"Expected SHA-256: {release.get('sha256')}",
+        "",
+        "Boundary: this directory is a deployment handoff bundle. HostsFileGet has not uploaded, assigned, imported, or executed anything.",
+        "",
+        "Required operator steps:",
+        f"1. Download the signed release executable and save it beside these scripts as `{release.get('exe_name')}`.",
+        "2. Confirm the file hash matches the expected SHA-256.",
+        f"3. Review `{MANAGED_PACKAGE_MANAGED_HOSTS_NAME}` and the install/uninstall scripts.",
+        f"4. Use `{target.get('artifact_name')}` to populate the deployment tool fields.",
+        "",
+        "Commands:",
+        f"- Install: `{commands.get('install')}`",
+        f"- Detect: `{commands.get('detect')}`",
+        f"- Uninstall: `{commands.get('uninstall')}`",
+    ]
+    if artifacts:
+        lines.extend(["", "Artifacts:"])
+        for name, path in artifacts.items():
+            lines.append(f"- {name}: {path}")
+    warnings = plan.get("warnings") or []
+    if warnings:
+        lines.extend(["", "Warnings:"])
+        lines.extend(f"- {warning}" for warning in warnings)
+    return "\n".join(lines) + "\n"
+
+
+def build_managed_package_export_plan(
+    lines,
+    target_id: str,
+    *,
+    version: str | None = None,
+    installer_url: str,
+    sha256: str,
+    label: str | None = None,
+    install_dir: str | None = None,
+    exe_name: str | None = None,
+    now=None,
+) -> dict:
+    source_lines = str(lines or "").splitlines() if isinstance(lines, str) else list(lines or [])
+    target = find_managed_package_target(target_id)
+    safe_version = sanitize_managed_package_version(version)
+    safe_url = sanitize_managed_package_installer_url(installer_url)
+    safe_sha256 = sanitize_managed_package_sha256(sha256)
+    safe_label = sanitize_managed_package_label(label)
+    safe_install_dir = sanitize_managed_package_install_dir(install_dir)
+    safe_exe_name = sanitize_managed_package_exe_name(exe_name)
+    created_at = now or datetime.datetime.now()
+    if isinstance(created_at, datetime.datetime):
+        created_at = created_at.isoformat(timespec="seconds")
+    created_at = str(created_at)
+
+    managed_block = build_managed_hosts_block(source_lines, safe_label)
+    managed_content = "\n".join(managed_block) + "\n"
+    managed_entries = [
+        line for line in managed_block
+        if line and not line.startswith("# --- HostsFileGet Managed ")
+    ]
+    commands = _managed_package_common_commands()
+    plan = {
+        "schema": MANAGED_PACKAGE_PLAN_SCHEMA,
+        "app_version": APP_VERSION,
+        "created_at": created_at,
+        "plan_only": True,
+        "bundle_only": True,
+        "execution": "not-run",
+        "target": {
+            "id": target["id"],
+            "label": target["label"],
+            "target_system": target["target_system"],
+            "command_shape": target["command_shape"],
+            "artifact_name": target["artifact_name"],
+        },
+        "release": {
+            "version": safe_version,
+            "installer_url": safe_url,
+            "sha256": safe_sha256,
+            "install_dir": safe_install_dir,
+            "exe_name": safe_exe_name,
+            "publisher": MANAGED_PACKAGE_DEFAULT_PUBLISHER,
+            "signed_artifact_required": True,
+        },
+        "managed_hosts": {
+            "label": safe_label,
+            "filename": MANAGED_PACKAGE_MANAGED_HOSTS_NAME,
+            "entry_count": len(managed_entries),
+            "line_count": len(managed_block),
+            "sha256": hashlib.sha256(managed_content.encode("utf-8")).hexdigest(),
+            "start_marker": managed_block[0],
+            "end_marker": managed_block[-1],
+            "content": managed_content,
+        },
+        "commands": commands,
+        "warnings": list(MANAGED_PACKAGE_WARNINGS),
+        "source_urls": list(target["source_urls"]),
+        "references": list(target["references"]),
+        "plan_filename": MANAGED_PACKAGE_PLAN_JSON_NAME,
+        "readme_filename": MANAGED_PACKAGE_README_NAME,
+        "install_script_filename": MANAGED_PACKAGE_INSTALL_SCRIPT_NAME,
+        "detect_script_filename": MANAGED_PACKAGE_DETECT_SCRIPT_NAME,
+        "uninstall_script_filename": MANAGED_PACKAGE_UNINSTALL_SCRIPT_NAME,
+    }
+    if not managed_entries:
+        plan["warnings"].append("No managed hosts entries were exported; the wrapper will only install the app unless the block file is updated.")
+    plan["install_script"] = build_managed_package_install_script(plan)
+    plan["detect_script"] = build_managed_package_detect_script(plan)
+    plan["uninstall_script"] = build_managed_package_uninstall_script(plan)
+    plan["target_export_content"] = build_managed_package_target_export(plan)
+    plan["readme_content"] = build_managed_package_readme(plan)
+    return plan
+
+
+def write_managed_package_export_bundle(plan: dict, output_dir: str) -> dict:
+    root = os.path.abspath(output_dir)
+    os.makedirs(root, exist_ok=True)
+    bundled = dict(plan)
+    target = bundled.get("target") or {}
+    managed_hosts = bundled.get("managed_hosts") or {}
+    artifacts = {
+        "plan_json": os.path.join(root, bundled["plan_filename"]),
+        "readme": os.path.join(root, bundled["readme_filename"]),
+        "install_script": os.path.join(root, bundled["install_script_filename"]),
+        "detect_script": os.path.join(root, bundled["detect_script_filename"]),
+        "uninstall_script": os.path.join(root, bundled["uninstall_script_filename"]),
+        "managed_hosts": os.path.join(root, managed_hosts.get("filename") or MANAGED_PACKAGE_MANAGED_HOSTS_NAME),
+        "target_export": os.path.join(root, target.get("artifact_name") or "managed-package-target.json"),
+    }
+    bundled["output_dir"] = root
+    bundled["artifacts"] = artifacts
+    write_text_file_atomic(artifacts["install_script"], bundled["install_script"])
+    write_text_file_atomic(artifacts["detect_script"], bundled["detect_script"])
+    write_text_file_atomic(artifacts["uninstall_script"], bundled["uninstall_script"])
+    write_text_file_atomic(artifacts["managed_hosts"], managed_hosts.get("content") or "")
+    write_text_file_atomic(artifacts["target_export"], bundled["target_export_content"])
+    bundled["readme_content"] = build_managed_package_readme(bundled)
+    write_text_file_atomic(artifacts["readme"], bundled["readme_content"])
+    write_text_file_atomic(artifacts["plan_json"], json.dumps(bundled, indent=2))
+    return bundled
+
+
+def format_managed_package_target_catalog() -> str:
+    lines = [
+        "Managed package export targets",
+        "",
+        "All targets are local artifact generators. HostsFileGet does not deploy, import, assign, or upload packages.",
+        "",
+        "Supported targets:",
+    ]
+    for target in MANAGED_PACKAGE_TARGETS:
+        lines.extend([
+            f"- {target['id']}: {target['label']}",
+            f"  Target: {target['target_system']}",
+            f"  Shape: {target['command_shape']}",
+            f"  Artifact: {target['artifact_name']}",
+            f"  Sources: {', '.join(target['source_urls'])}",
+        ])
+    lines.append("")
+    lines.append("Warnings:")
+    lines.extend(f"- {warning}" for warning in MANAGED_PACKAGE_WARNINGS)
+    return "\n".join(lines)
+
+
+def format_managed_package_export_plan(plan: dict) -> str:
+    target = plan.get("target") or {}
+    release = plan.get("release") or {}
+    managed_hosts = plan.get("managed_hosts") or {}
+    lines = [
+        "Managed Package Export Plan",
+        f"Schema: {plan.get('schema')}",
+        f"Plan only: {'yes' if plan.get('plan_only') else 'no'}",
+        f"Bundle only: {'yes' if plan.get('bundle_only') else 'no'}",
+        f"Execution: {plan.get('execution')}",
+        f"Target: {target.get('id')} - {target.get('label')}",
+        f"System: {target.get('target_system')}",
+        f"Version: {release.get('version')}",
+        f"Install dir: {release.get('install_dir')}",
+        f"Executable: {release.get('exe_name')}",
+        f"Release SHA-256: {release.get('sha256')}",
+        f"Managed hosts entries: {int(managed_hosts.get('entry_count') or 0):,}",
+        f"Managed hosts SHA-256: {managed_hosts.get('sha256')}",
+    ]
+    if plan.get("output_dir"):
+        lines.append(f"Output: {plan.get('output_dir')}")
+    artifacts = plan.get("artifacts") or {}
+    if artifacts:
+        lines.extend(["", "Artifacts:"])
+        for name, path in artifacts.items():
+            lines.append(f"- {name}: {path}")
+    lines.extend(["", "Commands:"])
+    for name, command in (plan.get("commands") or {}).items():
+        lines.append(f"- {name}: {_format_command_for_display(command)}")
     lines.extend(["", "Warnings:"])
     for warning in plan.get("warnings") or []:
         lines.append(f"- {warning}")
@@ -22539,6 +23224,43 @@ def _cli_router_gateway_push_plan(
     return 0
 
 
+def _cli_managed_package_target_list() -> int:
+    _cli_print(format_managed_package_target_catalog())
+    return 0
+
+
+def _cli_managed_package_export(
+    target_id: str,
+    input_path: str,
+    output_dir: str,
+    version: str | None,
+    installer_url: str,
+    sha256: str,
+    label: str | None = None,
+    install_dir: str | None = None,
+    exe_name: str | None = None,
+) -> int:
+    try:
+        source_lines = read_text_file_lines(input_path)
+        plan = build_managed_package_export_plan(
+            source_lines,
+            target_id,
+            version=version,
+            installer_url=installer_url,
+            sha256=sha256,
+            label=label,
+            install_dir=install_dir,
+            exe_name=exe_name,
+        )
+        plan = write_managed_package_export_bundle(plan, output_dir)
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Managed package export failed: {exc}")
+        return 2
+    _cli_print(format_managed_package_export_plan(plan))
+    _cli_print(f"Wrote managed package export bundle to {plan['output_dir']}")
+    return 0
+
+
 def _cli_profile_schedule_list(at_value: str | None = None) -> int:
     try:
         config_path = get_primary_config_path("hosts_editor_config.json")
@@ -22713,6 +23435,14 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--router-user",
         "--router-remote-path",
         "--router-label",
+        "--managed-package-list",
+        "--managed-package-export",
+        "--managed-package-version",
+        "--managed-installer-url",
+        "--managed-sha256",
+        "--managed-label",
+        "--managed-install-dir",
+        "--managed-exe-name",
         "--profile-schedule-list",
         "--profile-schedule-add",
         "--profile-schedule-days",
@@ -22803,6 +23533,13 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--router-user=",
         "--router-remote-path=",
         "--router-label=",
+        "--managed-package-export=",
+        "--managed-package-version=",
+        "--managed-installer-url=",
+        "--managed-sha256=",
+        "--managed-label=",
+        "--managed-install-dir=",
+        "--managed-exe-name=",
         "--profile-schedule-add=",
         "--profile-schedule-days=",
         "--profile-schedule-name=",
@@ -22914,6 +23651,19 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--router-user", default=ROUTER_GATEWAY_DEFAULT_REMOTE_USER, metavar="USER", help="Router/gateway SSH user placeholder for --router-push-plan.")
     parser.add_argument("--router-remote-path", metavar="PATH", help="Remote DNS config path for --router-push-plan.")
     parser.add_argument("--router-label", metavar="TEXT", help="Display label for --router-push-plan output.")
+    parser.add_argument("--managed-package-list", action="store_true", help="List guarded Intune/GPO/PDQ/Configuration Manager package export targets.")
+    parser.add_argument(
+        "--managed-package-export",
+        nargs=3,
+        metavar=("TARGET", "INPUT", "OUTPUT_DIR"),
+        help="Write a guarded enterprise deployment bundle from INPUT managed hosts lines into OUTPUT_DIR. No deployment tools are called.",
+    )
+    parser.add_argument("--managed-package-version", default=APP_VERSION, metavar="VERSION", help="Release version for --managed-package-export; defaults to the app version.")
+    parser.add_argument("--managed-installer-url", metavar="URL", help="HTTPS release executable URL for --managed-package-export.")
+    parser.add_argument("--managed-sha256", metavar="HEX", help="Expected SHA-256 for the staged release executable used by --managed-package-export.")
+    parser.add_argument("--managed-label", metavar="TEXT", help="Managed hosts block label for --managed-package-export.")
+    parser.add_argument("--managed-install-dir", default=MANAGED_PACKAGE_DEFAULT_INSTALL_DIR, metavar="PATH", help="Target install directory for --managed-package-export.")
+    parser.add_argument("--managed-exe-name", default=MANAGED_PACKAGE_DEFAULT_EXE_NAME, metavar="NAME", help="Staged executable filename for --managed-package-export.")
     parser.add_argument("--profile-schedule-list", action="store_true", help="Show the time-bound profile activation schedule without writing files.")
     parser.add_argument(
         "--profile-schedule-add",
@@ -23152,6 +23902,34 @@ def _handle_cli_args(argv: list[str]) -> int | None:
             args.router_user,
             args.router_remote_path,
             args.router_label,
+        )
+    if args.managed_package_list:
+        return _cli_managed_package_target_list()
+    managed_options = [
+        args.managed_installer_url,
+        args.managed_sha256,
+        args.managed_label,
+        args.managed_install_dir != MANAGED_PACKAGE_DEFAULT_INSTALL_DIR,
+        args.managed_exe_name != MANAGED_PACKAGE_DEFAULT_EXE_NAME,
+        args.managed_package_version != APP_VERSION,
+    ]
+    if any(managed_options) and not args.managed_package_export:
+        parser.error("--managed-* options require --managed-package-export TARGET INPUT OUTPUT_DIR")
+    if args.managed_package_export:
+        if not args.managed_installer_url:
+            parser.error("--managed-package-export requires --managed-installer-url URL")
+        if not args.managed_sha256:
+            parser.error("--managed-package-export requires --managed-sha256 HEX")
+        return _cli_managed_package_export(
+            args.managed_package_export[0],
+            args.managed_package_export[1],
+            args.managed_package_export[2],
+            args.managed_package_version,
+            args.managed_installer_url,
+            args.managed_sha256,
+            args.managed_label,
+            args.managed_install_dir,
+            args.managed_exe_name,
         )
     if args.profile_schedule_add:
         return _cli_profile_schedule_add(

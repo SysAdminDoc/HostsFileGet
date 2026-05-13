@@ -6,6 +6,7 @@ This file is a handoff note for future agents, including Claude.
 
 - 2026-04-15
 - 2026-05-12
+- 2026-05-13
 
 ## 2026-05-12 Roadmap Execution Notes
 
@@ -119,6 +120,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F058 complete. Next roadmap item: F059 router/gateway push adapters.
 - Completed F059: added plan-only router/gateway push bundles for OpenWrt dnsmasq, generic dnsmasq, and Unbound with generated config artifacts, JSON review plans, guarded `HOSTSFILEGET_CONFIRM=apply` shell scripts, docs, and regression tests. HostsFileGet does not execute `scp`, `ssh`, router APIs, reload commands, or credential prompts.
 - Updated `ROADMAP.md` to mark F059 complete. Next roadmap item: F060 Intune/GPO/PDQ/SCCM package exports.
+- Completed F060: added plan-only managed package export bundles for Intune Win32 apps, Group Policy startup scripts, PDQ Deploy, and Configuration Manager with managed hosts fencing, SHA-256-verified install wrappers, detection/uninstall scripts, target-specific field maps, docs, and regression tests. HostsFileGet does not upload, assign, import, or deploy packages.
+- Updated `ROADMAP.md` to mark F060 complete. Next roadmap item: F061 VS Code companion extension.
 
 ## Scope
 
