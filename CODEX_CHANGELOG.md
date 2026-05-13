@@ -130,6 +130,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F063 complete. Next roadmap item: F064 advanced DNS rewrites/CNAME/private domains.
 - Completed F064: added `--dns-rewrite-provider-list` and `--dns-rewrite-plan` for plan-only Control D private-rule and Technitium zone rewrite exports. The parser accepts hosts-style IP mappings, explicit A/AAAA/CNAME declarations, and arrow-form rewrites, emits JSON review artifacts, and keeps CNAME/private-domain behavior outside the hosts-native write path.
 - Updated `ROADMAP.md` to mark F064 complete. Next roadmap item: F065 certificate transparency and typosquat watchdog.
+- Completed F065: added plan-only Certificate Transparency and typosquat watchdog helpers, GUI catalog entry, `--ct-watchdog-list`, `--ct-watchdog-plan`, deterministic typo candidate generation, crt.sh review URLs, CSV review queue output, docs, and regression tests. HostsFileGet does not poll CT logs, store OSINT credentials, or auto-write hosts entries from matches.
+- Updated `ROADMAP.md` to mark F065 complete. Next roadmap item: F066 VirusTotal, URLhaus, MISP, STIX enrichment.
 
 ## Scope
 

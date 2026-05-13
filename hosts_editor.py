@@ -10698,6 +10698,76 @@ DNS_REWRITE_PROVIDER_ALIASES = {
     "technitium-zone": "technitium-zone",
     "zone": "technitium-zone",
 }
+CT_WATCHDOG_PLAN_SCHEMA = "hostsfileget.ct-typosquat-watchdog-plan.v1"
+CT_WATCHDOG_DEFAULT_MAX_VARIANTS = 120
+CT_WATCHDOG_MAX_VARIANTS = 1000
+CT_WATCHDOG_SOURCE_IDS = ("C1", "A1", "A2", "A7", "S41", "S42", "S43", "O29")
+CT_WATCHDOG_MULTIPART_SUFFIXES = {
+    "ac.uk",
+    "co.jp",
+    "co.nz",
+    "co.uk",
+    "com.au",
+    "com.br",
+    "com.cn",
+    "com.mx",
+    "com.sg",
+    "com.tr",
+    "gov.uk",
+    "ne.jp",
+    "net.au",
+    "org.au",
+    "org.uk",
+}
+CT_WATCHDOG_KEYBOARD_NEIGHBORS = {
+    "a": "qwsz",
+    "b": "vghn",
+    "c": "xdfv",
+    "d": "ersfcx",
+    "e": "wsdr",
+    "f": "rtgdvc",
+    "g": "tyhfbv",
+    "h": "yujgnb",
+    "i": "ujko",
+    "j": "uikhmn",
+    "k": "ijolm",
+    "l": "opk",
+    "m": "njk",
+    "n": "bhjm",
+    "o": "iklp",
+    "p": "ol",
+    "q": "wa",
+    "r": "edft",
+    "s": "awedxz",
+    "t": "rfgy",
+    "u": "yhji",
+    "v": "cfgb",
+    "w": "qase",
+    "x": "zsdc",
+    "y": "tghu",
+    "z": "asx",
+}
+CT_WATCHDOG_ASCII_CONFUSABLES = {
+    "a": ("4",),
+    "b": ("8",),
+    "e": ("3",),
+    "g": ("9",),
+    "i": ("1", "l"),
+    "l": ("1", "i"),
+    "o": ("0",),
+    "s": ("5",),
+    "t": ("7",),
+    "z": ("2",),
+}
+CT_WATCHDOG_AFFIX_TERMS = ("login", "secure", "account", "support", "app", "verify")
+CT_WATCHDOG_TLD_SWAPS = ("com", "net", "org", "co", "io", "app", "dev")
+CT_WATCHDOG_WARNINGS = (
+    "Plan-only: HostsFileGet prepares CT search targets and typosquat candidates; it does not query CT services in the background.",
+    "Use this only for domains you own, administer, or are explicitly authorized to monitor.",
+    "Certificate Transparency matches are leads, not verdicts; validate registration, issuer, DNS, and page behavior before blocking.",
+    "Typosquat permutations can false-positive legitimate brands, vendors, customer domains, and unrelated registrants.",
+    "Hosts files cannot monitor CT logs continuously and should not auto-block candidates from this plan.",
+)
 THREAT_FEED_PACK_WARNINGS = (
     "Plan-only: HostsFileGet lists vetted feed URLs and review controls; it does not fetch or auto-apply threat feeds.",
     "NRD and DGA feeds can false-positive newly launched, parked, CDN, or campaign-specific legitimate domains.",
@@ -11936,6 +12006,437 @@ def format_dns_rewrite_plan(plan: dict) -> str:
         for item in rejected[:10]:
             lines.append(f"- line {item.get('line')}: {item.get('reason')}")
     lines.append(f"Roadmap source IDs: {', '.join(plan.get('references') or [])}")
+    return "\n".join(lines)
+
+
+def sanitize_ct_watchdog_max_variants(max_variants: int | str | None = None) -> int:
+    try:
+        value = int(max_variants if max_variants is not None else CT_WATCHDOG_DEFAULT_MAX_VARIANTS)
+    except (TypeError, ValueError):
+        value = CT_WATCHDOG_DEFAULT_MAX_VARIANTS
+    return max(1, min(CT_WATCHDOG_MAX_VARIANTS, value))
+
+
+def normalize_ct_watchdog_domain(candidate: str) -> str | None:
+    token = str(candidate or "").strip().strip('\'"()[]{}<>')
+    if not token:
+        return None
+    if token.startswith("@@"):
+        token = token[2:]
+    dnsmasq_match = DNSMASQ_RULE_REGEX.match(token)
+    if dnsmasq_match:
+        token = dnsmasq_match.group(1)
+    if token.startswith("||"):
+        token = token[2:]
+    elif token.startswith("|"):
+        token = token[1:]
+    token = token.rstrip("|")
+    for delimiter in ("^", "$"):
+        if delimiter in token:
+            token = token.split(delimiter, 1)[0]
+
+    if token.lower().startswith(("http://", "https://", "ftp://")):
+        try:
+            parsed_host = urllib.parse.urlsplit(token).hostname
+        except ValueError:
+            parsed_host = None
+        if not parsed_host:
+            return None
+        token = parsed_host
+    elif any(separator in token for separator in ("/", "?", ":")):
+        try:
+            parsed_host = urllib.parse.urlsplit(f"http://{token}").hostname
+        except ValueError:
+            parsed_host = None
+        if parsed_host:
+            token = parsed_host
+
+    wildcard_match = WILDCARD_STRIPPER.match(token)
+    if wildcard_match:
+        token = wildcard_match.group(1)
+    if token.startswith("*."):
+        token = token[2:]
+    token = token.strip().strip(".").lower()
+    if not token or token in LOCAL_DOMAINS or _looks_like_ip_token(token):
+        return None
+
+    ascii_domain, error = _encode_idna_domain(token)
+    if error or not ascii_domain:
+        return None
+    ascii_domain = ascii_domain.strip(".").lower()
+    if ascii_domain in LOCAL_DOMAINS or _looks_like_ip_token(ascii_domain):
+        return None
+    if not looks_like_domain(ascii_domain, allow_single_label=False):
+        return None
+    return ascii_domain
+
+
+def parse_ct_watchdog_domains(text: str) -> dict:
+    records: list[dict] = []
+    rejected: list[dict] = []
+    seen: set[str] = set()
+    for line_number, raw_line in enumerate(str(text or "").splitlines(), start=1):
+        stripped = raw_line.strip()
+        if not stripped or _is_comment_line(stripped):
+            continue
+        body = stripped.split("#", 1)[0].strip()
+        tokens = [token for token in IDN_LABEL_TOKEN_SPLITTER.split(body) if token]
+        line_domains: list[str] = []
+        for token in tokens:
+            domain = normalize_ct_watchdog_domain(token)
+            if not domain:
+                continue
+            line_domains.append(domain)
+            if domain in seen:
+                continue
+            seen.add(domain)
+            records.append({
+                "domain": domain,
+                "base_domain": infer_ct_watchdog_base_domain(domain),
+                "line": line_number,
+                "source": token,
+            })
+        if not line_domains:
+            rejected.append({
+                "line": line_number,
+                "reason": "No valid DNS domain candidate found.",
+                "text": stripped[:160],
+            })
+    return {"domains": records, "rejected": rejected}
+
+
+def infer_ct_watchdog_base_domain(domain: str) -> str:
+    normalized = normalize_ct_watchdog_domain(domain) or str(domain or "").strip().lower().strip(".")
+    labels = [label for label in normalized.split(".") if label]
+    if len(labels) < 2:
+        return normalized
+    two_label_suffix = ".".join(labels[-2:])
+    if two_label_suffix in CT_WATCHDOG_MULTIPART_SUFFIXES and len(labels) >= 3:
+        return ".".join(labels[-3:])
+    return ".".join(labels[-2:])
+
+
+def _ct_watchdog_label_and_suffix(domain: str) -> tuple[str, str]:
+    base_domain = infer_ct_watchdog_base_domain(domain)
+    labels = base_domain.split(".")
+    if len(labels) < 2:
+        raise ValueError(f"Domain does not include a suffix: {domain!r}")
+    return labels[0], ".".join(labels[1:])
+
+
+def _ct_watchdog_query_url(pattern: str) -> str:
+    return "https://crt.sh/?" + urllib.parse.urlencode({"q": pattern, "output": "json"})
+
+
+def _ct_watchdog_add_variant(
+    variants: list[dict],
+    seen: set[str],
+    original_label: str,
+    suffix: str,
+    candidate_label: str,
+    technique: str,
+    reason: str,
+    max_variants: int,
+) -> None:
+    if len(variants) >= max_variants:
+        return
+    safe_label = candidate_label.strip(".").lower()
+    if (
+        not safe_label
+        or safe_label == original_label
+        or len(safe_label) > 63
+        or safe_label.startswith("-")
+        or safe_label.endswith("-")
+    ):
+        return
+    candidate_domain = f"{safe_label}.{suffix}"
+    if candidate_domain in seen or not looks_like_domain(candidate_domain, allow_single_label=False):
+        return
+    seen.add(candidate_domain)
+    variants.append({
+        "domain": candidate_domain,
+        "technique": technique,
+        "reason": reason,
+        "ct_query_url": _ct_watchdog_query_url(candidate_domain),
+        "review_action": "Review certificate subject/SAN, issuer, registration, DNS, and content before allowlisting or blocking.",
+    })
+
+
+def generate_ct_typosquat_variants(domain: str, max_variants: int | str | None = None) -> list[dict]:
+    limit = sanitize_ct_watchdog_max_variants(max_variants)
+    label, suffix = _ct_watchdog_label_and_suffix(domain)
+    variants: list[dict] = []
+    seen = {infer_ct_watchdog_base_domain(domain)}
+
+    if len(label) > 3:
+        for index in range(len(label)):
+            _ct_watchdog_add_variant(
+                variants,
+                seen,
+                label,
+                suffix,
+                label[:index] + label[index + 1:],
+                "omission",
+                f"Missing character at position {index + 1}.",
+                limit,
+            )
+    for index, character in enumerate(label):
+        _ct_watchdog_add_variant(
+            variants,
+            seen,
+            label,
+            suffix,
+            label[:index] + character + label[index:],
+            "repetition",
+            f"Repeated character '{character}' near position {index + 1}.",
+            limit,
+        )
+    for index in range(len(label) - 1):
+        if label[index] == label[index + 1]:
+            continue
+        swapped = label[:index] + label[index + 1] + label[index] + label[index + 2:]
+        _ct_watchdog_add_variant(
+            variants,
+            seen,
+            label,
+            suffix,
+            swapped,
+            "transposition",
+            f"Adjacent characters swapped at positions {index + 1}-{index + 2}.",
+            limit,
+        )
+    for index, character in enumerate(label):
+        for neighbor in CT_WATCHDOG_KEYBOARD_NEIGHBORS.get(character, ""):
+            _ct_watchdog_add_variant(
+                variants,
+                seen,
+                label,
+                suffix,
+                label[:index] + neighbor + label[index + 1:],
+                "keyboard-neighbor",
+                f"Keyboard-neighbor substitution '{character}' to '{neighbor}'.",
+                limit,
+            )
+    for index, character in enumerate(label):
+        for replacement in CT_WATCHDOG_ASCII_CONFUSABLES.get(character, ()):
+            _ct_watchdog_add_variant(
+                variants,
+                seen,
+                label,
+                suffix,
+                label[:index] + replacement + label[index + 1:],
+                "ascii-confusable",
+                f"ASCII lookalike substitution '{character}' to '{replacement}'.",
+                limit,
+            )
+    for term in CT_WATCHDOG_AFFIX_TERMS:
+        _ct_watchdog_add_variant(
+            variants,
+            seen,
+            label,
+            suffix,
+            f"{term}-{label}",
+            "prefix",
+            f"Security-themed prefix '{term}-'.",
+            limit,
+        )
+        _ct_watchdog_add_variant(
+            variants,
+            seen,
+            label,
+            suffix,
+            f"{label}-{term}",
+            "suffix",
+            f"Security-themed suffix '-{term}'.",
+            limit,
+        )
+    if "." not in suffix:
+        for replacement_tld in CT_WATCHDOG_TLD_SWAPS:
+            if len(variants) >= limit:
+                break
+            if replacement_tld == suffix:
+                continue
+            candidate_domain = f"{label}.{replacement_tld}"
+            if candidate_domain in seen or not looks_like_domain(candidate_domain, allow_single_label=False):
+                continue
+            seen.add(candidate_domain)
+            variants.append({
+                "domain": candidate_domain,
+                "technique": "tld-swap",
+                "reason": f"Sibling public suffix '.{replacement_tld}'.",
+                "ct_query_url": _ct_watchdog_query_url(candidate_domain),
+                "review_action": "Review certificate subject/SAN, issuer, registration, DNS, and content before allowlisting or blocking.",
+            })
+            if len(variants) >= limit:
+                break
+    return variants[:limit]
+
+
+def _ct_watchdog_review_csv(targets: list[dict]) -> str:
+    output = io.StringIO()
+    fieldnames = ("domain", "kind", "base_domain", "technique", "ct_query_url", "review_action")
+    writer = csv.DictWriter(output, fieldnames=fieldnames, lineterminator="\n")
+    writer.writeheader()
+    for target in targets:
+        writer.writerow({
+            "domain": target["base_domain"],
+            "kind": "protected-domain",
+            "base_domain": target["base_domain"],
+            "technique": "baseline-subdomain-search",
+            "ct_query_url": target["queries"]["subdomain_json_url"],
+            "review_action": "Review unexpected subdomains and certificates inside authorized scope.",
+        })
+        for variant in target.get("variants") or []:
+            writer.writerow({
+                "domain": variant["domain"],
+                "kind": "typosquat-candidate",
+                "base_domain": target["base_domain"],
+                "technique": variant["technique"],
+                "ct_query_url": variant["ct_query_url"],
+                "review_action": variant["review_action"],
+            })
+    return output.getvalue()
+
+
+def build_ct_typosquat_watchdog_plan(text: str, max_variants: int | str | None = None) -> dict:
+    parsed = parse_ct_watchdog_domains(text)
+    limit = sanitize_ct_watchdog_max_variants(max_variants)
+    grouped: dict[str, dict] = {}
+    for record in parsed["domains"]:
+        base_domain = record["base_domain"]
+        if base_domain not in grouped:
+            grouped[base_domain] = {
+                "base_domain": base_domain,
+                "observed_domains": [],
+                "source_lines": [],
+            }
+        grouped[base_domain]["observed_domains"].append(record["domain"])
+        grouped[base_domain]["source_lines"].append(record["line"])
+
+    targets: list[dict] = []
+    query_urls: list[dict] = []
+    watchlist_domains: list[str] = []
+    for base_domain in sorted(grouped):
+        variants = generate_ct_typosquat_variants(base_domain, limit)
+        queries = {
+            "subdomain_pattern": f"%.{base_domain}",
+            "subdomain_json_url": _ct_watchdog_query_url(f"%.{base_domain}"),
+            "exact_pattern": base_domain,
+            "exact_json_url": _ct_watchdog_query_url(base_domain),
+        }
+        target = {
+            "base_domain": base_domain,
+            "observed_domains": sorted(set(grouped[base_domain]["observed_domains"])),
+            "source_lines": sorted(set(grouped[base_domain]["source_lines"])),
+            "queries": queries,
+            "variant_count": len(variants),
+            "variants": variants,
+        }
+        targets.append(target)
+        watchlist_domains.append(base_domain)
+        query_urls.extend([
+            {"domain": base_domain, "kind": "subdomain-search", "url": queries["subdomain_json_url"]},
+            {"domain": base_domain, "kind": "exact-search", "url": queries["exact_json_url"]},
+        ])
+        for variant in variants:
+            watchlist_domains.append(variant["domain"])
+            query_urls.append({"domain": variant["domain"], "kind": variant["technique"], "url": variant["ct_query_url"]})
+
+    controls = [
+        "Treat the generated URLs as manual or scheduled-review inputs for an external CT search service.",
+        "Validate ownership/scope before investigating discovered hostnames beyond passive CT review.",
+        "Keep findings in a review queue; do not convert candidates directly into hosts entries.",
+        "Pair CT matches with the IDN/homograph report and threat-feed triage before making policy changes.",
+    ]
+    warnings = list(CT_WATCHDOG_WARNINGS)
+    if parsed["rejected"]:
+        warnings.append("Some input rows were ignored because no valid DNS domain could be extracted.")
+    if any("." in infer_ct_watchdog_base_domain(domain).rsplit(".", 1)[0] for domain in grouped):
+        warnings.append("Some domains use multi-part suffix heuristics; verify public-suffix boundaries before acting.")
+
+    return {
+        "schema": CT_WATCHDOG_PLAN_SCHEMA,
+        "plan_only": True,
+        "input_domain_count": len(parsed["domains"]),
+        "base_domain_count": len(targets),
+        "variant_count": sum(target["variant_count"] for target in targets),
+        "ct_query_count": len(query_urls),
+        "max_variants_per_domain": limit,
+        "targets": targets,
+        "rejected": parsed["rejected"],
+        "controls": controls,
+        "warnings": warnings,
+        "artifacts": {
+            "crtsh_query_urls": query_urls,
+            "watchlist_domains": sorted(set(watchlist_domains)),
+            "review_csv": _ct_watchdog_review_csv(targets),
+        },
+        "references": list(CT_WATCHDOG_SOURCE_IDS),
+    }
+
+
+def format_ct_typosquat_watchdog_catalog() -> str:
+    lines = [
+        "Certificate Transparency / typosquat watchdog",
+        "",
+        "This is a plan-only OSINT workflow. HostsFileGet generates scoped CT search targets and deterministic typo candidates; it does not poll CT logs or write hosts entries.",
+        "",
+        "Workflow:",
+        "- Provide one owned or authorized domain per line, or hosts/URL text containing those domains.",
+        "- Generate a review plan with crt.sh JSON search URLs and a CSV review queue.",
+        "- Validate CT matches manually before allowing, escalating, or blocking anything.",
+        "",
+        "Permutation families:",
+        "- omission, repetition, transposition",
+        "- keyboard-neighbor and ASCII lookalike substitutions",
+        "- login/secure/account/support/app/verify prefixes and suffixes",
+        "- sibling TLD swaps for single-label suffixes",
+        "",
+        "Warnings:",
+    ]
+    lines.extend(f"- {warning}" for warning in CT_WATCHDOG_WARNINGS)
+    lines.extend(["", "Roadmap source IDs:", f"- {', '.join(CT_WATCHDOG_SOURCE_IDS)}"])
+    return "\n".join(lines)
+
+
+def format_ct_typosquat_watchdog_plan(plan: dict) -> str:
+    lines = [
+        "Certificate Transparency / Typosquat Watchdog Plan",
+        f"Schema: {plan.get('schema')}",
+        f"Plan only: {'yes' if plan.get('plan_only') else 'no'}",
+        f"Input domains: {int(plan.get('input_domain_count') or 0):,}",
+        f"Base domains: {int(plan.get('base_domain_count') or 0):,}",
+        f"Typosquat variants: {int(plan.get('variant_count') or 0):,}",
+        f"CT query URLs: {int(plan.get('ct_query_count') or 0):,}",
+        f"Max variants per domain: {int(plan.get('max_variants_per_domain') or 0):,}",
+        "",
+        "Targets:",
+    ]
+    targets = plan.get("targets") or []
+    if not targets:
+        lines.append("- none")
+    for target in targets:
+        lines.append(
+            f"- {target.get('base_domain')}: {int(target.get('variant_count') or 0):,} variant(s), "
+            f"query {target.get('queries', {}).get('subdomain_pattern')}"
+        )
+        for variant in (target.get("variants") or [])[:5]:
+            lines.append(f"  - {variant.get('domain')} ({variant.get('technique')})")
+        omitted = max(0, int(target.get("variant_count") or 0) - 5)
+        if omitted:
+            lines.append(f"  - ... {omitted:,} additional variant(s) in JSON")
+    rejected = plan.get("rejected") or []
+    if rejected:
+        lines.extend(["", "Rejected rows:"])
+        for row in rejected[:10]:
+            lines.append(f"- line {row.get('line')}: {row.get('reason')}")
+    lines.extend(["", "Controls:"])
+    for control in plan.get("controls") or []:
+        lines.append(f"- {control}")
+    lines.extend(["", "Warnings:"])
+    for warning in plan.get("warnings") or CT_WATCHDOG_WARNINGS:
+        lines.append(f"- {warning}")
+    lines.extend(["", "Roadmap source IDs:", f"- {', '.join(plan.get('references') or CT_WATCHDOG_SOURCE_IDS)}"])
     return "\n".join(lines)
 
 
@@ -17377,6 +17878,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="Adblock Syntax Lint...", command=self.show_adblock_syntax_lint)
         tools_menu.add_command(label="Rule Tier Report...", command=self.show_rule_tier_report)
         tools_menu.add_command(label="IDN / Homograph Report...", command=self.show_idn_homograph_report)
+        tools_menu.add_command(label="CT / Typosquat Watchdog...", command=self.show_ct_typosquat_watchdog)
         tools_menu.add_command(label="NRD / DGA Threat Feed Packs...", command=self.show_threat_feed_packs)
         tools_menu.add_command(label="CNAME Cloaking Workflow...", command=self.show_cname_cloaking_workflow)
         tools_menu.add_command(label="DNS Bypass Diagnostics...", command=self.show_dns_bypass_diagnostics)
@@ -18450,6 +18952,16 @@ class HostsFileEditor:
             tone="warning",
             width=940,
             height=700,
+        )
+
+    def show_ct_typosquat_watchdog(self):
+        self._show_text_report_dialog(
+            "CT / typosquat watchdog",
+            "Plan-only Certificate Transparency search and typosquat candidate workflow for domains you own or are authorized to monitor.",
+            format_ct_typosquat_watchdog_catalog(),
+            tone="warning",
+            width=960,
+            height=720,
         )
 
     def show_cname_cloaking_workflow(self):
@@ -23997,6 +24509,29 @@ def _cli_dns_rewrite_plan(
     return 0
 
 
+def _cli_ct_watchdog_list() -> int:
+    _cli_print(format_ct_typosquat_watchdog_catalog())
+    return 0
+
+
+def _cli_ct_watchdog_plan(input_path: str, output_path: str, max_variants: int) -> int:
+    try:
+        plan = build_ct_typosquat_watchdog_plan(
+            read_text_file_content(input_path),
+            max_variants=max_variants,
+        )
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        write_text_file_atomic(output_path, json.dumps(plan, indent=2))
+    except (OSError, ValueError) as exc:
+        _cli_print(f"CT watchdog plan failed: {exc}")
+        return 2
+    _cli_print(format_ct_typosquat_watchdog_plan(plan))
+    _cli_print(f"Wrote CT watchdog plan to {output_path}")
+    return 0
+
+
 def _cli_threat_feed_list() -> int:
     _cli_print(format_threat_feed_pack_catalog())
     return 0
@@ -24933,6 +25468,9 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--dns-rewrite-profile-id",
         "--dns-rewrite-zone",
         "--dns-rewrite-ttl",
+        "--ct-watchdog-list",
+        "--ct-watchdog-plan",
+        "--ct-watchdog-max-variants",
         "--threat-feed-list",
         "--threat-feed-plan",
         "--cname-cloaking-list",
@@ -25039,6 +25577,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--dns-rewrite-profile-id=",
         "--dns-rewrite-zone=",
         "--dns-rewrite-ttl=",
+        "--ct-watchdog-plan=",
+        "--ct-watchdog-max-variants=",
         "--threat-feed-plan=",
         "--cname-cloaking-plan=",
         "--encrypted-dns-bypass-plan=",
@@ -25225,6 +25765,14 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--dns-rewrite-profile-id", default="PROFILE_ID", metavar="ID", help="Provider profile ID placeholder for --dns-rewrite-plan where applicable.")
     parser.add_argument("--dns-rewrite-zone", metavar="ZONE", help="DNS zone name for --dns-rewrite-plan provider outputs that need zone context.")
     parser.add_argument("--dns-rewrite-ttl", type=int, default=DNS_REWRITE_DEFAULT_TTL, metavar="SECONDS", help=f"TTL for --dns-rewrite-plan records; defaults to {DNS_REWRITE_DEFAULT_TTL}.")
+    parser.add_argument("--ct-watchdog-list", action="store_true", help="Describe the plan-only Certificate Transparency and typosquat watchdog workflow.")
+    parser.add_argument(
+        "--ct-watchdog-plan",
+        nargs=2,
+        metavar=("INPUT", "OUTPUT"),
+        help="Write a plan-only CT search and typosquat candidate JSON plan from INPUT domains to OUTPUT.",
+    )
+    parser.add_argument("--ct-watchdog-max-variants", type=int, default=CT_WATCHDOG_DEFAULT_MAX_VARIANTS, metavar="COUNT", help=f"Maximum typosquat variants per base domain; defaults to {CT_WATCHDOG_DEFAULT_MAX_VARIANTS}.")
     parser.add_argument("--threat-feed-list", action="store_true", help="List curated NRD/DGA/TIF threat feed packs.")
     parser.add_argument(
         "--threat-feed-plan",
@@ -25559,6 +26107,16 @@ def _handle_cli_args(argv: list[str]) -> int | None:
             args.dns_rewrite_profile_id,
             args.dns_rewrite_zone,
             args.dns_rewrite_ttl,
+        )
+    if args.ct_watchdog_max_variants != CT_WATCHDOG_DEFAULT_MAX_VARIANTS and not args.ct_watchdog_plan:
+        parser.error("--ct-watchdog-max-variants requires --ct-watchdog-plan INPUT OUTPUT")
+    if args.ct_watchdog_list:
+        return _cli_ct_watchdog_list()
+    if args.ct_watchdog_plan:
+        return _cli_ct_watchdog_plan(
+            args.ct_watchdog_plan[0],
+            args.ct_watchdog_plan[1],
+            args.ct_watchdog_max_variants,
         )
     if args.threat_feed_list:
         return _cli_threat_feed_list()

@@ -28,6 +28,8 @@ The local block page server is explicit and loopback-only. HostsFileGet can serv
 
 Advanced DNS rewrite support is export-only. HostsFileGet can parse reviewed A, AAAA, and CNAME/private-domain declarations into Control D or Technitium review plans, but it does not call provider APIs, store DNS credentials, import zone files, reload resolvers, or imply that CNAME/private-domain behavior is hosts-native.
 
+Certificate Transparency and typosquat watchdog support is also plan-only. HostsFileGet can extract authorized domains, generate deterministic typo candidates, and write review queues with CT search URLs, but it does not poll CT logs, store external-service credentials, register background watchers, or auto-write hosts entries from OSINT matches.
+
 DNS rebinding protection is also advisory. HostsFileGet can report static hosts entries that map external-looking names to private, local, loopback, link-local, ULA, CGNAT, or special-use ranges, but live DNS rebinding enforcement belongs in the resolver, router, or managed endpoint policy.
 
 SafeSearch and restricted-mode templates follow the same boundary. HostsFileGet can produce reviewable hosts-line and DNS CNAME plans for Google, Bing, DuckDuckGo, and YouTube, but it does not apply parental controls, create DNS records, install browser policy, or enforce account/device controls.
@@ -113,6 +115,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `docs/adblock-lint.md` | Adblock syntax lint and browser-only rule quarantine behavior |
 | `docs/rule-tiers.md` | Exact, subdomain, wildcard, regex, path, exception, and browser-only tier reporting |
 | `docs/idn-homograph.md` | IDN/Punycode decoding and deterministic homograph-risk report behavior |
+| `docs/ct-typosquat-watchdog.md` | Plan-only Certificate Transparency search and typosquat candidate review workflow |
 | `docs/threat-feed-packs.md` | NRD, DGA, and threat-intel feed pack planning with freshness and false-positive controls |
 | `docs/cname-cloaking.md` | CNAME cloaking source packs, hosts-file limits, and DNS handoff guidance |
 | `docs/encrypted-dns-bypass.md` | Encrypted-DNS bypass source packs and router/firewall handoff guidance |
@@ -189,6 +192,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Adblock syntax linting: `classify_adblock_rule_line`, `build_adblock_syntax_report`, `format_adblock_syntax_report`, `quarantine_adblock_rule_lines`.
 - Rule tier reporting: `classify_rule_tier_line`, `build_rule_tier_report`, `format_rule_tier_report`.
 - IDN/homograph reporting: `classify_idn_domain`, `build_idn_homograph_report`, `format_idn_homograph_report`.
+- CT/typosquat watchdog planning: `parse_ct_watchdog_domains`, `generate_ct_typosquat_variants`, `build_ct_typosquat_watchdog_plan`, `format_ct_typosquat_watchdog_plan`.
 - Threat feed pack planning: `list_threat_feed_packs`, `build_threat_feed_pack_plan`, `format_threat_feed_pack_catalog`, `format_threat_feed_pack_plan`.
 - CNAME cloaking workflow planning: `list_cname_cloaking_packs`, `build_cname_cloaking_plan`, `format_cname_cloaking_catalog`, `format_cname_cloaking_plan`.
 - Encrypted-DNS bypass pack planning: `list_encrypted_dns_bypass_packs`, `build_encrypted_dns_bypass_pack_plan`, `format_encrypted_dns_bypass_catalog`, `format_encrypted_dns_bypass_pack_plan`.
@@ -274,6 +278,8 @@ The CLI functions live near the bottom of `hosts_editor.py` and intentionally sh
 - `_cli_block_page_serve`
 - `_cli_dns_rewrite_provider_list`
 - `_cli_dns_rewrite_plan`
+- `_cli_ct_watchdog_list`
+- `_cli_ct_watchdog_plan`
 - `_cli_profile_schedule_list`
 - `_cli_profile_schedule_add`
 - `_cli_profile_schedule_apply`
