@@ -113,6 +113,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F044 complete. Next roadmap item: F056 WFP IP/CIDR blocker companion.
 - Completed F056: added a plan-only Windows Firewall/WFP IP/CIDR blocker companion export with normalized target parsing, reviewable PowerShell script output, docs, and regression tests. No firewall commands are executed and no WFP driver is shipped.
 - Updated `ROADMAP.md` to mark F056 complete. Next roadmap item: F057 NRPT policy editor/export.
+- Completed F057: added a plan-only Windows DNS Client NRPT namespace routing export with resolver validation, IDNA/Punycode namespace normalization, optional GPO-scoped command rendering, docs, and regression tests. No NRPT or Group Policy commands are executed.
+- Updated `ROADMAP.md` to mark F057 complete. Next roadmap item: F058 Windows Sandbox and VM hosts injector.
 
 ## Scope
 

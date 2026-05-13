@@ -4,6 +4,10 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**NRPT policy export**
+- Added `--nrpt-plan` to export a plan-only Windows DNS Client NRPT namespace routing JSON with reviewable PowerShell commands.
+- The export validates resolver IPs, IDNA/Punycode-encodes namespaces, supports optional GPO-scoped command output, and does not apply local or Group Policy NRPT changes.
+
 **WFP blocker companion**
 - Added `--wfp-blocker-plan` to export a plan-only Windows Firewall/WFP IP/CIDR blocker companion JSON with reviewable PowerShell commands.
 - The export parses IPv4, IPv6, and CIDR targets, rejects unsafe or unsupported remote-address tokens, and does not execute firewall rules or ship a WFP driver.

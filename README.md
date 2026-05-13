@@ -79,6 +79,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - backup restore preview
   - restore-point/VSS recovery plan output for high-risk apply reviews
   - plan-only Windows Firewall/WFP IP/CIDR blocker companion export
+  - plan-only NRPT policy export for reviewed namespace-to-resolver routing
   - optional local Git history snapshot/status/restore commands
   - emergency DNS recovery helper
 - Configuration:
@@ -294,6 +295,13 @@ python hosts_editor.py --wfp-blocker-plan .\resolver-ips.txt .\wfp-blocker-plan.
 python hosts_editor.py --wfp-blocker-plan .\resolver-ips.txt .\wfp-blocker-plan.json --wfp-rule-prefix "HostsFileGet Resolver Block"
 ```
 
+Export a plan-only NRPT namespace routing plan:
+
+```powershell
+python hosts_editor.py --nrpt-plan .\namespaces.txt .\nrpt-plan.json --nrpt-name-server 10.0.0.53
+python hosts_editor.py --nrpt-plan .\namespaces.txt .\nrpt-plan.json --nrpt-name-server 10.0.0.53 --nrpt-gpo-name "Corp NRPT Policy" --nrpt-server dc01
+```
+
 Generate guarded cloud-DNS replay plans or extract blocked domains from cloud DNS CSV log exports:
 
 ```powershell
@@ -383,6 +391,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Signed share patches: `docs/share-patches.md`
 - Recovery apply plan: `docs/recovery-plan.md`
 - WFP blocker companion: `docs/wfp-blocker-companion.md`
+- NRPT policy export: `docs/nrpt-policy-export.md`
 - Optional Git history: `docs/git-history.md`
 - Scheduler activity report: `docs/scheduler-activity.md`
 - Portable bundle config: `docs/portable-config.md`

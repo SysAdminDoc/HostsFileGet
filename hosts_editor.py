@@ -149,6 +149,10 @@ WFP_BLOCKER_RULE_GROUP = "HostsFileGet-WFP-IP-CIDR-Companion"
 WFP_BLOCKER_RULE_PREFIX = "HostsFileGet IP/CIDR Block"
 WFP_BLOCKER_TARGET_CHUNK_SIZE = 50
 WFP_BLOCKER_PREFIX_MAX_LENGTH = 64
+NRPT_POLICY_PLAN_SCHEMA = "hostsfileget.nrpt-policy-plan.v1"
+NRPT_RULE_PREFIX = "HostsFileGet NRPT"
+NRPT_NAMESPACE_CHUNK_SIZE = 25
+NRPT_PREFIX_MAX_LENGTH = 64
 SCHEDULED_TASK_NAME = "HostsFileGet Auto-Update"
 CLI_LOG_FILENAME = "cli.log"
 CLI_ACTIVITY_FILENAME = "cli-activity.jsonl"
@@ -4261,6 +4265,352 @@ def format_wfp_blocker_companion_plan(plan: dict) -> str:
         for item in rejected[:5]:
             lines.append(f"- line {item.get('line')}: {item.get('token')} ({item.get('reason')})")
     lines.extend(["", "Boundary:", f"- {plan.get('driver_boundary')}"])
+    lines.extend(["", "Warnings:"])
+    for warning in plan.get("warnings") or []:
+        lines.append(f"- {warning}")
+    references = plan.get("references") or []
+    if references:
+        lines.extend(["", "Roadmap source IDs:", f"- {', '.join(references)}"])
+    return "\n".join(lines)
+
+
+def sanitize_nrpt_rule_prefix(value: str | None = None) -> str:
+    prefix = re.sub(r"\s+", " ", str(value or NRPT_RULE_PREFIX).strip())
+    if not prefix or _contains_control_chars(prefix):
+        prefix = NRPT_RULE_PREFIX
+    return prefix[:NRPT_PREFIX_MAX_LENGTH]
+
+
+def _nrpt_optional_text(value: str | None, *, field_name: str, max_length: int = 120) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    if not text:
+        return ""
+    if _contains_control_chars(text):
+        raise ValueError(f"{field_name} contains control characters")
+    return text[:max_length]
+
+
+def _nrpt_namespace_candidate(value: str) -> str:
+    candidate = str(value or "").strip().strip("`'\"(),;")
+    if candidate.lower().startswith(("http://", "https://", "ftp://")):
+        try:
+            candidate = urllib.parse.urlsplit(candidate).hostname or ""
+        except ValueError:
+            candidate = ""
+    elif any(separator in candidate for separator in ("/", "?")):
+        try:
+            candidate = urllib.parse.urlsplit(f"http://{candidate}").hostname or ""
+        except ValueError:
+            candidate = ""
+    return candidate.strip()
+
+
+def normalize_nrpt_namespace(value: str) -> str:
+    candidate = _nrpt_namespace_candidate(value)
+    if not candidate:
+        raise ValueError("empty namespace")
+    if _contains_control_chars(candidate):
+        raise ValueError("namespace contains control characters")
+    lowered = candidate.lower()
+    if lowered == "any":
+        raise ValueError("the NRPT Any namespace is not exported by HostsFileGet")
+    if lowered.startswith("*.") or "*" in lowered:
+        raise ValueError("wildcard namespaces are not supported; enter the suffix without *")
+    if "/" in lowered or _looks_like_ip_token(lowered):
+        raise ValueError("IP/CIDR targets belong in WFP/firewall exports, not NRPT namespaces")
+
+    candidate = lowered.strip(".")
+    if not candidate:
+        raise ValueError("empty namespace")
+    encoded, error = _encode_idna_domain(candidate)
+    if error or not encoded:
+        raise ValueError(f"invalid IDN namespace: {error or 'encoding failed'}")
+    if not looks_like_domain(encoded, allow_single_label=False):
+        raise ValueError("not a DNS namespace")
+    return encoded
+
+
+def _token_may_be_nrpt_namespace(token: str) -> bool:
+    stripped = str(token or "").strip()
+    lowered = stripped.lower()
+    return (
+        lowered == "any"
+        or "." in stripped
+        or "*" in stripped
+        or "/" in stripped
+        or ":" in stripped
+        or _contains_non_ascii(stripped)
+        or lowered.startswith(("http://", "https://", "ftp://"))
+    )
+
+
+def parse_nrpt_policy_namespaces(text: str) -> dict:
+    namespaces: list[str] = []
+    rejected: list[dict[str, str | int]] = []
+    seen: set[str] = set()
+    for line_no, line in enumerate(str(text or "").splitlines(), 1):
+        body = line.split("#", 1)[0].strip()
+        if not body:
+            continue
+        for raw_token in TOKEN_SPLITTER.split(body):
+            token = raw_token.strip()
+            if not token:
+                continue
+            try:
+                namespace = normalize_nrpt_namespace(token)
+            except ValueError as exc:
+                if _token_may_be_nrpt_namespace(token):
+                    rejected.append({"line": line_no, "token": token[:120], "reason": str(exc)})
+                continue
+            if namespace in seen:
+                continue
+            seen.add(namespace)
+            namespaces.append(namespace)
+    return {"namespaces": namespaces, "rejected": rejected}
+
+
+def normalize_nrpt_name_server(value: str) -> str:
+    candidate = str(value or "").strip().strip("`'\"(),;")
+    if not candidate:
+        raise ValueError("empty NRPT name server")
+    try:
+        address = ipaddress.ip_address(candidate)
+    except ValueError as exc:
+        raise ValueError(f"NRPT name server is not an IP address: {candidate}") from exc
+    if address.is_unspecified:
+        raise ValueError("unspecified NRPT name server is not allowed")
+    if address.is_multicast:
+        raise ValueError("multicast NRPT name server is not allowed")
+    return str(address)
+
+
+def sanitize_nrpt_name_servers(values) -> list[str]:
+    servers: list[str] = []
+    seen: set[str] = set()
+    for value in values or []:
+        server = normalize_nrpt_name_server(str(value))
+        if server in seen:
+            continue
+        seen.add(server)
+        servers.append(server)
+    if not servers:
+        raise ValueError("at least one --nrpt-name-server value is required")
+    return servers
+
+
+def _nrpt_name_server_risk_tags(value: str) -> list[str]:
+    address = ipaddress.ip_address(value)
+    tags = []
+    if address.is_private:
+        tags.append("private")
+    if address.is_loopback:
+        tags.append("loopback")
+    if address.is_link_local:
+        tags.append("link-local")
+    if address.is_reserved:
+        tags.append("reserved")
+    if not address.is_global:
+        tags.append("non-global")
+    return sorted(set(tags))
+
+
+def _nrpt_scope_flags(gpo_name: str | None = None, server: str | None = None) -> str:
+    safe_gpo = _nrpt_optional_text(gpo_name, field_name="NRPT GPO name") if gpo_name else ""
+    safe_server = _nrpt_optional_text(server, field_name="NRPT GPO server") if server else ""
+    if safe_server and not safe_gpo:
+        raise ValueError("--nrpt-server requires --nrpt-gpo-name")
+    flags = []
+    if safe_gpo:
+        flags.append(f"-GpoName {_powershell_single_quote(safe_gpo)}")
+    if safe_server:
+        flags.append(f"-Server {_powershell_single_quote(safe_server)}")
+    return " ".join(flags)
+
+
+def build_nrpt_rule_command(
+    namespaces: list[str],
+    name_servers: list[str],
+    *,
+    rule_index: int,
+    rule_prefix: str | None = None,
+    gpo_name: str | None = None,
+    server: str | None = None,
+    comment: str | None = None,
+) -> str:
+    if not namespaces:
+        raise ValueError("at least one NRPT namespace is required")
+    safe_servers = sanitize_nrpt_name_servers(name_servers)
+    scope_flags = _nrpt_scope_flags(gpo_name, server)
+    display_name = f"{sanitize_nrpt_rule_prefix(rule_prefix)} {rule_index:03d}"
+    safe_comment = _nrpt_optional_text(
+        comment or "Generated by HostsFileGet as a plan-only NRPT export; review before execution.",
+        field_name="NRPT comment",
+        max_length=180,
+    )
+    parts = ["Add-DnsClientNrptRule"]
+    if scope_flags:
+        parts.append(scope_flags)
+    parts.extend([
+        f"-Namespace {_powershell_array_literal(namespaces)}",
+        "-NameEncoding 'Punycode'",
+        f"-NameServers {_powershell_array_literal(safe_servers)}",
+        f"-DisplayName {_powershell_single_quote(display_name)}",
+        f"-Comment {_powershell_single_quote(safe_comment)}",
+    ])
+    return " ".join(parts)
+
+
+def build_nrpt_policy_export_plan(
+    text: str,
+    name_servers,
+    *,
+    rule_prefix: str | None = None,
+    gpo_name: str | None = None,
+    server: str | None = None,
+    now=None,
+    chunk_size: int = NRPT_NAMESPACE_CHUNK_SIZE,
+) -> dict:
+    parsed = parse_nrpt_policy_namespaces(text)
+    namespaces = parsed["namespaces"]
+    rejected = parsed["rejected"]
+    safe_servers = sanitize_nrpt_name_servers(name_servers)
+    safe_prefix = sanitize_nrpt_rule_prefix(rule_prefix)
+    safe_gpo = _nrpt_optional_text(gpo_name, field_name="NRPT GPO name") if gpo_name else ""
+    safe_server = _nrpt_optional_text(server, field_name="NRPT GPO server") if server else ""
+    scope_flags = _nrpt_scope_flags(safe_gpo, safe_server)
+    created_at = now or datetime.datetime.now()
+    if isinstance(created_at, datetime.datetime):
+        created_at = created_at.isoformat(timespec="seconds")
+    chunk_size = max(1, int(chunk_size or NRPT_NAMESPACE_CHUNK_SIZE))
+    chunks = [namespaces[index:index + chunk_size] for index in range(0, len(namespaces), chunk_size)]
+
+    get_command = "Get-DnsClientNrptRule"
+    remove_command = "Remove-DnsClientNrptRule"
+    if scope_flags:
+        get_command += f" {scope_flags}"
+        remove_command += f" {scope_flags}"
+    clear_command = (
+        f"{get_command} -ErrorAction SilentlyContinue | "
+        f"Where-Object {{ $_.DisplayName -like {_powershell_single_quote(safe_prefix + '*')} "
+        f"-and $_.Comment -like {_powershell_single_quote('*HostsFileGet*')} }} | "
+        f"ForEach-Object {{ {remove_command} -Name $_.Name -Force }}"
+    )
+
+    commands = [{
+        "id": "clear-existing-rules",
+        "description": "Remove prior NRPT rules generated with this HostsFileGet display-name prefix.",
+        "command": ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", clear_command],
+    }]
+    rule_commands = []
+    for index, chunk in enumerate(chunks, 1):
+        command = build_nrpt_rule_command(
+            chunk,
+            safe_servers,
+            rule_index=index,
+            rule_prefix=safe_prefix,
+            gpo_name=safe_gpo,
+            server=safe_server,
+        )
+        rule_commands.append(command)
+        commands.append({
+            "id": f"add-nrpt-rule-{index:03d}",
+            "description": f"Route {len(chunk)} DNS namespace(s) to the reviewed NRPT resolver set.",
+            "namespace_count": len(chunk),
+            "namespaces": chunk,
+            "command": ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+        })
+
+    resolver_risk_summary: dict[str, int] = {}
+    for name_server in safe_servers:
+        tags = _nrpt_name_server_risk_tags(name_server) or ["global"]
+        for tag in tags:
+            resolver_risk_summary[tag] = resolver_risk_summary.get(tag, 0) + 1
+
+    warnings = [
+        "Plan-only: HostsFileGet does not execute NRPT or Group Policy commands.",
+        "NRPT changes can redirect DNS resolution below selected namespaces; review resolver ownership and rollback before use.",
+    ]
+    if safe_gpo:
+        warnings.append("The plan targets a GPO scope; test in a lab OU before broad deployment.")
+    else:
+        warnings.append("The plan targets local client NRPT if the script is run without -GpoName.")
+    if any(_contains_non_ascii(str(line)) for line in str(text or "").splitlines()):
+        warnings.append("Unicode namespaces were encoded with IDNA/Punycode because the generated cmdlets use -NameEncoding Punycode.")
+    if any(tag in resolver_risk_summary for tag in ("private", "loopback", "link-local", "reserved", "non-global")):
+        warnings.append("The resolver set includes non-global addresses; this is common for enterprise DNS but can break roaming clients.")
+    if rejected:
+        warnings.append("Some tokens were rejected because they are not safe DNS namespaces for NRPT export.")
+
+    script_lines = [
+        "# HostsFileGet NRPT policy export plan",
+        "# Review before running from an elevated PowerShell session or a managed policy workflow.",
+        "$ErrorActionPreference = 'Stop'",
+        clear_command,
+    ]
+    script_lines.extend(rule_commands)
+    if not rule_commands:
+        script_lines.append("# No NRPT rules were generated because no valid DNS namespaces were found.")
+
+    return {
+        "schema": NRPT_POLICY_PLAN_SCHEMA,
+        "app_version": APP_VERSION,
+        "created_at": str(created_at),
+        "plan_only": True,
+        "policy_surface": "Windows DNS Client Name Resolution Policy Table via DnsClient PowerShell module",
+        "scope": "group-policy" if safe_gpo else "local-client",
+        "gpo_name": safe_gpo,
+        "server": safe_server,
+        "rule_prefix": safe_prefix,
+        "name_servers": safe_servers,
+        "namespace_count": len(namespaces),
+        "rejected_count": len(rejected),
+        "rule_count": len(rule_commands),
+        "namespaces": namespaces,
+        "rejected": rejected,
+        "resolver_risk_summary": resolver_risk_summary,
+        "commands": commands,
+        "powershell_script": "\n".join(script_lines),
+        "rollback": [
+            clear_command,
+            "Export or document existing NRPT/GPO policy before running generated commands.",
+        ],
+        "warnings": warnings,
+        "references": ["S1", "S2", "S16"],
+    }
+
+
+def format_nrpt_policy_export_plan(plan: dict) -> str:
+    lines = [
+        "NRPT Policy Export Plan",
+        f"Schema: {plan.get('schema')}",
+        f"Plan only: {'yes' if plan.get('plan_only') else 'no'}",
+        f"Surface: {plan.get('policy_surface')}",
+        f"Scope: {plan.get('scope')}",
+        f"Rule prefix: {plan.get('rule_prefix')}",
+        f"Name servers: {', '.join(plan.get('name_servers') or []) or 'none'}",
+        f"Namespaces: {int(plan.get('namespace_count') or 0):,}",
+        f"Rejected tokens: {int(plan.get('rejected_count') or 0):,}",
+        "",
+        "Resolver risk summary:",
+    ]
+    if plan.get("gpo_name"):
+        lines.append(f"GPO: {plan.get('gpo_name')}")
+    if plan.get("server"):
+        lines.append(f"GPO server: {plan.get('server')}")
+    resolver_risk_summary = plan.get("resolver_risk_summary") or {}
+    if resolver_risk_summary:
+        for key in sorted(resolver_risk_summary):
+            lines.append(f"- {key}: {resolver_risk_summary[key]}")
+    else:
+        lines.append("- none")
+    lines.extend(["", "Commands:"])
+    for command in plan.get("commands") or []:
+        lines.append(f"- {command.get('id')}: {_format_command_for_display(command.get('command'))}")
+    rejected = plan.get("rejected") or []
+    if rejected:
+        lines.extend(["", "Rejected samples:"])
+        for item in rejected[:5]:
+            lines.append(f"- line {item.get('line')}: {item.get('token')} ({item.get('reason')})")
     lines.extend(["", "Warnings:"])
     for warning in plan.get("warnings") or []:
         lines.append(f"- {warning}")
@@ -21387,6 +21737,35 @@ def _cli_wfp_blocker_plan(input_path: str, output_path: str, rule_prefix: str | 
     return 0
 
 
+def _cli_nrpt_policy_plan(
+    input_path: str,
+    output_path: str,
+    name_servers: list[str] | None,
+    rule_prefix: str | None = None,
+    gpo_name: str | None = None,
+    server: str | None = None,
+) -> int:
+    try:
+        text = read_text_file_content(input_path)
+        plan = build_nrpt_policy_export_plan(
+            text,
+            name_servers or [],
+            rule_prefix=rule_prefix,
+            gpo_name=gpo_name,
+            server=server,
+        )
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        write_text_file_atomic(output_path, json.dumps(plan, indent=2))
+    except (OSError, ValueError) as exc:
+        _cli_print(f"NRPT policy plan failed: {exc}")
+        return 2
+    _cli_print(format_nrpt_policy_export_plan(plan))
+    _cli_print(f"Wrote NRPT policy export plan to {output_path}")
+    return 0
+
+
 def _cli_profile_schedule_list(at_value: str | None = None) -> int:
     try:
         config_path = get_primary_config_path("hosts_editor_config.json")
@@ -21544,6 +21923,11 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--recovery-plan-description",
         "--wfp-blocker-plan",
         "--wfp-rule-prefix",
+        "--nrpt-plan",
+        "--nrpt-name-server",
+        "--nrpt-rule-prefix",
+        "--nrpt-gpo-name",
+        "--nrpt-server",
         "--profile-schedule-list",
         "--profile-schedule-add",
         "--profile-schedule-days",
@@ -21618,6 +22002,11 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--recovery-plan-description=",
         "--wfp-blocker-plan=",
         "--wfp-rule-prefix=",
+        "--nrpt-plan=",
+        "--nrpt-name-server=",
+        "--nrpt-rule-prefix=",
+        "--nrpt-gpo-name=",
+        "--nrpt-server=",
         "--profile-schedule-add=",
         "--profile-schedule-days=",
         "--profile-schedule-name=",
@@ -21697,6 +22086,16 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         help="Write a plan-only Windows Firewall/WFP IP/CIDR blocker companion JSON from INPUT to OUTPUT.",
     )
     parser.add_argument("--wfp-rule-prefix", metavar="TEXT", help="Display-name prefix for --wfp-blocker-plan rules.")
+    parser.add_argument(
+        "--nrpt-plan",
+        nargs=2,
+        metavar=("INPUT", "OUTPUT"),
+        help="Write a plan-only NRPT policy export JSON from namespace INPUT to OUTPUT.",
+    )
+    parser.add_argument("--nrpt-name-server", action="append", metavar="IP", help="DNS resolver IP for --nrpt-plan. Repeat for multiple resolvers.")
+    parser.add_argument("--nrpt-rule-prefix", metavar="TEXT", help="Display-name prefix for --nrpt-plan rules.")
+    parser.add_argument("--nrpt-gpo-name", metavar="NAME", help="Optional GPO name for --nrpt-plan output; otherwise local-client NRPT is planned.")
+    parser.add_argument("--nrpt-server", metavar="SERVER", help="Optional GPO server for --nrpt-plan; requires --nrpt-gpo-name.")
     parser.add_argument("--profile-schedule-list", action="store_true", help="Show the time-bound profile activation schedule without writing files.")
     parser.add_argument(
         "--profile-schedule-add",
@@ -21881,6 +22280,22 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         parser.error("--wfp-rule-prefix requires --wfp-blocker-plan INPUT OUTPUT")
     if args.wfp_blocker_plan:
         return _cli_wfp_blocker_plan(args.wfp_blocker_plan[0], args.wfp_blocker_plan[1], args.wfp_rule_prefix)
+    nrpt_options = [args.nrpt_name_server, args.nrpt_rule_prefix, args.nrpt_gpo_name, args.nrpt_server]
+    if any(nrpt_options) and not args.nrpt_plan:
+        parser.error("--nrpt-name-server, --nrpt-rule-prefix, --nrpt-gpo-name, and --nrpt-server require --nrpt-plan INPUT OUTPUT")
+    if args.nrpt_server and not args.nrpt_gpo_name:
+        parser.error("--nrpt-server requires --nrpt-gpo-name")
+    if args.nrpt_plan and not args.nrpt_name_server:
+        parser.error("--nrpt-plan requires at least one --nrpt-name-server IP")
+    if args.nrpt_plan:
+        return _cli_nrpt_policy_plan(
+            args.nrpt_plan[0],
+            args.nrpt_plan[1],
+            args.nrpt_name_server,
+            args.nrpt_rule_prefix,
+            args.nrpt_gpo_name,
+            args.nrpt_server,
+        )
     if args.profile_schedule_add:
         return _cli_profile_schedule_add(
             args.profile_schedule_add[0],
