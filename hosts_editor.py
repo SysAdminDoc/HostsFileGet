@@ -142,6 +142,8 @@ PROFILE_SYNC_MIN_PASSPHRASE_LENGTH = 16
 PROFILE_SYNC_ENV_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 SHARE_PATCH_SCHEMA = "hostsfileget.share-patch.v1"
 SHARE_PATCH_TYPES = ("allowlist", "profile")
+RECOVERY_PLAN_SCHEMA = "hostsfileget.recovery-plan.v1"
+RECOVERY_DESCRIPTION_MAX_LENGTH = 80
 SCHEDULED_TASK_NAME = "HostsFileGet Auto-Update"
 CLI_LOG_FILENAME = "cli.log"
 CLI_ACTIVITY_FILENAME = "cli-activity.jsonl"
@@ -3890,6 +3892,115 @@ def verify_share_patch_signature(
     else:
         report["profile_id"] = payload["profile"]["id"]
     return report
+
+
+def sanitize_recovery_plan_description(value: str | None = None) -> str:
+    description = re.sub(r"\s+", " ", str(value or "HostsFileGet before hosts apply").strip())
+    if not description or _contains_control_chars(description):
+        description = "HostsFileGet before hosts apply"
+    return description[:RECOVERY_DESCRIPTION_MAX_LENGTH]
+
+
+def _powershell_single_quote(value: str) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def build_restore_point_command(description: str | None = None) -> list[str]:
+    safe_description = sanitize_recovery_plan_description(description)
+    command = (
+        "Checkpoint-Computer "
+        f"-Description {_powershell_single_quote(safe_description)} "
+        "-RestorePointType 'MODIFY_SETTINGS'"
+    )
+    return [
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        command,
+    ]
+
+
+def build_recovery_apply_plan(hosts_path: str | None = None, description: str | None = None, now=None) -> dict:
+    target_hosts = os.path.abspath(hosts_path or _default_hosts_file_path())
+    drive, _tail = os.path.splitdrive(target_hosts)
+    volume = drive + "\\" if drive else "%SystemDrive%\\"
+    created_at = now or datetime.datetime.now()
+    if isinstance(created_at, datetime.datetime):
+        created_at = created_at.isoformat(timespec="seconds")
+    safe_description = sanitize_recovery_plan_description(description)
+    restore_point_command = build_restore_point_command(safe_description)
+    return {
+        "schema": RECOVERY_PLAN_SCHEMA,
+        "app_version": APP_VERSION,
+        "created_at": str(created_at),
+        "hosts_path": target_hosts,
+        "volume": volume,
+        "description": safe_description,
+        "plan_only": True,
+        "actions": [
+            {
+                "id": "hostsfileget-backup",
+                "status": "implemented",
+                "requires_admin": True,
+                "description": "HostsFileGet already creates rolling and timestamped hosts backups before raw, cleaned, CLI apply, restore, and history restore writes.",
+            },
+            {
+                "id": "system-restore-point",
+                "status": "manual-command",
+                "requires_admin": True,
+                "description": "Create a Windows System Restore point before a high-risk hosts write when System Protection is enabled.",
+                "command": restore_point_command,
+            },
+            {
+                "id": "vss-shadow-copy",
+                "status": "spike-only",
+                "requires_admin": True,
+                "description": "VSS snapshots are volume-scoped and require careful shadow lifecycle cleanup; HostsFileGet does not automate them yet.",
+                "commands": [
+                    ["vssadmin", "list", "shadows", f"/for={volume}"],
+                    ["vssadmin", "create", "shadow", f"/for={volume}"],
+                ],
+            },
+        ],
+        "apply_contract": [
+            "This plan does not execute restore-point or VSS commands.",
+            "HostsFileGet hosts-file writes must remain explicit, previewed, and backup-backed.",
+            "Use normal .bak, timestamped backups, and optional Git history restore before relying on system-wide rollback.",
+        ],
+    }
+
+
+def _format_command_for_display(command) -> str:
+    if isinstance(command, (list, tuple)):
+        return subprocess.list2cmdline([str(part) for part in command])
+    return str(command)
+
+
+def format_recovery_apply_plan(plan: dict) -> str:
+    lines = [
+        "Recovery Apply Plan",
+        f"Schema: {plan.get('schema')}",
+        f"Hosts path: {plan.get('hosts_path')}",
+        f"Volume: {plan.get('volume')}",
+        f"Description: {plan.get('description')}",
+        f"Plan only: {'yes' if plan.get('plan_only') else 'no'}",
+        "",
+        "Actions:",
+    ]
+    for action in plan.get("actions", []):
+        lines.append(f"- {action.get('id')}: {action.get('status')}")
+        if action.get("description"):
+            lines.append(f"  {action.get('description')}")
+        if action.get("command"):
+            lines.append(f"  Command: {_format_command_for_display(action.get('command'))}")
+        for command in action.get("commands", []) or []:
+            lines.append(f"  Command: {_format_command_for_display(command)}")
+    lines.extend(["", "Apply contract:"])
+    for item in plan.get("apply_contract", []):
+        lines.append(f"- {item}")
+    return "\n".join(lines)
 
 
 def _parse_valid_http_source_url(url: str):
@@ -20976,6 +21087,23 @@ def _cli_patch_apply(patch_path: str, signature_path: str) -> int:
     return 0
 
 
+def _cli_recovery_plan(output_path: str | None = None, description: str | None = None) -> int:
+    try:
+        plan = build_recovery_apply_plan(_cli_hosts_path(), description)
+        if output_path:
+            output_dir = os.path.dirname(os.path.abspath(output_path))
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+            write_text_file_atomic(output_path, json.dumps(plan, indent=2))
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Recovery plan failed: {exc}")
+        return 2
+    _cli_print(format_recovery_apply_plan(plan))
+    if output_path:
+        _cli_print(f"Wrote recovery plan to {output_path}")
+    return 0
+
+
 def _cli_profile_schedule_list(at_value: str | None = None) -> int:
     try:
         config_path = get_primary_config_path("hosts_editor_config.json")
@@ -21128,6 +21256,9 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--patch-verify",
         "--patch-apply",
         "--patch-gpg-key",
+        "--recovery-plan",
+        "--recovery-plan-output",
+        "--recovery-plan-description",
         "--profile-schedule-list",
         "--profile-schedule-add",
         "--profile-schedule-days",
@@ -21198,6 +21329,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--patch-verify=",
         "--patch-apply=",
         "--patch-gpg-key=",
+        "--recovery-plan-output=",
+        "--recovery-plan-description=",
         "--profile-schedule-add=",
         "--profile-schedule-days=",
         "--profile-schedule-name=",
@@ -21267,6 +21400,9 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--patch-verify", nargs=2, metavar=("PATCH", "SIGNATURE"), help="Verify a signed share patch without applying it.")
     parser.add_argument("--patch-apply", nargs=2, metavar=("PATCH", "SIGNATURE"), help="Verify and apply a signed share patch to app config only.")
     parser.add_argument("--patch-gpg-key", metavar="KEY", help="Optional GPG key identity for --patch-sign.")
+    parser.add_argument("--recovery-plan", action="store_true", help="Print a guarded restore-point/VSS recovery plan without executing system recovery commands.")
+    parser.add_argument("--recovery-plan-output", metavar="PATH", help="Write the guarded recovery plan JSON to PATH.")
+    parser.add_argument("--recovery-plan-description", metavar="TEXT", help="Description to include in the planned Windows restore-point command.")
     parser.add_argument("--profile-schedule-list", action="store_true", help="Show the time-bound profile activation schedule without writing files.")
     parser.add_argument(
         "--profile-schedule-add",
@@ -21445,6 +21581,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         return _cli_patch_verify(args.patch_verify[0], args.patch_verify[1])
     if args.patch_apply:
         return _cli_patch_apply(args.patch_apply[0], args.patch_apply[1])
+    if args.recovery_plan or args.recovery_plan_output or args.recovery_plan_description:
+        return _cli_recovery_plan(args.recovery_plan_output, args.recovery_plan_description)
     if args.profile_schedule_add:
         return _cli_profile_schedule_add(
             args.profile_schedule_add[0],

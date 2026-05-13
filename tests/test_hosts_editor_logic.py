@@ -48,6 +48,8 @@ from hosts_editor import (
     build_profile_sync_payload,
     build_allowlist_share_patch,
     build_profile_share_patch,
+    build_recovery_apply_plan,
+    build_restore_point_command,
     build_entry_provenance_report,
     build_pinned_export_payload,
     build_provenance_log_report,
@@ -160,6 +162,7 @@ from hosts_editor import (
     format_profile_list_summary,
     format_profile_sync_report,
     format_share_patch_summary,
+    format_recovery_apply_plan,
     format_git_history_status_report,
     format_cloud_dns_adapter_catalog,
     format_cloud_dns_adapter_report,
@@ -2752,6 +2755,16 @@ profile:
             )
             mocked_patch_apply.assert_called_once_with("work.patch.json", "work.patch.json.asc")
 
+        with mock.patch.object(hosts_editor, "_cli_recovery_plan", return_value=0) as mocked_recovery:
+            self.assertEqual(
+                hosts_editor._handle_cli_args([
+                    "--recovery-plan-output", "recovery.json",
+                    "--recovery-plan-description", "Before apply",
+                ]),
+                0,
+            )
+            mocked_recovery.assert_called_once_with("recovery.json", "Before apply")
+
     def test_handle_cli_args_routes_cloud_dns_flags(self):
         with mock.patch.object(hosts_editor, "_cli_cloud_adapter_list", return_value=0) as mocked_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--cloud-adapter-list"]), 0)
@@ -3270,6 +3283,36 @@ profile:
         self.assertEqual(signed["status"], "signed")
         self.assertTrue(verified["verified"])
         self.assertEqual(loaded["domains"], ["allow.example"])
+
+    def test_recovery_apply_plan_is_plan_only_and_formats_commands(self):
+        plan = build_recovery_apply_plan(
+            r"C:\Windows\System32\drivers\etc\hosts",
+            "HostsFileGet before test",
+            now=datetime.datetime(2026, 5, 12, 11, 0, 0),
+        )
+        command = build_restore_point_command("HostsFileGet before test")
+        formatted = format_recovery_apply_plan(plan)
+
+        self.assertTrue(plan["plan_only"])
+        self.assertEqual(plan["schema"], hosts_editor.RECOVERY_PLAN_SCHEMA)
+        self.assertEqual(plan["volume"], "C:\\")
+        self.assertIn("Checkpoint-Computer", command[-1])
+        self.assertIn("vss-shadow-copy", formatted)
+        self.assertIn("This plan does not execute", formatted)
+
+    def test_cli_recovery_plan_writes_json_without_applying(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plan_path = Path(tmpdir) / "recovery-plan.json"
+            with mock.patch.object(hosts_editor, "_cli_print"):
+                result = hosts_editor._cli_recovery_plan(str(plan_path), "Before unit test")
+            payload = json.loads(plan_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result, 0)
+        self.assertTrue(payload["plan_only"])
+        self.assertEqual(payload["description"], "Before unit test")
 
     def test_cli_history_restore_refuses_when_hosts_file_is_disabled(self):
         import tempfile

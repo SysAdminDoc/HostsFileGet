@@ -77,6 +77,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - DNS bypass diagnostics for browser encrypted-DNS and proxy signals
   - opt-in loopback-only local REST API with bearer auth for read-only status and clean-preview automation
   - backup restore preview
+  - restore-point/VSS recovery plan output for high-risk apply reviews
   - optional local Git history snapshot/status/restore commands
   - emergency DNS recovery helper
 - Configuration:
@@ -278,6 +279,13 @@ python hosts_editor.py --patch-sign .\work.patch.json .\work.patch.json.asc --pa
 python hosts_editor.py --patch-apply .\work.patch.json .\work.patch.json.asc
 ```
 
+Print a restore-point/VSS recovery plan without executing recovery commands:
+
+```powershell
+python hosts_editor.py --recovery-plan
+python hosts_editor.py --recovery-plan-output .\recovery-plan.json --recovery-plan-description "Before hosts update"
+```
+
 Generate guarded cloud-DNS replay plans or extract blocked domains from cloud DNS CSV log exports:
 
 ```powershell
@@ -365,6 +373,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Profile quick switch: `docs/profile-quick-switch.md`
 - Encrypted profile sync: `docs/encrypted-sync.md`
 - Signed share patches: `docs/share-patches.md`
+- Recovery apply plan: `docs/recovery-plan.md`
 - Optional Git history: `docs/git-history.md`
 - Scheduler activity report: `docs/scheduler-activity.md`
 - Portable bundle config: `docs/portable-config.md`
