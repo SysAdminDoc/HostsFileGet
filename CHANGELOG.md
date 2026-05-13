@@ -4,6 +4,13 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Modularization — v2.27.0 (Phase 6)**
+- New `hostsfileget.constants` (~25 lines): centralises `APP_NAME`, `APP_SLUG`, `APP_VERSION`, `CONFIG_FILENAME`. Lets other submodules build deterministic User-Agent headers without circularly importing `hosts_editor`.
+- New `hostsfileget.fetch` (~535 lines): the full network ingress surface — `_HttpsOnlyRedirectHandler` + `safe_urlopen`, URL validators (`_parse_valid_http_source_url`, `normalize_custom_source_url`, `sanitize_custom_sources`, `_contains_control_chars`), response inspectors (`_response_status_code`, `_response_header`), ETag/Last-Modified cache (`source_cache_key`, `get_source_cache_body_path`, `write_source_cache_body`, `read_source_cache_body`, `sanitize_source_cache_metadata`, `build_source_request_headers`, `build_source_cache_metadata`, `prune_orphan_source_cache_files`), and the fetch loop (`fetch_source_with_cache`, `fetch_source_with_retries`, `resolve_import_fetch_worker_count`).
+- `hosts_editor.py` keeps a small set of default-aware wrappers (`get_source_cache_body_path` / `write_source_cache_body` / `read_source_cache_body` / `prune_orphan_source_cache_files`) that default `cache_dir` to the active source-cache directory so legacy call sites do not need to thread it through.
+- Three regression tests updated to mock `hostsfileget.fetch.safe_urlopen` and `hostsfileget.fetch.decode_downloaded_lines` instead of the `hosts_editor` re-exports — same module-binding rule documented after Phase 1.
+- `hosts_editor.py` shrunk from 27,844 → 27,480 lines this round. Package now totals 2,044 lines across 10 focused submodules.
+
 **Modularization — v2.26.0 (Phases 3-5)**
 - New `hostsfileget.adblock` (~280 lines): the adblock-syntax classifier (`classify_adblock_rule_line`), the cosmetic-marker tuple, the quarantine helpers (`quarantine_adblock_rule_lines`, `_find_adblock_cosmetic_marker`, `_adblock_pattern_has_url_path`), and the syntax-lint report builder/formatter. Used by the importer to skip browser-only rules instead of broadening them.
 - New `hostsfileget.idn_homograph` (~370 lines): `classify_idn_domain`, `extract_idn_domain_candidates`, `build_idn_homograph_report`, `format_idn_homograph_report`, the curated `CONFUSABLE_ASCII_MAP`, the `_script_bucket`/`_label_scripts`/`_confusable_ascii_skeleton` Unicode helpers, and the IDN-candidate token extractor.

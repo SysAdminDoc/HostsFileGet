@@ -32,6 +32,18 @@ Phase 3-5 extractions (v2.26.0):
       ``normalize_line_to_hosts_entries``, ``normalize_line_to_hosts_entry``).
       Now able to live next to its dependencies because the adblock seam
       has been broken.
+
+Phase 6 extractions (v2.27.0):
+    - :mod:`hostsfileget.constants` — shared ``APP_NAME``/``APP_SLUG``/
+      ``APP_VERSION``/``CONFIG_FILENAME`` constants. Owned in one place so
+      other submodules can build deterministic User-Agent strings without
+      circularly importing ``hosts_editor``.
+    - :mod:`hostsfileget.fetch` — the entire network ingress surface:
+      :class:`_HttpsOnlyRedirectHandler` + :func:`safe_urlopen`, URL
+      validators (:func:`_parse_valid_http_source_url`,
+      :func:`normalize_custom_source_url`, :func:`sanitize_custom_sources`),
+      ETag/Last-Modified-aware cache (read/write/prune) keyed by SHA-256 of
+      the normalised URL, the retry loop, and the source-fetch primitives.
 """
 
 __all__ = [
@@ -42,4 +54,6 @@ __all__ = [
     "adblock",
     "idn_homograph",
     "normalize",
+    "constants",
+    "fetch",
 ]

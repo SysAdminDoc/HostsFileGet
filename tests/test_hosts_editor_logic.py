@@ -1826,8 +1826,12 @@ class HostsEditorLogicTests(unittest.TestCase):
 
         url = "https://example.com/hosts.txt"
         with tempfile.TemporaryDirectory() as tmpdir:
+            # Decompression/decoding lives in hostsfileget.compression, but
+            # fetch.py binds it as a local name at import time, so the mock
+            # must land on hostsfileget.fetch.decode_downloaded_lines for
+            # fetch_source_with_cache to see it.
             with mock.patch(
-                "hosts_editor.decode_downloaded_lines",
+                "hostsfileget.fetch.decode_downloaded_lines",
                 side_effect=[
                     ["0.0.0.0 preserved.example"],
                     ValueError("bad payload"),
@@ -4375,13 +4379,18 @@ profile:
 
         editor = FakeEditor()
 
-        with mock.patch.object(hosts_editor, "safe_urlopen", return_value=FakeResponse()):
+        # safe_urlopen now lives in hostsfileget.fetch and is referenced
+        # directly by fetch_source_with_cache, so the patch needs to target
+        # the submodule rather than the hosts_editor re-export.
+        with mock.patch("hostsfileget.fetch.safe_urlopen", return_value=FakeResponse()):
             HostsFileEditor._import_worker_thread(
                 editor,
                 [("Big Source", "https://example.com/huge.txt")],
                 "Raw",
             )
         editor._source_cache_tmpdir.cleanup()
+
+        # Drain the queue so the post-condition checks see all messages.
 
         messages = []
         while not editor.import_queue.empty():
@@ -4483,7 +4492,8 @@ profile:
 
         editor = FakeEditor()
 
-        with mock.patch.object(hosts_editor, "safe_urlopen", return_value=FakeResponse(editor)):
+        # See note above on safe_urlopen owning module post-modularization.
+        with mock.patch("hostsfileget.fetch.safe_urlopen", return_value=FakeResponse(editor)):
             HostsFileEditor._import_worker_thread(
                 editor,
                 [("Only Source", "https://example.com/list.txt")],
