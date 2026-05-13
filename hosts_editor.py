@@ -10658,6 +10658,46 @@ CLOUD_DNS_LOG_IMPORT_ALIASES = {
     "control-d": "controld",
     "controld": "controld",
 }
+DNS_REWRITE_PLAN_SCHEMA = "hostsfileget.dns-rewrite-plan.v1"
+DNS_REWRITE_DEFAULT_TTL = 300
+DNS_REWRITE_MAX_RECORDS = 1000
+DNS_REWRITE_SUPPORTED_TYPES = ("A", "AAAA", "CNAME")
+DNS_REWRITE_WARNINGS = (
+    "Plan-only: HostsFileGet does not execute DNS provider, API, zone, or resolver writes.",
+    "Hosts files can represent A/AAAA-style name-to-address mappings only; CNAME/private-domain rewrites require DNS-provider or resolver support.",
+    "Review CNAME records carefully because a CNAME owner cannot safely coexist with other record data in standard DNS zones.",
+    "Private-domain rewrites can shadow public DNS records when the selected resolver becomes authoritative for the name.",
+)
+DNS_REWRITE_PROVIDERS = (
+    {
+        "id": "controld-private-rules",
+        "label": "Control D private-domain/custom rules",
+        "provider": "Control D",
+        "surface": "Custom Rules redirect/private domain",
+        "auth": "Authorization: Bearer header if converted to API calls outside HostsFileGet",
+        "source_url": "https://docs.controld.com/docs/custom-rules",
+        "references": ("C3",),
+    },
+    {
+        "id": "technitium-zone",
+        "label": "Technitium DNS Server zone records",
+        "provider": "Technitium DNS Server",
+        "surface": "Primary/stub/conditional zone records or API-reviewed zone import",
+        "auth": "Technitium admin/API token if imported outside HostsFileGet",
+        "source_url": "https://technitium.com/dns/help.html",
+        "references": ("O8", "S40"),
+    },
+)
+DNS_REWRITE_PROVIDER_ALIASES = {
+    "control-d": "controld-private-rules",
+    "controld": "controld-private-rules",
+    "controld-private": "controld-private-rules",
+    "control-d-private": "controld-private-rules",
+    "technitium": "technitium-zone",
+    "technitium-dns": "technitium-zone",
+    "technitium-zone": "technitium-zone",
+    "zone": "technitium-zone",
+}
 THREAT_FEED_PACK_WARNINGS = (
     "Plan-only: HostsFileGet lists vetted feed URLs and review controls; it does not fetch or auto-apply threat feeds.",
     "NRD and DGA feeds can false-positive newly launched, parked, CDN, or campaign-specific legitimate domains.",
@@ -11589,6 +11629,314 @@ def parse_cloud_dns_log_export(provider: str, text: str) -> list[str]:
     if normalized == "controld":
         return parse_controld_activity_csv(text)
     raise ValueError(f"Unknown cloud DNS log provider: {provider!r}. Known providers: nextdns, controld")
+
+
+def normalize_dns_rewrite_provider_id(provider_id: str) -> str:
+    normalized = str(provider_id or "").strip().lower().replace("_", "-")
+    return DNS_REWRITE_PROVIDER_ALIASES.get(normalized, normalized)
+
+
+def list_dns_rewrite_providers() -> list[dict]:
+    return [dict(provider) for provider in DNS_REWRITE_PROVIDERS]
+
+
+def find_dns_rewrite_provider(provider_id: str) -> dict:
+    normalized = normalize_dns_rewrite_provider_id(provider_id)
+    for provider in DNS_REWRITE_PROVIDERS:
+        if provider["id"] == normalized:
+            return dict(provider)
+    known = ", ".join(provider["id"] for provider in DNS_REWRITE_PROVIDERS)
+    raise ValueError(f"Unknown DNS rewrite provider: {provider_id!r}. Known providers: {known}")
+
+
+def sanitize_dns_rewrite_ttl(ttl: int | str | None = None) -> int:
+    try:
+        value = int(DNS_REWRITE_DEFAULT_TTL if ttl in (None, "") else ttl)
+    except (TypeError, ValueError):
+        raise ValueError("DNS rewrite TTL must be an integer.")
+    if value < 30 or value > 86400:
+        raise ValueError("DNS rewrite TTL must be between 30 and 86400 seconds.")
+    return value
+
+
+def normalize_dns_rewrite_name(value: str) -> str:
+    candidate = str(value or "").strip().lower().rstrip(".")
+    if not candidate or _contains_control_chars(candidate):
+        raise ValueError("rewrite owner name is empty or contains control characters")
+    if "*" in candidate or "/" in candidate:
+        raise ValueError("wildcards and URL paths are not DNS rewrite owner names")
+    if not looks_like_domain(candidate, allow_single_label=False):
+        raise ValueError(f"invalid rewrite owner domain: {value!r}")
+    return candidate
+
+
+def normalize_dns_rewrite_value(record_type: str, value: str) -> str:
+    record_type = str(record_type or "").upper()
+    candidate = str(value or "").strip().lower().rstrip(".")
+    if not candidate or _contains_control_chars(candidate):
+        raise ValueError("rewrite target is empty or contains control characters")
+    if record_type in {"A", "AAAA"}:
+        try:
+            address = ipaddress.ip_address(candidate)
+        except ValueError as exc:
+            raise ValueError(f"{record_type} rewrite target must be an IP address: {value!r}") from exc
+        if record_type == "A" and address.version != 4:
+            raise ValueError("A rewrite target must be an IPv4 address")
+        if record_type == "AAAA" and address.version != 6:
+            raise ValueError("AAAA rewrite target must be an IPv6 address")
+        if address.is_unspecified or address.is_multicast:
+            raise ValueError(f"{record_type} rewrite target cannot be unspecified or multicast")
+        return str(address)
+    if record_type == "CNAME":
+        if not looks_like_domain(candidate, allow_single_label=False):
+            raise ValueError(f"CNAME rewrite target must be a domain: {value!r}")
+        return candidate
+    raise ValueError(f"unsupported DNS rewrite record type: {record_type!r}")
+
+
+def infer_dns_rewrite_record_type(value: str) -> str:
+    candidate = str(value or "").strip()
+    try:
+        address = ipaddress.ip_address(candidate)
+    except ValueError:
+        return "CNAME"
+    return "A" if address.version == 4 else "AAAA"
+
+
+def _strip_dns_rewrite_inline_comment(line: str) -> str:
+    for marker in ("#", ";"):
+        if marker in line:
+            line = line.split(marker, 1)[0]
+    return line.strip()
+
+
+def parse_dns_rewrite_records(text: str, default_ttl: int | str | None = None) -> dict:
+    ttl = sanitize_dns_rewrite_ttl(default_ttl)
+    records: list[dict] = []
+    rejected: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+    for line_no, raw_line in enumerate(str(text or "").splitlines(), 1):
+        body = _strip_dns_rewrite_inline_comment(raw_line)
+        if not body:
+            continue
+        tokens = re.split(r"\s+", body)
+        try:
+            parsed_records: list[dict] = []
+            if len(tokens) >= 2 and _looks_like_ip_token(tokens[0]):
+                record_type = infer_dns_rewrite_record_type(tokens[0])
+                target = normalize_dns_rewrite_value(record_type, tokens[0])
+                for domain_token in tokens[1:]:
+                    parsed_records.append({
+                        "name": normalize_dns_rewrite_name(domain_token),
+                        "type": record_type,
+                        "value": target,
+                    })
+            elif len(tokens) >= 3 and tokens[1].upper() in DNS_REWRITE_SUPPORTED_TYPES:
+                record_type = tokens[1].upper()
+                parsed_records.append({
+                    "name": normalize_dns_rewrite_name(tokens[0]),
+                    "type": record_type,
+                    "value": normalize_dns_rewrite_value(record_type, tokens[2]),
+                })
+            elif len(tokens) >= 3 and tokens[1] in {"->", "=>"}:
+                record_type = infer_dns_rewrite_record_type(tokens[2])
+                parsed_records.append({
+                    "name": normalize_dns_rewrite_name(tokens[0]),
+                    "type": record_type,
+                    "value": normalize_dns_rewrite_value(record_type, tokens[2]),
+                })
+            else:
+                raise ValueError("expected hosts-style IP domain, NAME TYPE TARGET, or NAME -> TARGET")
+        except ValueError as exc:
+            rejected.append({"line": line_no, "text": raw_line[:160], "reason": str(exc)})
+            continue
+        for record in parsed_records:
+            key = (record["name"], record["type"], record["value"])
+            if key in seen:
+                continue
+            seen.add(key)
+            record.update({
+                "ttl": ttl,
+                "line": line_no,
+                "hosts_native": record["type"] in {"A", "AAAA"},
+                "requires_dns_provider": record["type"] == "CNAME",
+            })
+            records.append(record)
+            if len(records) > DNS_REWRITE_MAX_RECORDS:
+                raise ValueError(f"DNS rewrite plan is limited to {DNS_REWRITE_MAX_RECORDS} records.")
+    return {"records": records, "rejected": rejected, "default_ttl": ttl}
+
+
+def infer_dns_rewrite_zone(records: list[dict], explicit_zone: str | None = None) -> str:
+    if explicit_zone:
+        return normalize_dns_rewrite_name(explicit_zone)
+    names = [record["name"] for record in records if record.get("name")]
+    if not names:
+        return ""
+    suffix_sets = [name.split(".") for name in names]
+    reversed_labels = [list(reversed(labels)) for labels in suffix_sets]
+    common: list[str] = []
+    for labels in zip(*reversed_labels):
+        if len(set(labels)) == 1:
+            common.append(labels[0])
+        else:
+            break
+    if len(common) >= 2:
+        return ".".join(reversed(common))
+    first = names[0].split(".")
+    return ".".join(first[1:]) if len(first) > 2 else names[0]
+
+
+def _dns_zone_owner(name: str, zone: str) -> str:
+    if not zone:
+        return f"{name}."
+    if name == zone:
+        return "@"
+    suffix = f".{zone}"
+    if name.endswith(suffix):
+        return name[:-len(suffix)]
+    return f"{name}."
+
+
+def _dns_zone_target(record: dict) -> str:
+    value = record["value"]
+    if record["type"] == "CNAME":
+        return f"{value}."
+    return value
+
+
+def build_dns_rewrite_plan(
+    text: str,
+    provider_id: str,
+    *,
+    profile_id: str = "PROFILE_ID",
+    zone: str | None = None,
+    ttl: int | str | None = None,
+) -> dict:
+    provider = find_dns_rewrite_provider(provider_id)
+    parsed = parse_dns_rewrite_records(text, default_ttl=ttl)
+    records = parsed["records"]
+    effective_zone = infer_dns_rewrite_zone(records, zone) if provider["id"] == "technitium-zone" else ""
+    encoded_profile = urllib.parse.quote((profile_id or "PROFILE_ID").strip() or "PROFILE_ID", safe="")
+    artifacts: dict = {}
+
+    if provider["id"] == "controld-private-rules":
+        artifacts["request_templates"] = [
+            {
+                "method": "POST",
+                "url": f"https://api.controld.com/profiles/{encoded_profile}/rules",
+                "headers": {"Authorization": "Bearer <CONTROL_D_API_TOKEN>"},
+                "review_only": True,
+                "field_note": "Map each record to a Control D Custom Rule redirect/private-domain action in the current API or UI before replay.",
+                "record": {
+                    "hostname": record["name"],
+                    "record_type": record["type"],
+                    "target": record["value"],
+                    "target_kind": "ip" if record["type"] in {"A", "AAAA"} else "hostname",
+                    "status": 1,
+                },
+            }
+            for record in records
+        ]
+    elif provider["id"] == "technitium-zone":
+        zone_lines = [f"$TTL {parsed['default_ttl']}"]
+        if effective_zone:
+            zone_lines.insert(0, f"$ORIGIN {effective_zone}.")
+        for record in records:
+            zone_lines.append(
+                f"{_dns_zone_owner(record['name'], effective_zone)} {record['ttl']} IN {record['type']} {_dns_zone_target(record)}"
+            )
+        artifacts["zone"] = effective_zone
+        artifacts["zone_file"] = "\n".join(zone_lines) + "\n"
+        artifacts["record_templates"] = [
+            {
+                "zone": effective_zone,
+                "name": record["name"],
+                "owner": _dns_zone_owner(record["name"], effective_zone),
+                "type": record["type"],
+                "value": record["value"],
+                "ttl": record["ttl"],
+            }
+            for record in records
+        ]
+
+    type_counts: dict[str, int] = {}
+    for record in records:
+        type_counts[record["type"]] = type_counts.get(record["type"], 0) + 1
+    warnings = list(DNS_REWRITE_WARNINGS)
+    if parsed["rejected"]:
+        warnings.append("Some input lines were rejected because they were not safe DNS rewrite declarations.")
+    if any(record["type"] == "CNAME" for record in records):
+        warnings.append("CNAME records are not hosts-native and require DNS-provider or authoritative-zone handling.")
+
+    references = sorted(set(provider.get("references", ())) | {"C3", "O8"})
+    return {
+        "schema": DNS_REWRITE_PLAN_SCHEMA,
+        "provider_id": provider["id"],
+        "provider": provider["provider"],
+        "surface": provider["surface"],
+        "profile_id": (profile_id or "PROFILE_ID").strip() or "PROFILE_ID",
+        "zone": effective_zone,
+        "plan_only": True,
+        "auth": provider["auth"],
+        "source_url": provider["source_url"],
+        "default_ttl": parsed["default_ttl"],
+        "record_count": len(records),
+        "type_counts": type_counts,
+        "rejected": parsed["rejected"],
+        "warnings": warnings,
+        "records": records,
+        "artifacts": artifacts,
+        "references": references,
+    }
+
+
+def format_dns_rewrite_provider_catalog() -> str:
+    lines = [
+        "Advanced DNS rewrite providers",
+        "",
+        "Providers generate review plans only. HostsFileGet does not store credentials or execute DNS writes.",
+        "",
+        "Supported providers:",
+    ]
+    for provider in DNS_REWRITE_PROVIDERS:
+        lines.extend([
+            f"- {provider['id']}: {provider['label']}",
+            f"  Surface: {provider['surface']}",
+            f"  Auth if replayed elsewhere: {provider['auth']}",
+            f"  Source: {provider['source_url']}",
+        ])
+    lines.extend(["", "Input forms:", "- 10.0.0.5 intranet.example.test", "- app.example.test A 10.0.0.5", "- alias.example.test CNAME target.example.net", "- service.example.test -> fd00::10"])
+    return "\n".join(lines)
+
+
+def format_dns_rewrite_plan(plan: dict) -> str:
+    lines = [
+        "Advanced DNS Rewrite Plan",
+        f"Schema: {plan.get('schema')}",
+        f"Provider: {plan.get('provider_id')} ({plan.get('provider')})",
+        f"Surface: {plan.get('surface')}",
+        f"Plan only: {'yes' if plan.get('plan_only') else 'no'}",
+        f"Records: {int(plan.get('record_count') or 0):,}",
+        f"Types: {', '.join(f'{key}={value}' for key, value in sorted((plan.get('type_counts') or {}).items())) or 'none'}",
+        f"Default TTL: {plan.get('default_ttl')}",
+    ]
+    if plan.get("zone"):
+        lines.append(f"Zone: {plan.get('zone')}")
+    lines.extend([
+        f"Auth if replayed elsewhere: {plan.get('auth')}",
+        f"Source: {plan.get('source_url')}",
+        "Warnings:",
+    ])
+    for warning in plan.get("warnings") or DNS_REWRITE_WARNINGS:
+        lines.append(f"- {warning}")
+    rejected = plan.get("rejected") or []
+    if rejected:
+        lines.append("Rejected lines:")
+        for item in rejected[:10]:
+            lines.append(f"- line {item.get('line')}: {item.get('reason')}")
+    lines.append(f"Roadmap source IDs: {', '.join(plan.get('references') or [])}")
+    return "\n".join(lines)
 
 
 def normalize_threat_feed_pack_id(pack_id: str) -> str:
@@ -23616,6 +23964,39 @@ def _cli_cloud_log_import(provider: str, input_path: str, output_path: str) -> i
     return 0
 
 
+def _cli_dns_rewrite_provider_list() -> int:
+    _cli_print(format_dns_rewrite_provider_catalog())
+    return 0
+
+
+def _cli_dns_rewrite_plan(
+    provider_id: str,
+    input_path: str,
+    output_path: str,
+    profile_id: str,
+    zone: str | None,
+    ttl: int,
+) -> int:
+    try:
+        plan = build_dns_rewrite_plan(
+            read_text_file_content(input_path),
+            provider_id,
+            profile_id=profile_id,
+            zone=zone,
+            ttl=ttl,
+        )
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        write_text_file_atomic(output_path, json.dumps(plan, indent=2))
+    except (OSError, ValueError) as exc:
+        _cli_print(f"DNS rewrite plan failed: {exc}")
+        return 2
+    _cli_print(format_dns_rewrite_plan(plan))
+    _cli_print(f"Wrote DNS rewrite plan to {output_path}")
+    return 0
+
+
 def _cli_threat_feed_list() -> int:
     _cli_print(format_threat_feed_pack_catalog())
     return 0
@@ -24547,6 +24928,11 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--cloud-adapter-plan",
         "--cloud-profile-id",
         "--cloud-log-import",
+        "--dns-rewrite-provider-list",
+        "--dns-rewrite-plan",
+        "--dns-rewrite-profile-id",
+        "--dns-rewrite-zone",
+        "--dns-rewrite-ttl",
         "--threat-feed-list",
         "--threat-feed-plan",
         "--cname-cloaking-list",
@@ -24649,6 +25035,10 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--cloud-adapter-plan=",
         "--cloud-profile-id=",
         "--cloud-log-import=",
+        "--dns-rewrite-plan=",
+        "--dns-rewrite-profile-id=",
+        "--dns-rewrite-zone=",
+        "--dns-rewrite-ttl=",
         "--threat-feed-plan=",
         "--cname-cloaking-plan=",
         "--encrypted-dns-bypass-plan=",
@@ -24825,6 +25215,16 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         metavar=("PROVIDER", "INPUT", "OUTPUT"),
         help="Extract blocked domains from a NextDNS or Control D CSV log export into OUTPUT.",
     )
+    parser.add_argument("--dns-rewrite-provider-list", action="store_true", help="List plan-only advanced DNS rewrite providers.")
+    parser.add_argument(
+        "--dns-rewrite-plan",
+        nargs=3,
+        metavar=("PROVIDER", "INPUT", "OUTPUT"),
+        help="Write a plan-only advanced DNS rewrite/CNAME/private-domain JSON plan. No provider writes are performed.",
+    )
+    parser.add_argument("--dns-rewrite-profile-id", default="PROFILE_ID", metavar="ID", help="Provider profile ID placeholder for --dns-rewrite-plan where applicable.")
+    parser.add_argument("--dns-rewrite-zone", metavar="ZONE", help="DNS zone name for --dns-rewrite-plan provider outputs that need zone context.")
+    parser.add_argument("--dns-rewrite-ttl", type=int, default=DNS_REWRITE_DEFAULT_TTL, metavar="SECONDS", help=f"TTL for --dns-rewrite-plan records; defaults to {DNS_REWRITE_DEFAULT_TTL}.")
     parser.add_argument("--threat-feed-list", action="store_true", help="List curated NRD/DGA/TIF threat feed packs.")
     parser.add_argument(
         "--threat-feed-plan",
@@ -25141,6 +25541,24 @@ def _handle_cli_args(argv: list[str]) -> int | None:
             args.cloud_log_import[0],
             args.cloud_log_import[1],
             args.cloud_log_import[2],
+        )
+    dns_rewrite_options = [
+        args.dns_rewrite_profile_id != "PROFILE_ID",
+        args.dns_rewrite_zone,
+        args.dns_rewrite_ttl != DNS_REWRITE_DEFAULT_TTL,
+    ]
+    if any(dns_rewrite_options) and not args.dns_rewrite_plan:
+        parser.error("--dns-rewrite-* options require --dns-rewrite-plan PROVIDER INPUT OUTPUT")
+    if args.dns_rewrite_provider_list:
+        return _cli_dns_rewrite_provider_list()
+    if args.dns_rewrite_plan:
+        return _cli_dns_rewrite_plan(
+            args.dns_rewrite_plan[0],
+            args.dns_rewrite_plan[1],
+            args.dns_rewrite_plan[2],
+            args.dns_rewrite_profile_id,
+            args.dns_rewrite_zone,
+            args.dns_rewrite_ttl,
         )
     if args.threat_feed_list:
         return _cli_threat_feed_list()

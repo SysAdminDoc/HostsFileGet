@@ -20,6 +20,7 @@ from hosts_editor import (
     BLOCK_SINK_IPS,
     CONFIG_SCHEMA_VERSION,
     DEFAULT_PROFILE_ID,
+    DNS_REWRITE_PLAN_SCHEMA,
     DOMAIN_CATEGORY_RULES,
     FTL_BLOCKED_STATUS_CODES,
     HostsFileEditor,
@@ -97,6 +98,7 @@ from hosts_editor import (
     dns_bypass_policy_status,
     parse_cloud_dns_log_export,
     parse_controld_activity_csv,
+    parse_dns_rewrite_records,
     parse_pinned_import_payload,
     read_provenance_events,
     IPV4_REGEX,
@@ -144,6 +146,7 @@ from hosts_editor import (
     build_cloud_dns_adapter_plan,
     build_config_location_report,
     build_dns_integration_export,
+    build_dns_rewrite_plan,
     build_portable_bundle_readme,
     build_scheduler_activity_report,
     build_scheduler_update_command,
@@ -200,6 +203,8 @@ from hosts_editor import (
     format_config_location_report,
     format_dns_integration_export_summary,
     format_dns_integration_pack_report,
+    format_dns_rewrite_plan,
+    format_dns_rewrite_provider_catalog,
     format_cname_cloaking_catalog,
     format_cname_cloaking_plan,
     format_dns_rebinding_report,
@@ -235,6 +240,7 @@ from hosts_editor import (
     list_safesearch_templates,
     list_cloud_dns_adapters,
     list_dns_integration_packs,
+    list_dns_rewrite_providers,
     list_managed_package_targets,
     list_router_gateway_adapters,
     list_threat_feed_packs,
@@ -3081,6 +3087,28 @@ profile:
             )
             mocked_import.assert_called_once_with("controld", "log.csv", "domains.txt")
 
+        with mock.patch.object(hosts_editor, "_cli_dns_rewrite_provider_list", return_value=0) as mocked_rewrite_list:
+            self.assertEqual(hosts_editor._handle_cli_args(["--dns-rewrite-provider-list"]), 0)
+            mocked_rewrite_list.assert_called_once_with()
+
+        with mock.patch.object(hosts_editor, "_cli_dns_rewrite_plan", return_value=0) as mocked_rewrite_plan:
+            self.assertEqual(
+                hosts_editor._handle_cli_args([
+                    "--dns-rewrite-plan", "technitium", "rewrites.txt", "rewrite-plan.json",
+                    "--dns-rewrite-zone", "example.test",
+                    "--dns-rewrite-ttl", "600",
+                ]),
+                0,
+            )
+            mocked_rewrite_plan.assert_called_once_with(
+                "technitium",
+                "rewrites.txt",
+                "rewrite-plan.json",
+                "PROFILE_ID",
+                "example.test",
+                600,
+            )
+
     def test_handle_cli_args_routes_threat_feed_flags(self):
         with mock.patch.object(hosts_editor, "_cli_threat_feed_list", return_value=0) as mocked_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--threat-feed-list"]), 0)
@@ -4746,6 +4774,58 @@ profile:
 
         with self.assertRaises(ValueError):
             build_cloud_dns_adapter_plan(lines, "unknown-cloud")
+
+    def test_dns_rewrite_parser_accepts_hosts_explicit_and_arrow_forms(self):
+        text = "\n".join([
+            "10.0.0.5 intranet.example.test duplicate.example.test",
+            "app.example.test A 10.0.0.6",
+            "v6.example.test AAAA fd00::10",
+            "alias.example.test CNAME target.example.net",
+            "service.example.test -> fd00::20",
+            "*.bad.example CNAME target.example.net",
+        ])
+
+        parsed = parse_dns_rewrite_records(text, default_ttl=600)
+        names = {record["name"] for record in parsed["records"]}
+        types = {record["name"]: record["type"] for record in parsed["records"]}
+
+        self.assertEqual(parsed["default_ttl"], 600)
+        self.assertIn("intranet.example.test", names)
+        self.assertIn("duplicate.example.test", names)
+        self.assertEqual(types["alias.example.test"], "CNAME")
+        self.assertEqual(types["service.example.test"], "AAAA")
+        self.assertEqual(len(parsed["rejected"]), 1)
+
+    def test_dns_rewrite_plans_are_export_only_for_controld_and_technitium(self):
+        text = "\n".join([
+            "app.example.test A 10.0.0.5",
+            "alias.example.test CNAME target.example.net",
+        ])
+
+        controld = build_dns_rewrite_plan(text, "control-d", profile_id="profile 1")
+        technitium = build_dns_rewrite_plan(text, "technitium", zone="example.test", ttl=300)
+        rendered = format_dns_rewrite_plan(technitium)
+        catalog = format_dns_rewrite_provider_catalog()
+
+        self.assertEqual(controld["schema"], DNS_REWRITE_PLAN_SCHEMA)
+        self.assertTrue(controld["plan_only"])
+        self.assertEqual(controld["provider_id"], "controld-private-rules")
+        self.assertEqual(controld["artifacts"]["request_templates"][0]["headers"], {"Authorization": "Bearer <CONTROL_D_API_TOKEN>"})
+        self.assertTrue(controld["artifacts"]["request_templates"][0]["review_only"])
+        self.assertIn("/profiles/profile%201/rules", controld["artifacts"]["request_templates"][0]["url"])
+
+        self.assertEqual(technitium["provider_id"], "technitium-zone")
+        self.assertEqual(technitium["zone"], "example.test")
+        self.assertIn("$ORIGIN example.test.", technitium["artifacts"]["zone_file"])
+        self.assertIn("app 300 IN A 10.0.0.5", technitium["artifacts"]["zone_file"])
+        self.assertIn("alias 300 IN CNAME target.example.net.", technitium["artifacts"]["zone_file"])
+        self.assertIn("CNAME=1", rendered)
+        self.assertIn("Roadmap source IDs", rendered)
+        self.assertIn("technitium-zone", catalog)
+        self.assertEqual({provider["id"] for provider in list_dns_rewrite_providers()}, {"controld-private-rules", "technitium-zone"})
+
+        with self.assertRaises(ValueError):
+            build_dns_rewrite_plan(text, "unknown-rewrite-provider")
 
     def test_threat_feed_catalog_lists_guarded_packs_and_sources(self):
         pack_ids = {pack["id"] for pack in list_threat_feed_packs()}

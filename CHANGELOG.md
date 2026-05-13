@@ -4,6 +4,10 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Advanced DNS rewrites**
+- Added `--dns-rewrite-provider-list` and `--dns-rewrite-plan` for review-only Control D and Technitium DNS rewrite/CNAME/private-domain plans.
+- The parser accepts hosts-style IP mappings, explicit `A`/`AAAA`/`CNAME` declarations, and arrow-form rewrites while documenting that CNAME/private-domain behavior is DNS-provider work, not hosts-file behavior.
+
 **Local block page server**
 - Added `--block-page-preview` and `--block-page-serve` for explicit loopback-only blocked-site explanation pages.
 - The server serves the same informational HTML on all paths plus a JSON health endpoint, stays HTTP-only, and does not write the hosts file, expose LAN services, redirect paths, or manage certificates.

@@ -76,6 +76,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - export-only VS Code companion extension scaffolds that use the opt-in loopback REST API for status and clean-preview commands
   - optional `prompt_toolkit` TUI shell for keyboard-first status, profile, source-bundle, and clean-preview review
   - loopback-only local HTTP block page server and static preview export for reviewed blocked-site explanations
+  - plan-only advanced DNS rewrite/CNAME/private-domain exports for Control D and Technitium DNS Server review
   - RPZ, Unbound, Privoxy, gzip-compressed hosts, and bzip2-compressed hosts
 - Operational utilities:
   - DNS cache flush
@@ -305,6 +306,13 @@ python hosts_editor.py --block-page-preview .\block-page-preview.html
 python hosts_editor.py --block-page-serve --block-page-port 8088
 ```
 
+Build a review-only DNS rewrite plan for provider features that hosts files cannot represent:
+
+```powershell
+python hosts_editor.py --dns-rewrite-provider-list
+python hosts_editor.py --dns-rewrite-plan technitium .\rewrites.txt .\technitium-rewrite-plan.json --dns-rewrite-zone example.test
+```
+
 Export or import encrypted profile sync bundles through a Git worktree:
 
 ```powershell
@@ -445,6 +453,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - VS Code companion export: `docs/vscode-companion.md`
 - Optional prompt_toolkit TUI: `docs/tui.md`
 - Local block page server: `docs/block-page-server.md`
+- Advanced DNS rewrites: `docs/dns-rewrites.md`
 - Optional Git history: `docs/git-history.md`
 - Scheduler activity report: `docs/scheduler-activity.md`
 - Portable bundle config: `docs/portable-config.md`
