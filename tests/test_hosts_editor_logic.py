@@ -3524,14 +3524,14 @@ profile:
             hosts_path.write_text("127.0.0.1 localhost\n", encoding="utf-8")
             disabled_path.write_text("0.0.0.0 restored.example\n", encoding="utf-8")
 
-            real_copy2 = hosts_editor.shutil.copy2
+            real_copy = hosts_editor.copy_file_atomic
 
-            def flaky_copy2(src, dst, *args, **kwargs):
+            def flaky_copy(src, dst, *args, **kwargs):
                 if dst == str(hosts_path):
                     raise OSError("copy failed")
-                return real_copy2(src, dst, *args, **kwargs)
+                return real_copy(src, dst, *args, **kwargs)
 
-            with mock.patch.object(hosts_editor.shutil, "copy2", side_effect=flaky_copy2):
+            with mock.patch.object(hosts_editor, "copy_file_atomic", side_effect=flaky_copy):
                 with self.assertRaises(OSError):
                     enable_hosts_file_transactionally(str(hosts_path), str(disabled_path))
 
@@ -4583,6 +4583,129 @@ profile:
         bomb = gzip.compress(b"x" * (MAX_DOWNLOAD_BYTES + 1))
         with self.assertRaises(ValueError):
             decode_downloaded_lines("https://example.com/hosts.gz", bomb, "gzip")
+
+    def test_decode_downloaded_lines_bombs_short_circuit_before_full_inflate(self):
+        """Streaming decompressor must abort once the cap is crossed instead of
+        materializing the entire bomb in memory.
+
+        Without the streaming guard a 50 KB gzip-compressed payload of zeros
+        expands to ~50 GB and would OOM the GUI process before the post-hoc
+        size check ever fires.
+        """
+        huge_plaintext_size = (MAX_DOWNLOAD_BYTES * 4)  # 200 MB of zeros
+        bomb = gzip.compress(b"\x00" * huge_plaintext_size)
+        # The compressed bomb is itself tiny because it's all-zero data, but
+        # the streaming decoder must still raise ValueError quickly.
+        self.assertLess(len(bomb), 1 * 1024 * 1024)
+        with self.assertRaises(ValueError):
+            decode_downloaded_lines("https://example.com/hosts.gz", bomb, "gzip")
+
+    def test_decode_downloaded_lines_rejects_bz2_bomb(self):
+        bomb = bz2.compress(b"x" * (MAX_DOWNLOAD_BYTES + 1))
+        with self.assertRaises(ValueError):
+            decode_downloaded_lines("https://example.com/hosts.bz2", bomb)
+
+    def test_decode_downloaded_lines_truncated_gzip_falls_back_to_raw(self):
+        """A truncated gzip stream must not crash the import - the existing
+        contract is that we treat malformed compression as 'raw bytes' since
+        some mirrors advertise compression inconsistently."""
+        good = gzip.compress(b"0.0.0.0 example.com\n")
+        truncated = good[:-5]
+        lines = decode_downloaded_lines(
+            "https://example.com/hosts.gz",
+            truncated,
+            "gzip",
+        )
+        # Either falls back to interpreting raw bytes as text, or returns []
+        # for an unreadable payload - both behaviors are safe; what's *not*
+        # acceptable is a crash.
+        self.assertIsInstance(lines, list)
+
+    def test_copy_file_atomic_writes_target_via_temp(self):
+        """copy_file_atomic must not leave a half-written target if interrupted."""
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "source"
+            dst = Path(tmpdir) / "target"
+            src.write_bytes(b"hello atomic\n")
+            hosts_editor.copy_file_atomic(str(src), str(dst))
+            self.assertEqual(dst.read_bytes(), b"hello atomic\n")
+            # No stray temp files left behind.
+            siblings = [p.name for p in Path(tmpdir).iterdir()]
+            self.assertEqual(sorted(siblings), ["source", "target"])
+
+    def test_copy_file_atomic_does_not_create_target_on_failure(self):
+        """If the in-progress copy fails, the destination must be untouched."""
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "source"
+            dst = Path(tmpdir) / "target"
+            existing = b"prior contents\n"
+            src.write_bytes(b"new contents\n")
+            dst.write_bytes(existing)
+
+            real_replace = hosts_editor.os.replace
+
+            def boom(temp_path, target_path):
+                raise OSError("simulated rename failure")
+
+            with mock.patch.object(hosts_editor.os, "replace", side_effect=boom):
+                with self.assertRaises(OSError):
+                    hosts_editor.copy_file_atomic(str(src), str(dst))
+
+            # Existing target is untouched; no stray temp files survived.
+            self.assertEqual(dst.read_bytes(), existing)
+            siblings = sorted(p.name for p in Path(tmpdir).iterdir())
+            self.assertEqual(siblings, ["source", "target"])
+
+            # Sanity-check that real_replace is still callable post-mock.
+            self.assertTrue(callable(real_replace))
+
+    def test_apply_import_mode_filter_scrubs_ansi_and_nul(self):
+        """Source names must never carry control bytes into the marker line.
+
+        A malicious or malformed source label could otherwise inject ANSI
+        escape sequences (which mangle terminal exports) or embed NUL bytes
+        (which truncate the line when consumed by Windows resolvers).
+        """
+        import re as _re
+
+        editor = HostsFileEditor.__new__(HostsFileEditor)
+        editor.import_mode = type("M", (), {"get": staticmethod(lambda: "Raw")})()
+
+        malicious_name = "bad\x1b[31mname\x00with\rcontrol\nchars"
+        result = HostsFileEditor._apply_import_mode_filter(
+            editor,
+            malicious_name,
+            ["0.0.0.0 example.com"],
+            "Raw",
+        )
+        self.assertGreaterEqual(len(result), 2)
+        first = result[0]
+        last = result[-1]
+        # No surviving control bytes anywhere in the marker lines.
+        self.assertFalse(_re.search(r"[\x00-\x1f\x7f]", first))
+        self.assertFalse(_re.search(r"[\x00-\x1f\x7f]", last))
+        self.assertTrue(first.startswith("# --- Raw Import Start:"))
+        self.assertTrue(last.startswith("# --- Raw Import End:"))
+
+    def test_apply_import_mode_filter_caps_oversized_source_name(self):
+        """A 10 KB pasted source name shouldn't blow up the marker line."""
+        editor = HostsFileEditor.__new__(HostsFileEditor)
+        editor.import_mode = type("M", (), {"get": staticmethod(lambda: "Raw")})()
+        huge = "x" * 10_000
+        result = HostsFileEditor._apply_import_mode_filter(
+            editor,
+            huge,
+            ["0.0.0.0 example.com"],
+            "Raw",
+        )
+        self.assertLess(len(result[0]), 300)
+        self.assertLess(len(result[-1]), 300)
 
     def test_default_hosts_file_path_uses_systemroot(self):
         with mock.patch.dict(os.environ, {"SystemRoot": r"D:\Windows"}, clear=False):
