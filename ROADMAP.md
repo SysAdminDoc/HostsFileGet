@@ -1,7 +1,7 @@
 # HostsFileGet Roadmap
 
 Version: 2026-05-13 roadmap execution update
-Repo state basis: `main` through F044/F045/F046/F051/F052/F053/F054/F055/F056/F057/F058/F059/F060/F061/F062/F063/F064/F065/F066/F067 implementation plus external research current to 2026-05-13
+Repo state basis: `main` through F044/F045/F046/F051/F052/F053/F054/F055/F056/F057/F058/F059/F060/F061/F062/F063/F064/F065/F066/F067/F068 implementation plus external research current to 2026-05-13
 Scope: Windows-first desktop hosts-file editor, importer, cleaner, diagnostics, and safe writer
 
 This document supersedes the earlier broad idea dump. Useful shipped history has been preserved as baseline context, but the forward roadmap is now source-backed and tiered. Every active candidate cites at least one source ID from the appendix.
@@ -87,6 +87,7 @@ Non-negotiables:
 - [x] F065 - Certificate Transparency and typosquat watchdog (`docs/ct-typosquat-watchdog.md`, plan-only CT query queues, deterministic typo candidates, no automatic hosts writes)
 - [x] F066 - VirusTotal, URLhaus, MISP, STIX enrichment (`docs/cti-enrichment.md`, plan-only CTI request templates, local STIX bundle, no API-key storage)
 - [x] F067 - TLS certificate preview (`docs/tls-certificate-preview.md`, plan-only SNI-aware review commands, no socket opens or certificate caching)
+- [x] F068 - LLM-assisted "why blocked" summaries (`docs/why-blocked-summaries.md`, offline local evidence summaries, review-only LLM handoff prompts, no provider calls)
 
 ## State Of The Repo
 
@@ -95,8 +96,8 @@ Non-negotiables:
 - Language and runtime: Python 3.x, Tkinter desktop UI, Windows-first assumptions, PowerShell launcher.
 - Entry points: `hosts_editor.py` for GUI and CLI, `PythonLauncher.ps1` for elevated launch/bootstrap, `HostsFileGet.spec` for PyInstaller.
 - Packaging: PyInstaller one-file Windows EXE with `uac_admin=True`; build artifacts exist locally under `build/` and `dist/` but are not tracked. `requirements-tui.txt` keeps the prompt_toolkit terminal UI dependency optional.
-- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, `tests/test_benchmarks.py`, and `tests/test_package_manifests.py` contain 318 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation and contribution fixtures, encrypted profile sync fixtures, signed share patch fixtures, recovery-plan fixtures, WFP blocker companion fixtures, NRPT policy export fixtures, sandbox/VM hosts bundle fixtures, router/gateway bundle fixtures, managed package export fixtures, VS Code companion export fixtures, prompt_toolkit TUI dependency fixtures, local block page server fixtures, advanced DNS rewrite plan fixtures, CT/typosquat watchdog fixtures, CTI enrichment fixtures, TLS certificate preview fixtures, migration importer fixtures, export-format fixtures, DNS integration fixtures, cloud DNS adapter fixtures, source adapter plugin fixtures, local REST API fixtures, package manifest render fixtures, adblock syntax lint/quarantine fixtures, rule tier fixtures, IDN/homograph fixtures, threat-feed pack fixtures, CNAME cloaking workflow fixtures, encrypted-DNS bypass pack fixtures, DNS rebinding report fixtures, SafeSearch/restricted-mode template fixtures, profile activation schedule fixtures, profile quick-switch/tray dependency fixtures, source-bundle manifest fixtures, filter-builder query-history fixtures, watch-expression fixtures, source metrics fixtures, virtual-list fixtures, parallel import retry/order fixtures, provenance filter/export fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, NextDNS/Control D CSV logs, and find/replace.
-- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `data/i18n/README.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/cloud-dns-adapters.md`, `docs/router-gateway-adapters.md`, `docs/managed-package-exports.md`, `docs/vscode-companion.md`, `docs/tui.md`, `docs/block-page-server.md`, `docs/dns-rewrites.md`, `docs/ct-typosquat-watchdog.md`, `docs/cti-enrichment.md`, `docs/tls-certificate-preview.md`, `docs/adblock-lint.md`, `docs/rule-tiers.md`, `docs/idn-homograph.md`, `docs/threat-feed-packs.md`, `docs/cname-cloaking.md`, `docs/encrypted-dns-bypass.md`, `docs/encrypted-sync.md`, `docs/share-patches.md`, `docs/recovery-plan.md`, `docs/wfp-blocker-companion.md`, `docs/nrpt-policy-export.md`, `docs/sandbox-vm-hosts.md`, `docs/dns-rebinding.md`, `docs/safesearch-restricted-mode.md`, `docs/profile-activation-schedule.md`, `docs/profile-quick-switch.md`, `docs/source-adapter-plugins.md`, `docs/local-rest-api.md`, `docs/package-managers.md`, `docs/source-bundles.md`, `docs/filter-builder.md`, `docs/watch-expressions.md`, `docs/source-metrics.md`, `docs/parallel-imports.md`, `docs/virtualized-lists.md`, `docs/provenance-log.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `.github/ISSUE_TEMPLATE/translation.yml`, `LICENSE`, and this roadmap.
+- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, `tests/test_benchmarks.py`, and `tests/test_package_manifests.py` contain 321 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation and contribution fixtures, encrypted profile sync fixtures, signed share patch fixtures, recovery-plan fixtures, WFP blocker companion fixtures, NRPT policy export fixtures, sandbox/VM hosts bundle fixtures, router/gateway bundle fixtures, managed package export fixtures, VS Code companion export fixtures, prompt_toolkit TUI dependency fixtures, local block page server fixtures, advanced DNS rewrite plan fixtures, CT/typosquat watchdog fixtures, CTI enrichment fixtures, TLS certificate preview fixtures, why-blocked summary fixtures, migration importer fixtures, export-format fixtures, DNS integration fixtures, cloud DNS adapter fixtures, source adapter plugin fixtures, local REST API fixtures, package manifest render fixtures, adblock syntax lint/quarantine fixtures, rule tier fixtures, IDN/homograph fixtures, threat-feed pack fixtures, CNAME cloaking workflow fixtures, encrypted-DNS bypass pack fixtures, DNS rebinding report fixtures, SafeSearch/restricted-mode template fixtures, profile activation schedule fixtures, profile quick-switch/tray dependency fixtures, source-bundle manifest fixtures, filter-builder query-history fixtures, watch-expression fixtures, source metrics fixtures, virtual-list fixtures, parallel import retry/order fixtures, provenance filter/export fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, NextDNS/Control D CSV logs, and find/replace.
+- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `data/i18n/README.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/cloud-dns-adapters.md`, `docs/router-gateway-adapters.md`, `docs/managed-package-exports.md`, `docs/vscode-companion.md`, `docs/tui.md`, `docs/block-page-server.md`, `docs/dns-rewrites.md`, `docs/ct-typosquat-watchdog.md`, `docs/cti-enrichment.md`, `docs/tls-certificate-preview.md`, `docs/why-blocked-summaries.md`, `docs/adblock-lint.md`, `docs/rule-tiers.md`, `docs/idn-homograph.md`, `docs/threat-feed-packs.md`, `docs/cname-cloaking.md`, `docs/encrypted-dns-bypass.md`, `docs/encrypted-sync.md`, `docs/share-patches.md`, `docs/recovery-plan.md`, `docs/wfp-blocker-companion.md`, `docs/nrpt-policy-export.md`, `docs/sandbox-vm-hosts.md`, `docs/dns-rebinding.md`, `docs/safesearch-restricted-mode.md`, `docs/profile-activation-schedule.md`, `docs/profile-quick-switch.md`, `docs/source-adapter-plugins.md`, `docs/local-rest-api.md`, `docs/package-managers.md`, `docs/source-bundles.md`, `docs/filter-builder.md`, `docs/watch-expressions.md`, `docs/source-metrics.md`, `docs/parallel-imports.md`, `docs/virtualized-lists.md`, `docs/provenance-log.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `.github/ISSUE_TEMPLATE/translation.yml`, `LICENSE`, and this roadmap.
 - License: MIT.
 
 ### Product Reality
@@ -145,6 +146,7 @@ HostsFileGet already provides:
 - `--ct-watchdog-list` and `--ct-watchdog-plan` expose plan-only Certificate Transparency search queues and typosquat candidates without polling CT logs, storing OSINT credentials, or writing hosts entries.
 - `--cti-enrichment-list` and `--cti-enrichment-plan` expose plan-only VirusTotal, URLhaus, MISP, and STIX enrichment templates without executing provider requests, storing API keys, or converting scores directly into hosts entries.
 - `--tls-preview-list` and `--tls-preview-plan` expose plan-only SNI-aware TLS certificate review commands without opening sockets, performing certificate handshakes, caching certificate chains, or writing hosts entries.
+- `--why-blocked-summary` exposes offline local block explanations and review-only LLM handoff prompts without calling providers, uploading hosts data, or changing policy.
 - `--profile-schedule-list`, `--profile-schedule-add`, `--profile-schedule-apply`, and `--profile-schedule-at` expose guarded time-bound profile activation that switches app config only and never writes the system hosts file.
 - **Tools > Profile Quick Switch...** and optional **Tools > Start Tray Quick Switch...** expose config-only saved-profile switching without writing the system hosts file.
 - Optional local Git-backed history commands for snapshot, status, and admin-gated rollback with normal `.bak` backup creation.
@@ -321,7 +323,7 @@ Legend:
 | F065 | Certificate Transparency and typosquat watchdog | Security, OSINT | emerging | Guarded | 4 | 5 | External service dependency and false positives. | Later | C1, A1, A2, A7, S41-S43, O29 |
 | F066 | VirusTotal, URLhaus, MISP, STIX enrichment | Security, OSINT | common in security tools | Guarded | 4 | 5 | API keys, quotas, licensing, and privacy. | Later | C6, A1, A2, S44-S49 |
 | F067 | TLS certificate preview | Security, UX | emerging | Guarded | 3 | 4 | Network side effects; must be explicit and cached minimally. | Later | A8, S50-S53 |
-| F068 | LLM-assisted "why blocked" summaries | UX, data | rare | Guarded | 2 | 5 | Privacy/cost; prefer offline metadata before any API. | Later | C4, O17 |
+| F068 | LLM-assisted "why blocked" summaries | UX, data | rare | Guarded | 2 | 5 | Privacy/cost; prefer offline metadata before any API. | Later | C4, O17, S54-S55 |
 | F069 | Mobile DNS profile export QR | Mobile, distribution | common | Guarded | 3 | 4 | Hosts file does not roam; export DNS/provider config instead. | Later | C1, C5, K5 |
 | F070 | Roaming endpoint strategy | Mobile, offline | common | Guarded | 4 | 5 | Likely outside hosts scope; document integration rather than own it. | Later | C1, C2, K5 |
 | F071 | Multi-account user administration | Multi-user | common in servers | No | 2 | 5 | Contradicts local desktop scope; corporate managed lines cover the need better. | Rejected | O7, K11 |
@@ -400,13 +402,13 @@ Rationale: these items reduce maintenance risk, make the current product more tr
 
 ### Next
 
-1. Later-stage platform and enterprise items: F068-F070.
+1. Later-stage platform and enterprise items: F069-F070.
 
 Rationale: these are valuable and well-supported by the market, but most require the Now-phase source manifest, profile model, and test/release foundations.
 
 ### Later
 
-1. Advanced DNS/security enrichment: F068, F069, F070.
+1. Advanced DNS/security enrichment: F069, F070.
 
 Rationale: these are plausible directions, but they either introduce credentials, services, signing, network-stack risk, or product-scope expansion.
 
@@ -600,6 +602,8 @@ A hostile reviewer would likely object to four things:
 | S51 | https://www.rfc-editor.org/rfc/rfc8446 | TLS 1.3 certificate authentication and negotiated security context |
 | S52 | https://www.rfc-editor.org/rfc/rfc5280 | X.509 certificate and Subject Alternative Name semantics for host identity review |
 | S53 | https://docs.openssl.org/master/man1/openssl-s_client/ | OpenSSL `s_client` command options for SNI, hostname verification, and certificate-chain preview |
+| S54 | https://developers.openai.com/api/docs/guides/your-data | OpenAI API data controls, application state, and abuse-monitoring retention notes for external LLM handoff prompts |
+| S55 | https://genai.owasp.org/llm-top-10/ | OWASP LLM application sensitive-information disclosure risk and sanitization guidance |
 
 ### Academic, Research, And Engineering Sources
 

@@ -4,6 +4,10 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Why-blocked summaries**
+- Added `--why-blocked-summary` and optional `--why-blocked-whitelist` for offline domain-block explanations.
+- The report combines local editor matches, whitelist coverage, source/provenance evidence when available, recommended triage actions, and a review-only LLM handoff prompt while making no provider calls.
+
 **TLS certificate preview**
 - Added `--tls-preview-list` and `--tls-preview-plan` for plan-only SNI-aware TLS certificate review queues.
 - The plan exports normalized public hostnames, OpenSSL command arrays, Python `ssl` review guidance, expected certificate fields, and CSV review rows while warning that HostsFileGet does not open sockets or cache certificate chains.

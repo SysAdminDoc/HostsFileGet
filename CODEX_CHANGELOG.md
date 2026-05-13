@@ -136,6 +136,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F066 complete. Next roadmap item: F067 TLS certificate preview.
 - Completed F067: added plan-only TLS certificate preview helpers, GUI catalog entry, `--tls-preview-list`, `--tls-preview-plan`, SNI-aware OpenSSL command generation, Python `ssl` review guidance, CSV review queue output, docs, and regression tests. HostsFileGet does not open sockets, perform TLS handshakes, cache certificate chains, or auto-write hosts entries from certificate metadata.
 - Updated `ROADMAP.md` to mark F067 complete. Next roadmap item: F068 LLM-assisted "why blocked" summaries.
+- Completed F068: added offline why-blocked summary helpers, GUI/context-menu report entry, `--why-blocked-summary`, optional `--why-blocked-whitelist`, bounded local evidence output, and review-only LLM handoff prompts. HostsFileGet does not call LLM APIs, upload hosts data, store provider credentials, or auto-write policy changes from generated prose.
+- Updated `ROADMAP.md` to mark F068 complete. Next roadmap item: F069 mobile DNS profile export QR.
 
 ## Scope
 
