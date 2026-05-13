@@ -44,6 +44,6 @@ Repeated snapshots with identical hosts content are reported as unchanged instea
 ## Limits
 
 - Git must be installed and available on `PATH`.
-- History is local only. HostsFileGet does not push, pull, sync, or connect to a remote repository.
+- History is local only. HostsFileGet does not push, pull, sync, or connect this recovery repository to a remote. Encrypted profile sync uses a separate explicit Git worktree; see `docs/encrypted-sync.md`.
 - Restore is a CLI operation in this first implementation. Use `--history-status` to copy a commit hash, then restore explicitly.
 - The Git archive complements normal `.bak` files; it does not replace preview-before-write, backups, or panic restore.

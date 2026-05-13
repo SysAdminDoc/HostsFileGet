@@ -86,6 +86,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - CLI profile list/import/apply/export commands that never write the hosts file
   - guarded time-bound profile activation commands that switch app config only
   - GUI profile quick switching, plus optional tray quick switching when `pystray` and Pillow are installed
+  - encrypted opt-in profile sync through an explicit Git worktree and GPG passphrase
   - scheduled-update activity reports backed by bounded silent-run logs
   - managed portable bundle config export and config-location reporting
   - versioned English string catalog foundation for future localization
@@ -259,6 +260,14 @@ $env:HOSTSFILEGET_API_TOKEN = "replace-with-at-least-16-random-chars"
 python hosts_editor.py --api-serve
 ```
 
+Export or import encrypted profile sync bundles through a Git worktree:
+
+```powershell
+$env:HOSTSFILEGET_SYNC_PASSPHRASE = "use-a-long-random-passphrase"
+python hosts_editor.py --sync-git-export C:\path\to\sync-worktree
+python hosts_editor.py --sync-git-import C:\path\to\sync-worktree
+```
+
 Generate guarded cloud-DNS replay plans or extract blocked domains from cloud DNS CSV log exports:
 
 ```powershell
@@ -344,6 +353,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Declarative profile files: `docs/declarative-config.md`
 - CLI profile management: `docs/cli-profiles.md`
 - Profile quick switch: `docs/profile-quick-switch.md`
+- Encrypted profile sync: `docs/encrypted-sync.md`
 - Optional Git history: `docs/git-history.md`
 - Scheduler activity report: `docs/scheduler-activity.md`
 - Portable bundle config: `docs/portable-config.md`

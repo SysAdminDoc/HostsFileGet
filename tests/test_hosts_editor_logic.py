@@ -23,6 +23,7 @@ from hosts_editor import (
     FTL_BLOCKED_STATUS_CODES,
     HostsFileEditor,
     I18N_CATALOG_SCHEMA_VERSION,
+    PROFILE_SYNC_PAYLOAD_SCHEMA,
     PROVENANCE_EVENT_KINDS,
     PROFILE_SCHEMA_VERSION,
     SOURCE_HEALTH_REPORT_SCHEMA_VERSION,
@@ -44,6 +45,7 @@ from hosts_editor import (
     build_i18n_contribution_template,
     build_local_api_clean_preview_payload,
     build_local_api_status_payload,
+    build_profile_sync_payload,
     build_entry_provenance_report,
     build_pinned_export_payload,
     build_provenance_log_report,
@@ -102,6 +104,7 @@ from hosts_editor import (
     parse_schtasks_query_output,
     load_declarative_config_text,
     apply_declarative_profile_to_config,
+    apply_profile_sync_payload_to_config,
     upsert_profile_in_config,
     parse_pihole_ftl_blocked_domains,
     parse_switchhosts_export_text,
@@ -151,6 +154,7 @@ from hosts_editor import (
     format_declarative_config_payload,
     format_declarative_profile_summary,
     format_profile_list_summary,
+    format_profile_sync_report,
     format_git_history_status_report,
     format_cloud_dns_adapter_catalog,
     format_cloud_dns_adapter_report,
@@ -183,6 +187,7 @@ from hosts_editor import (
     get_source_cache_body_path,
     get_config_root_dir,
     get_git_history_dir,
+    get_profile_sync_git_dir,
     list_cname_cloaking_packs,
     list_cname_cloaking_sources,
     list_encrypted_dns_bypass_packs,
@@ -212,6 +217,7 @@ from hosts_editor import (
     read_http_body_limited,
     read_cli_activity_events,
     read_git_history_snapshot,
+    read_profile_sync_git_import,
     read_text_file_lines,
     quarantine_adblock_rule_lines,
     remove_import_section,
@@ -228,6 +234,7 @@ from hosts_editor import (
     sanitize_i18n_catalog,
     sanitize_profile_activation_schedule,
     sanitize_profile_id,
+    sanitize_profile_sync_payload,
     sanitize_profile_snapshot,
     sanitize_profiles_snapshot,
     sanitize_source_cache_metadata,
@@ -248,6 +255,7 @@ from hosts_editor import (
     update_active_profile_snapshot,
     upsert_watch_expression,
     write_git_history_snapshot,
+    write_profile_sync_git_export,
     write_portable_bundle_config,
     write_text_file_atomic,
     write_bytes_file_atomic,
@@ -2685,6 +2693,24 @@ profile:
             self.assertEqual(hosts_editor._handle_cli_args(["--i18n-validate", "de-DE.json"]), 1)
             mocked_validate.assert_called_once_with("de-DE.json")
 
+        with mock.patch.object(hosts_editor, "_cli_profile_sync_export", return_value=0) as mocked_sync_export:
+            self.assertEqual(
+                hosts_editor._handle_cli_args([
+                    "--sync-git-export", "sync-repo",
+                    "--sync-passphrase-env", "SYNC_SECRET",
+                    "--sync-git-push",
+                ]),
+                0,
+            )
+            mocked_sync_export.assert_called_once_with("sync-repo", "SYNC_SECRET", True)
+
+        with mock.patch.object(hosts_editor, "_cli_profile_sync_import", return_value=0) as mocked_sync_import:
+            self.assertEqual(
+                hosts_editor._handle_cli_args(["--sync-git-import", "sync-repo", "--sync-git-pull"]),
+                0,
+            )
+            mocked_sync_import.assert_called_once_with("sync-repo", "HOSTSFILEGET_SYNC_PASSPHRASE", True)
+
     def test_handle_cli_args_routes_cloud_dns_flags(self):
         with mock.patch.object(hosts_editor, "_cli_cloud_adapter_list", return_value=0) as mocked_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--cloud-adapter-list"]), 0)
@@ -3033,6 +3059,100 @@ profile:
         self.assertEqual(unchanged["status"], "unchanged")
         self.assertEqual(len(snapshots), 1)
         self.assertEqual(restored.splitlines(), content.splitlines())
+
+    def test_profile_sync_payload_applies_profiles_without_operational_metadata(self):
+        source_config = {
+            "whitelist": "allow.example\n",
+            "source_last_fetched": {"https://example.com/hosts.txt": "2026-05-12T12:00:00"},
+            "profiles": [
+                {
+                    "id": "work",
+                    "name": "Work",
+                    "whitelist": "work.example\n",
+                    "custom_sources": [{"name": "Work Feed", "url": "https://example.com/work.txt"}],
+                    "pinned_domains": ["Pinned.Example"],
+                    "preferred_block_sink": "127.0.0.1",
+                }
+            ],
+            "active_profile_id": "work",
+        }
+        payload = build_profile_sync_payload(
+            source_config,
+            os.getcwd(),
+            now=datetime.datetime(2026, 5, 12, 9, 30, 0),
+        )
+
+        self.assertEqual(payload["schema"], PROFILE_SYNC_PAYLOAD_SCHEMA)
+        self.assertEqual(payload["active_profile_id"], "work")
+        self.assertNotIn("source_last_fetched", payload)
+        sanitized = sanitize_profile_sync_payload(payload)
+        target_config = {
+            "whitelist": "old.example\n",
+            "source_last_fetched": {"https://existing.example/hosts.txt": "2026-05-11T12:00:00"},
+        }
+        merged = apply_profile_sync_payload_to_config(target_config, sanitized, os.getcwd())
+
+        self.assertEqual(merged["active_profile_id"], "work")
+        self.assertEqual(merged["whitelist"], "work.example\n")
+        self.assertEqual(merged["pinned_domains"], ["pinned.example"])
+        self.assertIn("https://existing.example/hosts.txt", merged["source_last_fetched"])
+        self.assertNotIn("https://example.com/hosts.txt", merged["source_last_fetched"])
+
+    def test_profile_sync_git_export_import_roundtrips_with_fake_gpg(self):
+        import tempfile
+        from pathlib import Path
+
+        git = hosts_editor.resolve_git_executable()
+        if not git:
+            self.skipTest("git executable not available")
+
+        def fake_gpg(args, input=None, capture_output=None, text=None, timeout=None, check=None):
+            output_path = Path(args[args.index("--output") + 1])
+            input_path = Path(args[-1])
+            if "--decrypt" in args:
+                encrypted = input_path.read_text(encoding="utf-8")
+                output_path.write_text(encrypted.removeprefix("encrypted:"), encoding="utf-8")
+            else:
+                output_path.write_text("encrypted:" + input_path.read_text(encoding="utf-8"), encoding="utf-8")
+            return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        source_config = {
+            "profiles": [
+                {
+                    "id": "family",
+                    "name": "Family",
+                    "whitelist": "school.example\n",
+                    "pinned_domains": ["ads.example"],
+                }
+            ],
+            "active_profile_id": "family",
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_dir = str(Path(tmpdir) / "sync")
+            export = write_profile_sync_git_export(
+                repo_dir,
+                source_config,
+                "long-enough-passphrase",
+                default_last_open_dir=os.getcwd(),
+                git_executable=git,
+                gpg_executable="fake-gpg",
+                gpg_runner=fake_gpg,
+            )
+            imported = read_profile_sync_git_import(
+                repo_dir,
+                {"whitelist": "old.example\n"},
+                "long-enough-passphrase",
+                default_last_open_dir=os.getcwd(),
+                git_executable=git,
+                gpg_executable="fake-gpg",
+                gpg_runner=fake_gpg,
+            )
+
+        self.assertEqual(export["status"], "committed")
+        self.assertEqual(imported["config"]["active_profile_id"], "family")
+        self.assertEqual(imported["config"]["whitelist"], "school.example\n")
+        self.assertIn("Hosts file writes: none", format_profile_sync_report(imported))
 
     def test_cli_history_restore_refuses_when_hosts_file_is_disabled(self):
         import tempfile
