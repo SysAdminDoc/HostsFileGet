@@ -144,6 +144,11 @@ SHARE_PATCH_SCHEMA = "hostsfileget.share-patch.v1"
 SHARE_PATCH_TYPES = ("allowlist", "profile")
 RECOVERY_PLAN_SCHEMA = "hostsfileget.recovery-plan.v1"
 RECOVERY_DESCRIPTION_MAX_LENGTH = 80
+WFP_BLOCKER_PLAN_SCHEMA = "hostsfileget.wfp-blocker-plan.v1"
+WFP_BLOCKER_RULE_GROUP = "HostsFileGet-WFP-IP-CIDR-Companion"
+WFP_BLOCKER_RULE_PREFIX = "HostsFileGet IP/CIDR Block"
+WFP_BLOCKER_TARGET_CHUNK_SIZE = 50
+WFP_BLOCKER_PREFIX_MAX_LENGTH = 64
 SCHEDULED_TASK_NAME = "HostsFileGet Auto-Update"
 CLI_LOG_FILENAME = "cli.log"
 CLI_ACTIVITY_FILENAME = "cli-activity.jsonl"
@@ -4000,6 +4005,268 @@ def format_recovery_apply_plan(plan: dict) -> str:
     lines.extend(["", "Apply contract:"])
     for item in plan.get("apply_contract", []):
         lines.append(f"- {item}")
+    return "\n".join(lines)
+
+
+def sanitize_wfp_rule_prefix(value: str | None = None) -> str:
+    prefix = re.sub(r"\s+", " ", str(value or WFP_BLOCKER_RULE_PREFIX).strip())
+    if not prefix or _contains_control_chars(prefix):
+        prefix = WFP_BLOCKER_RULE_PREFIX
+    return prefix[:WFP_BLOCKER_PREFIX_MAX_LENGTH]
+
+
+def _wfp_target_candidate(value: str) -> str:
+    candidate = str(value or "").strip().strip("`'\"(),;")
+    if candidate.startswith("[") and "]" in candidate:
+        candidate = candidate[1:candidate.index("]")]
+    elif candidate.startswith(("http://", "https://")):
+        try:
+            candidate = urllib.parse.urlsplit(candidate).hostname or ""
+        except ValueError:
+            candidate = ""
+    if candidate.count(":") == 1 and "/" not in candidate:
+        host, port = candidate.rsplit(":", 1)
+        if port.isdigit() and IPV4_REGEX.match(host):
+            candidate = host
+    return candidate.strip()
+
+
+def normalize_wfp_ip_cidr_target(value: str) -> str:
+    candidate = _wfp_target_candidate(value)
+    if not candidate:
+        raise ValueError("empty target")
+    if "-" in candidate:
+        raise ValueError("IP ranges are not supported; convert ranges to CIDR first")
+    try:
+        if "/" in candidate:
+            network = ipaddress.ip_network(candidate, strict=False)
+            return network.with_prefixlen
+        address = ipaddress.ip_address(candidate)
+        return str(address)
+    except ValueError as exc:
+        raise ValueError("not an IP or CIDR target") from exc
+
+
+def _wfp_target_network(target: str):
+    if "/" in target:
+        return ipaddress.ip_network(target, strict=False)
+    address = ipaddress.ip_address(target)
+    return ipaddress.ip_network(f"{address}/{address.max_prefixlen}", strict=False)
+
+
+def _wfp_target_reject_reason(target: str) -> str:
+    network = _wfp_target_network(target)
+    if network.is_unspecified:
+        return "unspecified address is not exported as a remote firewall target"
+    if network.is_loopback:
+        return "loopback address is not exported as a remote firewall target"
+    if network.is_multicast:
+        return "multicast address is not exported as a remote firewall target"
+    return ""
+
+
+def _wfp_target_risk_tags(target: str) -> list[str]:
+    network = _wfp_target_network(target)
+    tags = []
+    if network.is_private:
+        tags.append("private")
+    if network.is_link_local:
+        tags.append("link-local")
+    if network.is_reserved:
+        tags.append("reserved")
+    if not network.is_global:
+        tags.append("non-global")
+    return sorted(set(tags))
+
+
+def _token_may_be_ip_literal(token: str) -> bool:
+    return any(ch.isdigit() for ch in token) or ":" in token or "/" in token
+
+
+def parse_wfp_blocker_targets(text: str) -> dict:
+    targets: list[str] = []
+    rejected: list[dict[str, str | int]] = []
+    seen: set[str] = set()
+    for line_no, line in enumerate(str(text or "").splitlines(), 1):
+        body = line.split("#", 1)[0].strip()
+        if not body:
+            continue
+        for raw_token in TOKEN_SPLITTER.split(body):
+            token = raw_token.strip()
+            if not token:
+                continue
+            try:
+                target = normalize_wfp_ip_cidr_target(token)
+            except ValueError as exc:
+                if _token_may_be_ip_literal(token):
+                    rejected.append({"line": line_no, "token": token[:120], "reason": str(exc)})
+                continue
+            reject_reason = _wfp_target_reject_reason(target)
+            if reject_reason:
+                rejected.append({"line": line_no, "token": token[:120], "reason": reject_reason})
+                continue
+            if target in seen:
+                continue
+            seen.add(target)
+            targets.append(target)
+    return {"targets": targets, "rejected": rejected}
+
+
+def _powershell_array_literal(values: list[str]) -> str:
+    return "@(" + ", ".join(_powershell_single_quote(value) for value in values) + ")"
+
+
+def build_wfp_blocker_rule_command(
+    targets: list[str],
+    *,
+    rule_index: int,
+    direction: str = "Outbound",
+    rule_prefix: str | None = None,
+    group: str = WFP_BLOCKER_RULE_GROUP,
+) -> str:
+    if not targets:
+        raise ValueError("at least one target is required")
+    safe_direction = "Inbound" if str(direction).strip().lower() == "inbound" else "Outbound"
+    display_name = f"{sanitize_wfp_rule_prefix(rule_prefix)} {safe_direction} {rule_index:03d}"
+    description = "Generated by HostsFileGet as a plan-only companion export; review before execution."
+    return (
+        "New-NetFirewallRule "
+        f"-DisplayName {_powershell_single_quote(display_name)} "
+        f"-Group {_powershell_single_quote(group)} "
+        f"-Direction {safe_direction} "
+        "-Action Block "
+        f"-RemoteAddress {_powershell_array_literal(targets)} "
+        "-Profile Any "
+        f"-Description {_powershell_single_quote(description)}"
+    )
+
+
+def build_wfp_blocker_companion_plan(
+    text: str,
+    *,
+    rule_prefix: str | None = None,
+    now=None,
+    chunk_size: int = WFP_BLOCKER_TARGET_CHUNK_SIZE,
+) -> dict:
+    parsed = parse_wfp_blocker_targets(text)
+    targets = parsed["targets"]
+    rejected = parsed["rejected"]
+    safe_prefix = sanitize_wfp_rule_prefix(rule_prefix)
+    created_at = now or datetime.datetime.now()
+    if isinstance(created_at, datetime.datetime):
+        created_at = created_at.isoformat(timespec="seconds")
+    chunk_size = max(1, int(chunk_size or WFP_BLOCKER_TARGET_CHUNK_SIZE))
+    chunks = [targets[index:index + chunk_size] for index in range(0, len(targets), chunk_size)]
+
+    clear_command = (
+        "Get-NetFirewallRule "
+        f"-Group {_powershell_single_quote(WFP_BLOCKER_RULE_GROUP)} "
+        "-ErrorAction SilentlyContinue | Remove-NetFirewallRule"
+    )
+    commands = [{
+        "id": "clear-existing-group",
+        "description": "Remove prior rules created for this companion group before adding the reviewed replacement set.",
+        "command": ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", clear_command],
+    }]
+    rule_commands = []
+    for index, chunk in enumerate(chunks, 1):
+        command = build_wfp_blocker_rule_command(chunk, rule_index=index, rule_prefix=safe_prefix)
+        rule_commands.append(command)
+        commands.append({
+            "id": f"add-outbound-block-{index:03d}",
+            "description": f"Add outbound block rule {index} for {len(chunk)} remote IP/CIDR target(s).",
+            "target_count": len(chunk),
+            "targets": chunk,
+            "command": ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+        })
+
+    risk_summary: dict[str, int] = {}
+    for target in targets:
+        tags = _wfp_target_risk_tags(target) or ["global"]
+        for tag in tags:
+            risk_summary[tag] = risk_summary.get(tag, 0) + 1
+
+    warnings = [
+        "Plan-only: HostsFileGet does not execute firewall or WFP commands.",
+        "Windows Firewall with Advanced Security is implemented on WFP; this export uses firewall rules, not a driver.",
+        "Review targets and rollback before running the script from an elevated PowerShell session.",
+    ]
+    if any(tag in risk_summary for tag in ("private", "link-local", "reserved", "non-global")):
+        warnings.append("The plan includes non-global ranges; blocking LAN, VPN, or infrastructure ranges can break local workflows.")
+    if rejected:
+        warnings.append("Some tokens were rejected because they are not supported IP/CIDR remote-address targets.")
+
+    script_lines = [
+        "# HostsFileGet WFP IP/CIDR blocker companion plan",
+        "# Review before running as Administrator. This file is not executed by HostsFileGet.",
+        "$ErrorActionPreference = 'Stop'",
+        clear_command,
+    ]
+    script_lines.extend(rule_commands)
+    if not rule_commands:
+        script_lines.append("# No firewall rules were generated because no valid IP/CIDR targets were found.")
+
+    return {
+        "schema": WFP_BLOCKER_PLAN_SCHEMA,
+        "app_version": APP_VERSION,
+        "created_at": str(created_at),
+        "plan_only": True,
+        "companion_required": True,
+        "enforcement_surface": "Windows Defender Firewall with Advanced Security via Windows Filtering Platform",
+        "driver_boundary": "HostsFileGet does not ship or load a WFP callout driver; use a reviewed companion script or managed firewall deployment.",
+        "rule_group": WFP_BLOCKER_RULE_GROUP,
+        "rule_prefix": safe_prefix,
+        "direction": "Outbound",
+        "target_count": len(targets),
+        "rejected_count": len(rejected),
+        "risk_summary": risk_summary,
+        "targets": targets,
+        "rejected": rejected,
+        "commands": commands,
+        "powershell_script": "\n".join(script_lines),
+        "rollback": [
+            f"Get-NetFirewallRule -Group {_powershell_single_quote(WFP_BLOCKER_RULE_GROUP)} | Remove-NetFirewallRule",
+            "Export local firewall policy before broad deployment when enterprise rollback is required.",
+        ],
+        "warnings": warnings,
+        "references": ["S3", "K1"],
+    }
+
+
+def format_wfp_blocker_companion_plan(plan: dict) -> str:
+    lines = [
+        "WFP IP/CIDR Blocker Companion Plan",
+        f"Schema: {plan.get('schema')}",
+        f"Plan only: {'yes' if plan.get('plan_only') else 'no'}",
+        f"Surface: {plan.get('enforcement_surface')}",
+        f"Rule group: {plan.get('rule_group')}",
+        f"Direction: {plan.get('direction')}",
+        f"Targets: {int(plan.get('target_count') or 0):,}",
+        f"Rejected tokens: {int(plan.get('rejected_count') or 0):,}",
+        "",
+        "Risk summary:",
+    ]
+    risk_summary = plan.get("risk_summary") or {}
+    if risk_summary:
+        for key in sorted(risk_summary):
+            lines.append(f"- {key}: {risk_summary[key]}")
+    else:
+        lines.append("- none")
+    lines.extend(["", "Commands:"])
+    for command in plan.get("commands") or []:
+        lines.append(f"- {command.get('id')}: {_format_command_for_display(command.get('command'))}")
+    rejected = plan.get("rejected") or []
+    if rejected:
+        lines.extend(["", "Rejected samples:"])
+        for item in rejected[:5]:
+            lines.append(f"- line {item.get('line')}: {item.get('token')} ({item.get('reason')})")
+    lines.extend(["", "Boundary:", f"- {plan.get('driver_boundary')}"])
+    lines.extend(["", "Warnings:"])
+    for warning in plan.get("warnings") or []:
+        lines.append(f"- {warning}")
+    references = plan.get("references") or []
+    if references:
+        lines.extend(["", "Roadmap source IDs:", f"- {', '.join(references)}"])
     return "\n".join(lines)
 
 
@@ -21104,6 +21371,22 @@ def _cli_recovery_plan(output_path: str | None = None, description: str | None =
     return 0
 
 
+def _cli_wfp_blocker_plan(input_path: str, output_path: str, rule_prefix: str | None = None) -> int:
+    try:
+        text = read_text_file_content(input_path)
+        plan = build_wfp_blocker_companion_plan(text, rule_prefix=rule_prefix)
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        write_text_file_atomic(output_path, json.dumps(plan, indent=2))
+    except (OSError, ValueError) as exc:
+        _cli_print(f"WFP blocker plan failed: {exc}")
+        return 2
+    _cli_print(format_wfp_blocker_companion_plan(plan))
+    _cli_print(f"Wrote WFP blocker companion plan to {output_path}")
+    return 0
+
+
 def _cli_profile_schedule_list(at_value: str | None = None) -> int:
     try:
         config_path = get_primary_config_path("hosts_editor_config.json")
@@ -21259,6 +21542,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--recovery-plan",
         "--recovery-plan-output",
         "--recovery-plan-description",
+        "--wfp-blocker-plan",
+        "--wfp-rule-prefix",
         "--profile-schedule-list",
         "--profile-schedule-add",
         "--profile-schedule-days",
@@ -21331,6 +21616,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--patch-gpg-key=",
         "--recovery-plan-output=",
         "--recovery-plan-description=",
+        "--wfp-blocker-plan=",
+        "--wfp-rule-prefix=",
         "--profile-schedule-add=",
         "--profile-schedule-days=",
         "--profile-schedule-name=",
@@ -21403,6 +21690,13 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--recovery-plan", action="store_true", help="Print a guarded restore-point/VSS recovery plan without executing system recovery commands.")
     parser.add_argument("--recovery-plan-output", metavar="PATH", help="Write the guarded recovery plan JSON to PATH.")
     parser.add_argument("--recovery-plan-description", metavar="TEXT", help="Description to include in the planned Windows restore-point command.")
+    parser.add_argument(
+        "--wfp-blocker-plan",
+        nargs=2,
+        metavar=("INPUT", "OUTPUT"),
+        help="Write a plan-only Windows Firewall/WFP IP/CIDR blocker companion JSON from INPUT to OUTPUT.",
+    )
+    parser.add_argument("--wfp-rule-prefix", metavar="TEXT", help="Display-name prefix for --wfp-blocker-plan rules.")
     parser.add_argument("--profile-schedule-list", action="store_true", help="Show the time-bound profile activation schedule without writing files.")
     parser.add_argument(
         "--profile-schedule-add",
@@ -21583,6 +21877,10 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         return _cli_patch_apply(args.patch_apply[0], args.patch_apply[1])
     if args.recovery_plan or args.recovery_plan_output or args.recovery_plan_description:
         return _cli_recovery_plan(args.recovery_plan_output, args.recovery_plan_description)
+    if args.wfp_rule_prefix and not args.wfp_blocker_plan:
+        parser.error("--wfp-rule-prefix requires --wfp-blocker-plan INPUT OUTPUT")
+    if args.wfp_blocker_plan:
+        return _cli_wfp_blocker_plan(args.wfp_blocker_plan[0], args.wfp_blocker_plan[1], args.wfp_rule_prefix)
     if args.profile_schedule_add:
         return _cli_profile_schedule_add(
             args.profile_schedule_add[0],

@@ -32,6 +32,7 @@ from hosts_editor import (
     SOURCE_MANIFEST_SCHEMA_VERSION,
     STALE_FRESH_HOURS,
     STALE_WARN_HOURS,
+    WFP_BLOCKER_PLAN_SCHEMA,
     append_provenance_event,
     append_cli_activity_event,
     add_domain_to_whitelist_text,
@@ -50,6 +51,7 @@ from hosts_editor import (
     build_profile_share_patch,
     build_recovery_apply_plan,
     build_restore_point_command,
+    build_wfp_blocker_companion_plan,
     build_entry_provenance_report,
     build_pinned_export_payload,
     build_provenance_log_report,
@@ -115,6 +117,7 @@ from hosts_editor import (
     parse_switchhosts_export_text,
     parse_allowlist_patch_text,
     parse_windows_dns_client_events_xml,
+    parse_wfp_blocker_targets,
     sanitize_git_history_ref,
     summarize_source_contributions,
     build_export_domain_records,
@@ -163,6 +166,7 @@ from hosts_editor import (
     format_profile_sync_report,
     format_share_patch_summary,
     format_recovery_apply_plan,
+    format_wfp_blocker_companion_plan,
     format_git_history_status_report,
     format_cloud_dns_adapter_catalog,
     format_cloud_dns_adapter_report,
@@ -2765,6 +2769,16 @@ profile:
             )
             mocked_recovery.assert_called_once_with("recovery.json", "Before apply")
 
+        with mock.patch.object(hosts_editor, "_cli_wfp_blocker_plan", return_value=0) as mocked_wfp:
+            self.assertEqual(
+                hosts_editor._handle_cli_args([
+                    "--wfp-blocker-plan", "ips.txt", "wfp.json",
+                    "--wfp-rule-prefix", "Corp Block",
+                ]),
+                0,
+            )
+            mocked_wfp.assert_called_once_with("ips.txt", "wfp.json", "Corp Block")
+
     def test_handle_cli_args_routes_cloud_dns_flags(self):
         with mock.patch.object(hosts_editor, "_cli_cloud_adapter_list", return_value=0) as mocked_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--cloud-adapter-list"]), 0)
@@ -3313,6 +3327,58 @@ profile:
         self.assertEqual(result, 0)
         self.assertTrue(payload["plan_only"])
         self.assertEqual(payload["description"], "Before unit test")
+
+    def test_wfp_blocker_companion_plan_is_plan_only_and_chunks_targets(self):
+        parsed = parse_wfp_blocker_targets(
+            "1.1.1.1\n"
+            "8.8.8.0/24 resolver\n"
+            "0.0.0.0 sink\n"
+            "127.0.0.1 loopback\n"
+            "2001:4860:4860::8888\n"
+        )
+        plan = build_wfp_blocker_companion_plan(
+            "\n".join(parsed["targets"]),
+            rule_prefix="Test Block",
+            now=datetime.datetime(2026, 5, 12, 12, 0, 0),
+            chunk_size=2,
+        )
+        formatted = format_wfp_blocker_companion_plan(plan)
+
+        self.assertEqual(parsed["targets"], ["1.1.1.1", "8.8.8.0/24", "2001:4860:4860::8888"])
+        self.assertEqual(len(parsed["rejected"]), 2)
+        self.assertEqual(plan["schema"], WFP_BLOCKER_PLAN_SCHEMA)
+        self.assertTrue(plan["plan_only"])
+        self.assertTrue(plan["companion_required"])
+        self.assertEqual(plan["target_count"], 3)
+        self.assertEqual(len(plan["commands"]), 3)
+        self.assertIn("New-NetFirewallRule", plan["powershell_script"])
+        self.assertIn("Remove-NetFirewallRule", plan["powershell_script"])
+        self.assertIn("does not ship or load a WFP callout driver", plan["driver_boundary"])
+        self.assertIn("S3", plan["references"])
+        self.assertIn("Plan only: yes", formatted)
+
+    def test_cli_wfp_blocker_plan_writes_json_without_firewall_changes(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "ips.txt"
+            plan_path = Path(tmpdir) / "wfp-plan.json"
+            input_path.write_text(
+                "1.1.1.1\n192.168.0.0/24\n0.0.0.0\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(hosts_editor, "_cli_print"):
+                result = hosts_editor._cli_wfp_blocker_plan(str(input_path), str(plan_path), "Unit Block")
+            payload = json.loads(plan_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result, 0)
+        self.assertTrue(payload["plan_only"])
+        self.assertEqual(payload["target_count"], 2)
+        self.assertEqual(payload["rejected_count"], 1)
+        self.assertIn("private", payload["risk_summary"])
+        self.assertIn("New-NetFirewallRule", payload["powershell_script"])
 
     def test_cli_history_restore_refuses_when_hosts_file_is_disabled(self):
         import tempfile

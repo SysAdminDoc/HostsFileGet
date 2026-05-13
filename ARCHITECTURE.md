@@ -79,6 +79,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `docs/encrypted-sync.md` | GPG-encrypted profile sync through explicit Git worktrees |
 | `docs/share-patches.md` | Detached-signature allowlist/profile patch sharing workflow |
 | `docs/recovery-plan.md` | Plan-only restore-point/VSS recovery spike for high-risk apply reviews |
+| `docs/wfp-blocker-companion.md` | Plan-only Windows Firewall/WFP IP/CIDR blocker companion export |
 | `docs/git-history.md` | Optional local Git-backed hosts snapshot and restore behavior |
 | `docs/scheduler-activity.md` | Scheduled-update silent logging and activity report behavior |
 | `docs/portable-config.md` | Local-vs-portable config resolution and portable bundle export behavior |
@@ -142,6 +143,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Encrypted profile sync helpers: `build_profile_sync_payload`, `sanitize_profile_sync_payload`, `encrypt_profile_sync_payload`, `decrypt_profile_sync_payload`, `write_profile_sync_git_export`, `read_profile_sync_git_import`, `format_profile_sync_report`.
 - Signed share patch helpers: `build_allowlist_share_patch`, `build_profile_share_patch`, `sanitize_share_patch_payload`, `apply_share_patch_payload_to_config`, `sign_share_patch_file`, `verify_share_patch_signature`, `format_share_patch_summary`.
 - Recovery plan helpers: `build_recovery_apply_plan`, `build_restore_point_command`, `format_recovery_apply_plan`.
+- WFP blocker companion helpers: `parse_wfp_blocker_targets`, `build_wfp_blocker_companion_plan`, `format_wfp_blocker_companion_plan`.
 - Scheduler activity helpers: `build_scheduler_update_command`, `query_scheduled_task_status`, `append_cli_activity_event`, `build_scheduler_activity_report`, `format_scheduler_activity_report`.
 - Transactional hosts enable/disable helpers: `disable_hosts_file_transactionally`, `enable_hosts_file_transactionally`.
 - Download guards: `read_http_body_limited`, `decode_downloaded_lines`, `looks_like_html_document`.
@@ -231,6 +233,7 @@ The CLI functions live near the bottom of `hosts_editor.py` and intentionally sh
 - `_cli_patch_verify`
 - `_cli_patch_apply`
 - `_cli_recovery_plan`
+- `_cli_wfp_blocker_plan`
 - `_cli_profile_schedule_list`
 - `_cli_profile_schedule_add`
 - `_cli_profile_schedule_apply`
