@@ -34,6 +34,8 @@ CTI enrichment support follows the same boundary. HostsFileGet can extract domai
 
 TLS certificate preview support is also plan-only. HostsFileGet can extract public DNS hostnames from hosts-like text or URLs and write SNI-aware OpenSSL/Python SSL review guidance, but it does not open sockets, perform certificate handshakes, cache certificate chains, or turn certificate metadata directly into hosts-file changes.
 
+LLM-assisted why-blocked summaries are offline review artifacts. HostsFileGet can explain local block evidence and write a bounded prompt for manual external use, but it does not call LLM APIs, store provider credentials, upload hosts data, or let generated prose mutate whitelist, pin, source, or hosts-file state.
+
 DNS rebinding protection is also advisory. HostsFileGet can report static hosts entries that map external-looking names to private, local, loopback, link-local, ULA, CGNAT, or special-use ranges, but live DNS rebinding enforcement belongs in the resolver, router, or managed endpoint policy.
 
 SafeSearch and restricted-mode templates follow the same boundary. HostsFileGet can produce reviewable hosts-line and DNS CNAME plans for Google, Bing, DuckDuckGo, and YouTube, but it does not apply parental controls, create DNS records, install browser policy, or enforce account/device controls.
@@ -122,6 +124,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `docs/ct-typosquat-watchdog.md` | Plan-only Certificate Transparency search and typosquat candidate review workflow |
 | `docs/cti-enrichment.md` | Plan-only VirusTotal, URLhaus, MISP, and STIX enrichment request templates |
 | `docs/tls-certificate-preview.md` | Plan-only SNI-aware TLS certificate preview commands and review boundary |
+| `docs/why-blocked-summaries.md` | Offline local why-blocked summaries and review-only LLM handoff prompt boundary |
 | `docs/threat-feed-packs.md` | NRD, DGA, and threat-intel feed pack planning with freshness and false-positive controls |
 | `docs/cname-cloaking.md` | CNAME cloaking source packs, hosts-file limits, and DNS handoff guidance |
 | `docs/encrypted-dns-bypass.md` | Encrypted-DNS bypass source packs and router/firewall handoff guidance |
@@ -200,6 +203,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - IDN/homograph reporting: `classify_idn_domain`, `build_idn_homograph_report`, `format_idn_homograph_report`.
 - CT/typosquat watchdog planning: `parse_ct_watchdog_domains`, `generate_ct_typosquat_variants`, `build_ct_typosquat_watchdog_plan`, `format_ct_typosquat_watchdog_plan`.
 - CTI enrichment planning: `parse_cti_enrichment_iocs`, `build_cti_enrichment_plan`, `build_cti_enrichment_stix_bundle`, `format_cti_enrichment_plan`.
+- Why-blocked summaries: `build_why_blocked_summary`, `format_why_blocked_summary`, `format_why_blocked_summary_catalog`, `extract_whitelist_domains_from_text`.
 - Threat feed pack planning: `list_threat_feed_packs`, `build_threat_feed_pack_plan`, `format_threat_feed_pack_catalog`, `format_threat_feed_pack_plan`.
 - CNAME cloaking workflow planning: `list_cname_cloaking_packs`, `build_cname_cloaking_plan`, `format_cname_cloaking_catalog`, `format_cname_cloaking_plan`.
 - Encrypted-DNS bypass pack planning: `list_encrypted_dns_bypass_packs`, `build_encrypted_dns_bypass_pack_plan`, `format_encrypted_dns_bypass_catalog`, `format_encrypted_dns_bypass_pack_plan`.
@@ -287,6 +291,11 @@ The CLI functions live near the bottom of `hosts_editor.py` and intentionally sh
 - `_cli_dns_rewrite_plan`
 - `_cli_ct_watchdog_list`
 - `_cli_ct_watchdog_plan`
+- `_cli_cti_enrichment_list`
+- `_cli_cti_enrichment_plan`
+- `_cli_tls_certificate_preview_list`
+- `_cli_tls_certificate_preview_plan`
+- `_cli_why_blocked_summary`
 - `_cli_profile_schedule_list`
 - `_cli_profile_schedule_add`
 - `_cli_profile_schedule_apply`

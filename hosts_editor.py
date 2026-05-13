@@ -454,6 +454,16 @@ MIGRATION_IMPORT_MAX_FILE_BYTES = 10 * 1024 * 1024
 MIGRATION_IMPORT_MAX_TOTAL_BYTES = 50 * 1024 * 1024
 MIGRATION_IMPORT_MAX_FILES = 2_000
 FALSE_POSITIVE_REPORT_MATCH_LIMIT = 30
+WHY_BLOCKED_SUMMARY_SCHEMA = "hostsfileget.why-blocked-summary.v1"
+WHY_BLOCKED_SUMMARY_SOURCE_IDS = ("C4", "O17", "S54", "S55")
+WHY_BLOCKED_SUMMARY_EVIDENCE_LIMIT = 10
+WHY_BLOCKED_SUMMARY_PROVENANCE_LIMIT = 8
+WHY_BLOCKED_SUMMARY_WARNINGS = (
+    "Offline first: HostsFileGet builds the summary locally and does not call LLM APIs.",
+    "Generated LLM handoff prompts are review artifacts; inspect and redact them before pasting into any external service.",
+    "Domains, source names, query logs, and local provenance can reveal browsing, incident, or business context.",
+    "Treat LLM output as explanatory assistance only; use local whitelist, pin, source, and provenance controls for policy changes.",
+)
 SOURCE_TRUST_DOC_PATH = "docs/source-trust.md"
 SOURCE_TRUST_RISK_WORDS = (
     "aggressive",
@@ -10096,6 +10106,357 @@ def format_false_positive_triage_report(
     return "\n".join(lines)
 
 
+def extract_whitelist_domains_from_text(text: str) -> set[str]:
+    """Return normalized whitelist-style domains from plain text."""
+    domains: set[str] = set()
+    for raw_line in (text or "").splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parsed, _ = parse_hosts_line_entries(line)
+        for _, domain, _is_block in parsed:
+            if domain:
+                domains.add(domain.lstrip("."))
+        if parsed:
+            continue
+        normalized, error = normalize_whitelist_domain(line, allow_single_label=False)
+        if not error and normalized:
+            domains.add(normalized.lstrip("."))
+    return domains
+
+
+def _why_blocked_source_issue_urls(source_matches: list[str], source_issue_urls: dict[str, str] | None) -> dict[str, str]:
+    if not source_matches or not source_issue_urls:
+        return {}
+    return {
+        str(name): str(source_issue_urls[name])
+        for name in source_matches
+        if name in source_issue_urls and str(source_issue_urls[name]).strip()
+    }
+
+
+def _why_blocked_event_domains(event: dict) -> list[str]:
+    values: list[str] = []
+    for key in ("domain", "matched_domain"):
+        value = event.get(key)
+        if isinstance(value, str) and value.strip():
+            values.append(value.strip())
+    list_value = event.get("domains")
+    if isinstance(list_value, (list, tuple, set)):
+        values.extend(str(item).strip() for item in list_value if str(item).strip())
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        domain, error = normalize_whitelist_domain(value, allow_single_label=False)
+        if not error and domain not in seen:
+            seen.add(domain)
+            normalized.append(domain)
+    return normalized
+
+
+def _why_blocked_event_matches(domain: str, event: dict) -> bool:
+    for event_domain in _why_blocked_event_domains(event):
+        if (
+            event_domain == domain
+            or event_domain.endswith("." + domain)
+            or domain.endswith("." + event_domain)
+        ):
+            return True
+    return False
+
+
+def _why_blocked_provenance_events(domain: str, events: list[dict] | tuple[dict, ...] | None) -> list[dict]:
+    matches: list[dict] = []
+    for event in events or []:
+        if not isinstance(event, dict) or not _why_blocked_event_matches(domain, event):
+            continue
+        matches.append({
+            "ts": str(event.get("ts") or ""),
+            "kind": str(event.get("kind") or ""),
+            "domain": str(event.get("domain") or ""),
+            "source": str(event.get("source") or ""),
+            "user": str(event.get("user") or ""),
+        })
+        if len(matches) >= WHY_BLOCKED_SUMMARY_PROVENANCE_LIMIT:
+            break
+    return matches
+
+
+def _why_blocked_line_preview(line: str) -> str:
+    preview = " ".join(str(line or "").strip().split())
+    if len(preview) <= 180:
+        return preview
+    return preview[:177].rstrip() + "..."
+
+
+def _build_why_blocked_llm_prompt(summary: dict) -> str:
+    evidence = summary.get("evidence") or {}
+    lines = [
+        "You are helping review a local hosts-file block decision.",
+        "Use only the evidence below. Do not infer browsing history, user intent, or threat verdicts that are not present.",
+        "Return a concise explanation of why the domain appears blocked and list safe next review steps.",
+        "",
+        f"Domain: {summary.get('domain') or ''}",
+        f"Status: {summary.get('status') or ''}",
+        f"Primary local reason: {summary.get('primary_reason') or ''}",
+        f"Confidence: {summary.get('confidence') or ''}",
+        f"Blocked line count: {evidence.get('blocked_line_count', 0)}",
+        f"Whitelist coverage: {'yes' if evidence.get('on_whitelist') else 'no'}",
+        f"Pinned block: {'yes' if evidence.get('is_pinned') else 'no'}",
+    ]
+    blocked_lines = evidence.get("blocked_on_lines") or []
+    if blocked_lines:
+        lines.extend(["", "Matched editor entries:"])
+        for item in blocked_lines[:WHY_BLOCKED_SUMMARY_EVIDENCE_LIMIT]:
+            lines.append(
+                f"- line {item.get('line_no')}: matched {item.get('matched_domain')}"
+            )
+    source_matches = evidence.get("source_matches") or []
+    if source_matches:
+        lines.extend(["", "Previously fetched source matches:"])
+        for name in source_matches[:WHY_BLOCKED_SUMMARY_EVIDENCE_LIMIT]:
+            issue_url = (evidence.get("source_issue_urls") or {}).get(name, "")
+            suffix = f" ({issue_url})" if issue_url else ""
+            lines.append(f"- {name}{suffix}")
+    events = evidence.get("provenance_events") or []
+    if events:
+        lines.extend(["", "Relevant local provenance events:"])
+        for event in events[:WHY_BLOCKED_SUMMARY_PROVENANCE_LIMIT]:
+            lines.append(
+                f"- {event.get('ts') or 'unknown time'} {event.get('kind') or 'event'} "
+                f"{event.get('domain') or ''} source={event.get('source') or ''}"
+            )
+    actions = summary.get("recommended_actions") or []
+    if actions:
+        lines.extend(["", "Local recommended actions already generated by HostsFileGet:"])
+        for action in actions[:WHY_BLOCKED_SUMMARY_EVIDENCE_LIMIT]:
+            lines.append(f"- {action.get('label')}: {action.get('reason')}")
+    lines.extend([
+        "",
+        "Privacy guardrails:",
+        "- Do not request raw hosts files, full DNS logs, private source URLs, API keys, or unrelated domains.",
+        "- Treat this as a review aid, not as authorization to change hosts-file policy.",
+    ])
+    return "\n".join(lines)
+
+
+def build_why_blocked_summary(
+    domain: str,
+    editor_lines: list[str],
+    whitelist_set: set | None = None,
+    pinned_domains: set | None = None,
+    source_corpus: dict[str, object] | None = None,
+    source_issue_urls: dict[str, str] | None = None,
+    provenance_events: list[dict] | tuple[dict, ...] | None = None,
+    include_llm_prompt: bool = True,
+) -> dict:
+    """Build an offline explanation of why a domain appears blocked."""
+    triage = build_false_positive_triage_report(
+        domain,
+        editor_lines,
+        whitelist_set=whitelist_set,
+        pinned_domains=pinned_domains,
+        source_corpus=source_corpus,
+    )
+    if not triage.get("valid"):
+        return {
+            "schema": WHY_BLOCKED_SUMMARY_SCHEMA,
+            "plan_only": True,
+            "offline": True,
+            "network_calls": False,
+            "llm_api_calls": False,
+            "domain": triage.get("domain") or "",
+            "valid": False,
+            "error": triage.get("error") or "Enter a domain to check.",
+            "status": "invalid",
+            "primary_reason": triage.get("error") or "The input was not a valid multi-label domain.",
+            "confidence": "none",
+            "evidence": {},
+            "recommended_actions": [],
+            "controls": [
+                "Fix the domain input before generating a review prompt.",
+            ],
+            "warnings": list(WHY_BLOCKED_SUMMARY_WARNINGS),
+            "llm_handoff": {
+                "available": False,
+                "plan_only": True,
+                "external_execution_required": True,
+                "prompt_text": "",
+                "redaction_notes": [
+                    "No prompt was generated because the domain is invalid.",
+                ],
+            },
+            "references": list(WHY_BLOCKED_SUMMARY_SOURCE_IDS),
+        }
+
+    blocked_on_lines = [
+        {
+            "line_no": item.get("line_no"),
+            "matched_domain": item.get("matched_domain"),
+            "line_preview": _why_blocked_line_preview(item.get("line", "")),
+        }
+        for item in (triage.get("blocked_on_lines") or [])[:WHY_BLOCKED_SUMMARY_EVIDENCE_LIMIT]
+    ]
+    source_matches = list(triage.get("source_matches") or [])
+    provenance = _why_blocked_provenance_events(triage["domain"], provenance_events)
+    issue_urls = _why_blocked_source_issue_urls(source_matches, source_issue_urls)
+
+    if triage.get("blocked_on_lines"):
+        status = "blocked"
+        confidence = "direct-hosts-entry"
+        primary_reason = "The current editor contains block-style hosts entries matching this domain or one of its subdomains."
+    elif source_matches:
+        status = "source-only"
+        confidence = "fetched-source-match"
+        primary_reason = "The domain is not blocked in the current editor, but it appears in previously fetched source metadata."
+    else:
+        status = "not-blocked"
+        confidence = "no-local-block-evidence"
+        primary_reason = "No block-style hosts entry in the current editor matches this domain."
+
+    evidence = {
+        "blocked_line_count": len(triage.get("blocked_on_lines") or []),
+        "blocked_on_lines": blocked_on_lines,
+        "on_whitelist": bool(triage.get("on_whitelist")),
+        "is_pinned": bool(triage.get("is_pinned")),
+        "source_matches": source_matches,
+        "source_issue_urls": issue_urls,
+        "provenance_event_count": len(provenance),
+        "provenance_events": provenance,
+    }
+    controls = [
+        "Summary generation is deterministic and local; no LLM or provider API is called.",
+        "The handoff prompt omits raw full hosts-file content and uses only bounded evidence.",
+        "Review whitelist coverage and pinned-domain status before removing or preserving a block.",
+        "When a source match exists, use the upstream report URL before changing local policy.",
+    ]
+    summary = {
+        "schema": WHY_BLOCKED_SUMMARY_SCHEMA,
+        "plan_only": True,
+        "offline": True,
+        "network_calls": False,
+        "llm_api_calls": False,
+        "domain": triage["domain"],
+        "valid": True,
+        "status": status,
+        "primary_reason": primary_reason,
+        "confidence": confidence,
+        "evidence": evidence,
+        "recommended_actions": list(triage.get("recommended_actions") or []),
+        "controls": controls,
+        "warnings": list(WHY_BLOCKED_SUMMARY_WARNINGS),
+        "llm_handoff": {
+            "available": bool(include_llm_prompt),
+            "plan_only": True,
+            "external_execution_required": True,
+            "prompt_text": "",
+            "redaction_notes": [
+                "Prompt excludes raw full hosts-file content.",
+                "Review domain, source names, issue URLs, and provenance metadata before external use.",
+                "Do not add API keys, private DNS logs, or unrelated hostnames to the prompt.",
+            ],
+        },
+        "references": list(WHY_BLOCKED_SUMMARY_SOURCE_IDS),
+    }
+    if include_llm_prompt:
+        summary["llm_handoff"]["prompt_text"] = _build_why_blocked_llm_prompt(summary)
+    return summary
+
+
+def format_why_blocked_summary(summary: dict) -> str:
+    if not summary or not summary.get("valid"):
+        return str((summary or {}).get("error") or "Enter a domain to check.")
+
+    evidence = summary.get("evidence") or {}
+    lines = [
+        "Why Blocked Summary",
+        f"Schema: {summary.get('schema')}",
+        f"Plan only: {'yes' if summary.get('plan_only') else 'no'}",
+        f"Offline: {'yes' if summary.get('offline') else 'no'}",
+        f"LLM/API calls: {'yes' if summary.get('llm_api_calls') else 'no'}",
+        "",
+        f"Domain: {summary.get('domain')}",
+        f"Status: {summary.get('status')}",
+        f"Confidence: {summary.get('confidence')}",
+        f"Why: {summary.get('primary_reason')}",
+        "",
+        "Evidence:",
+        f"- Blocked editor lines: {int(evidence.get('blocked_line_count') or 0):,}",
+    ]
+    for item in evidence.get("blocked_on_lines") or []:
+        lines.append(
+            f"  line {item.get('line_no')}: {item.get('line_preview')} ({item.get('matched_domain')})"
+        )
+    lines.extend([
+        f"- Whitelist coverage: {'yes' if evidence.get('on_whitelist') else 'no'}",
+        f"- Pinned block: {'yes' if evidence.get('is_pinned') else 'no'}",
+    ])
+    source_matches = evidence.get("source_matches") or []
+    if source_matches:
+        lines.append(f"- Source matches: {len(source_matches):,}")
+        for name in source_matches[:WHY_BLOCKED_SUMMARY_EVIDENCE_LIMIT]:
+            issue_url = (evidence.get("source_issue_urls") or {}).get(name, "")
+            suffix = f" - report: {issue_url}" if issue_url else ""
+            lines.append(f"  - {name}{suffix}")
+    else:
+        lines.append("- Source matches: none in previously fetched sources")
+    events = evidence.get("provenance_events") or []
+    if events:
+        lines.append(f"- Local provenance events: {len(events):,}")
+        for event in events:
+            lines.append(
+                f"  - {event.get('ts') or 'unknown time'} {event.get('kind') or 'event'} "
+                f"{event.get('domain') or ''} source={event.get('source') or ''}"
+            )
+    else:
+        lines.append("- Local provenance events: none provided")
+
+    lines.extend(["", "Recommended actions:"])
+    for action in summary.get("recommended_actions") or []:
+        lines.append(f"- {action.get('label')}: {action.get('reason')}")
+
+    lines.extend(["", "LLM handoff:"])
+    handoff = summary.get("llm_handoff") or {}
+    if handoff.get("available") and handoff.get("prompt_text"):
+        lines.extend([
+            "- Prompt generated locally; no provider was called.",
+            "- Review and redact before external use.",
+        ])
+    else:
+        lines.append("- No prompt generated.")
+
+    lines.extend(["", "Controls:"])
+    for control in summary.get("controls") or []:
+        lines.append(f"- {control}")
+    lines.extend(["", "Warnings:"])
+    for warning in summary.get("warnings") or WHY_BLOCKED_SUMMARY_WARNINGS:
+        lines.append(f"- {warning}")
+    lines.extend(["", "Roadmap source IDs:", f"- {', '.join(summary.get('references') or WHY_BLOCKED_SUMMARY_SOURCE_IDS)}"])
+    return "\n".join(lines)
+
+
+def format_why_blocked_summary_catalog() -> str:
+    lines = [
+        'LLM-assisted "why blocked" summaries',
+        "",
+        "HostsFileGet builds an offline explanation from the current editor, whitelist coverage, pinned status, fetched-source matches, and optional local provenance events.",
+        "",
+        "Boundary:",
+        "- No LLM API calls are made.",
+        "- No network requests are made.",
+        "- The optional handoff prompt is a review artifact that must be inspected and redacted before external use.",
+        "",
+        "CLI:",
+        "- python hosts_editor.py --why-blocked-summary ads.example.com .\\hosts.txt .\\why-blocked.json",
+        "- Add --why-blocked-whitelist .\\allowlist.txt to include allowlist coverage.",
+        "",
+        "Warnings:",
+    ]
+    lines.extend(f"- {warning}" for warning in WHY_BLOCKED_SUMMARY_WARNINGS)
+    lines.extend(["", "Roadmap source IDs:", f"- {', '.join(WHY_BLOCKED_SUMMARY_SOURCE_IDS)}"])
+    return "\n".join(lines)
+
+
 def add_domain_to_whitelist_text(
     whitelist_text: str,
     domain: str,
@@ -18787,6 +19148,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="CT / Typosquat Watchdog...", command=self.show_ct_typosquat_watchdog)
         tools_menu.add_command(label="CTI Enrichment Plans...", command=self.show_cti_enrichment_plans)
         tools_menu.add_command(label="TLS Certificate Preview...", command=self.show_tls_certificate_preview)
+        tools_menu.add_command(label="Why Blocked Summary...", command=self.show_why_blocked_summary)
         tools_menu.add_command(label="NRD / DGA Threat Feed Packs...", command=self.show_threat_feed_packs)
         tools_menu.add_command(label="CNAME Cloaking Workflow...", command=self.show_cname_cloaking_workflow)
         tools_menu.add_command(label="DNS Bypass Diagnostics...", command=self.show_dns_bypass_diagnostics)
@@ -19892,6 +20254,58 @@ class HostsFileEditor:
             height=740,
         )
 
+    def show_why_blocked_summary(self, initial_domain: str | None = None):
+        domain = initial_domain
+        if not domain:
+            try:
+                _, _, cursor_domain = self._ctx_line_info()
+            except Exception:
+                cursor_domain = ""
+            domain = cursor_domain or simpledialog.askstring(
+                "Why blocked summary",
+                "Domain to explain:",
+                parent=self.root,
+            )
+        if not domain:
+            self._show_text_report_dialog(
+                "Why blocked summary",
+                "Offline explanation workflow for reviewed hosts-file block decisions.",
+                format_why_blocked_summary_catalog(),
+                tone="info",
+                width=900,
+                height=680,
+            )
+            return
+
+        triage = build_false_positive_triage_report(
+            domain,
+            self.get_lines(),
+            self._get_whitelist_set(),
+            self.pinned_domains,
+            self._source_corpus_cache,
+        )
+        issue_urls = self._source_issue_urls_for_matches(triage.get("source_matches") or [])
+        base_dir = os.path.dirname(self.config_path) or get_app_config_dir()
+        provenance_path = os.path.join(base_dir, PROVENANCE_FILENAME)
+        events = read_provenance_events(provenance_path, limit=500)
+        summary = build_why_blocked_summary(
+            domain,
+            self.get_lines(),
+            self._get_whitelist_set(),
+            self.pinned_domains,
+            self._source_corpus_cache,
+            source_issue_urls=issue_urls,
+            provenance_events=events,
+        )
+        self._show_text_report_dialog(
+            "Why blocked summary",
+            "Offline local evidence plus a review-only LLM handoff prompt. No provider is called.",
+            format_why_blocked_summary(summary),
+            tone="info" if summary.get("valid") else "warning",
+            width=920,
+            height=720,
+        )
+
     def show_cname_cloaking_workflow(self):
         self._show_text_report_dialog(
             "CNAME cloaking workflow",
@@ -20739,6 +21153,27 @@ class HostsFileEditor:
         ttk.Button(footer, text="Copy Report", command=copy_report, style="Secondary.TButton").pack(side="right", padx=(0, 8))
         dialog.grab_set()
 
+    def _source_issue_urls_for_matches(self, source_matches):
+        remaining = set(source_matches or [])
+        urls = {}
+        for payload in self._source_corpus_cache.values():
+            if not isinstance(payload, dict):
+                continue
+            name = str(payload.get("name") or "")
+            if name not in remaining or name in urls:
+                continue
+            issue_url = source_trust_report_url(str(payload.get("url") or ""))
+            if issue_url:
+                urls[name] = issue_url
+        for source in self._iter_known_sources():
+            name = source.get("name", "")
+            if name not in remaining or name in urls:
+                continue
+            issue_url = source_trust_report_url(source.get("url", ""))
+            if issue_url:
+                urls[name] = issue_url
+        return urls
+
     # ----------------------------- Check Domain ------------------------------
     def show_check_domain(self, initial_domain: str | None = None):
         dialog = tk.Toplevel(self.root)
@@ -20806,27 +21241,6 @@ class HostsFileEditor:
             set_button_state("copy", valid)
             set_button_state("open_issue", valid and bool(issue_urls))
 
-        def source_issue_urls_for_matches(source_matches):
-            remaining = set(source_matches or [])
-            urls = {}
-            for payload in self._source_corpus_cache.values():
-                if not isinstance(payload, dict):
-                    continue
-                name = str(payload.get("name") or "")
-                if name not in remaining or name in urls:
-                    continue
-                issue_url = source_trust_report_url(str(payload.get("url") or ""))
-                if issue_url:
-                    urls[name] = issue_url
-            for source in self._iter_known_sources():
-                name = source.get("name", "")
-                if name not in remaining or name in urls:
-                    continue
-                issue_url = source_trust_report_url(source.get("url", ""))
-                if issue_url:
-                    urls[name] = issue_url
-            return urls
-
         def run_check(_event=None):
             report = build_false_positive_triage_report(
                 query_var.get(),
@@ -20844,7 +21258,7 @@ class HostsFileEditor:
                 return
 
             source_matches = report.get("source_matches", [])
-            triage_state["source_issue_urls"] = source_issue_urls_for_matches(source_matches)
+            triage_state["source_issue_urls"] = self._source_issue_urls_for_matches(source_matches)
             cached_urls = {
                 normalize_custom_source_url(entry.get("url", "")) or entry.get("url", "")
                 for entry in self._source_corpus_cache.values()
@@ -22291,6 +22705,7 @@ class HostsFileEditor:
         menu.add_command(label="Ping domain", command=self._ctx_ping_domain)
         menu.add_separator()
         menu.add_command(label="Check this domain...", command=self._ctx_check_domain)
+        menu.add_command(label="Why blocked summary...", command=self._ctx_why_blocked_summary)
         menu.add_command(label="Entry provenance...", command=self._ctx_entry_provenance)
         self._editor_context_menu = menu
 
@@ -22795,6 +23210,10 @@ class HostsFileEditor:
     def _ctx_check_domain(self):
         _, _, domain = self._ctx_line_info()
         self.show_check_domain(initial_domain=domain)
+
+    def _ctx_why_blocked_summary(self):
+        _, _, domain = self._ctx_line_info()
+        self.show_why_blocked_summary(initial_domain=domain)
 
     def _ctx_entry_provenance(self):
         line_no, _, _ = self._ctx_line_info()
@@ -25522,6 +25941,33 @@ def _cli_tls_certificate_preview_plan(
     return 0
 
 
+def _cli_why_blocked_summary(
+    domain: str,
+    input_path: str,
+    output_path: str,
+    whitelist_path: str | None = None,
+) -> int:
+    try:
+        whitelist_set = set()
+        if whitelist_path:
+            whitelist_set = extract_whitelist_domains_from_text(read_text_file_content(whitelist_path))
+        summary = build_why_blocked_summary(
+            domain,
+            read_text_file_content(input_path).splitlines(),
+            whitelist_set=whitelist_set,
+        )
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        write_text_file_atomic(output_path, json.dumps(summary, indent=2))
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Why blocked summary failed: {exc}")
+        return 2
+    _cli_print(format_why_blocked_summary(summary))
+    _cli_print(f"Wrote why blocked summary to {output_path}")
+    return 0
+
+
 def _cli_threat_feed_list() -> int:
     _cli_print(format_threat_feed_pack_catalog())
     return 0
@@ -26471,6 +26917,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--tls-preview-port",
         "--tls-preview-timeout",
         "--tls-preview-max-hosts",
+        "--why-blocked-summary",
+        "--why-blocked-whitelist",
         "--threat-feed-list",
         "--threat-feed-plan",
         "--cname-cloaking-list",
@@ -26587,6 +27035,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--tls-preview-port=",
         "--tls-preview-timeout=",
         "--tls-preview-max-hosts=",
+        "--why-blocked-summary=",
+        "--why-blocked-whitelist=",
         "--threat-feed-plan=",
         "--cname-cloaking-plan=",
         "--encrypted-dns-bypass-plan=",
@@ -26801,6 +27251,13 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--tls-preview-port", type=int, default=TLS_CERTIFICATE_PREVIEW_DEFAULT_PORT, metavar="PORT", help=f"TLS port for --tls-preview-plan commands; defaults to {TLS_CERTIFICATE_PREVIEW_DEFAULT_PORT}.")
     parser.add_argument("--tls-preview-timeout", type=int, default=TLS_CERTIFICATE_PREVIEW_DEFAULT_TIMEOUT_SECONDS, metavar="SECONDS", help=f"Timeout placeholder for --tls-preview-plan commands; defaults to {TLS_CERTIFICATE_PREVIEW_DEFAULT_TIMEOUT_SECONDS}.")
     parser.add_argument("--tls-preview-max-hosts", type=int, default=TLS_CERTIFICATE_PREVIEW_DEFAULT_MAX_HOSTS, metavar="COUNT", help=f"Maximum hostnames to include in --tls-preview-plan; defaults to {TLS_CERTIFICATE_PREVIEW_DEFAULT_MAX_HOSTS}.")
+    parser.add_argument(
+        "--why-blocked-summary",
+        nargs=3,
+        metavar=("DOMAIN", "INPUT", "OUTPUT"),
+        help="Write an offline why-blocked JSON summary from INPUT hosts-like text to OUTPUT. No LLM API or network call is made.",
+    )
+    parser.add_argument("--why-blocked-whitelist", metavar="PATH", help="Optional whitelist text file to include in --why-blocked-summary evidence.")
     parser.add_argument("--threat-feed-list", action="store_true", help="List curated NRD/DGA/TIF threat feed packs.")
     parser.add_argument(
         "--threat-feed-plan",
@@ -27179,6 +27636,15 @@ def _handle_cli_args(argv: list[str]) -> int | None:
             args.tls_preview_port,
             args.tls_preview_timeout,
             args.tls_preview_max_hosts,
+        )
+    if args.why_blocked_whitelist and not args.why_blocked_summary:
+        parser.error("--why-blocked-whitelist requires --why-blocked-summary DOMAIN INPUT OUTPUT")
+    if args.why_blocked_summary:
+        return _cli_why_blocked_summary(
+            args.why_blocked_summary[0],
+            args.why_blocked_summary[1],
+            args.why_blocked_summary[2],
+            args.why_blocked_whitelist,
         )
     if args.threat_feed_list:
         return _cli_threat_feed_list()

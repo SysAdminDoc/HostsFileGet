@@ -63,6 +63,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - CNAME cloaking workflow planning that separates hosts-reviewable disguised domains from DNS-only CNAME target feeds
   - encrypted-DNS bypass pack planning that separates hosts-reviewable resolver names from router/firewall handoffs
   - TLS certificate preview plans that generate SNI-aware review commands without opening sockets
+  - offline why-blocked summaries with review-only LLM handoff prompts and no provider calls
   - DNS rebinding protection checks for external-looking domains mapped to private, local, loopback, link-local, ULA, or CGNAT ranges
   - SafeSearch and restricted-mode template plans that separate hosts-reviewable search mappings from DNS CNAME handoffs
   - false-positive triage for whitelist, pin, source-match, and upstream report decisions
@@ -408,6 +409,13 @@ python hosts_editor.py --tls-preview-list
 python hosts_editor.py --tls-preview-plan .\hosts.txt .\tls-preview-plan.json --tls-preview-port 443
 ```
 
+Generate an offline why-blocked summary and optional LLM handoff prompt without calling a provider:
+
+```powershell
+python hosts_editor.py --why-blocked-summary ads.example.com .\hosts.txt .\why-blocked.json
+python hosts_editor.py --why-blocked-summary ads.example.com .\hosts.txt .\why-blocked.json --why-blocked-whitelist .\allowlist.txt
+```
+
 List guarded NRD/DGA/TIF threat feed packs or write a local review plan:
 
 ```powershell
@@ -487,6 +495,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Certificate Transparency / typosquat watchdog: `docs/ct-typosquat-watchdog.md`
 - CTI enrichment plans: `docs/cti-enrichment.md`
 - TLS certificate preview: `docs/tls-certificate-preview.md`
+- Why-blocked summaries: `docs/why-blocked-summaries.md`
 - NRD/DGA threat feed packs: `docs/threat-feed-packs.md`
 - CNAME cloaking workflow: `docs/cname-cloaking.md`
 - Encrypted DNS bypass packs: `docs/encrypted-dns-bypass.md`

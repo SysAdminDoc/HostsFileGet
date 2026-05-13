@@ -24,6 +24,7 @@ from hosts_editor import (
     CT_WATCHDOG_PLAN_SCHEMA,
     CTI_ENRICHMENT_PLAN_SCHEMA,
     TLS_CERTIFICATE_PREVIEW_PLAN_SCHEMA,
+    WHY_BLOCKED_SUMMARY_SCHEMA,
     DOMAIN_CATEGORY_RULES,
     FTL_BLOCKED_STATUS_CODES,
     HostsFileEditor,
@@ -156,6 +157,7 @@ from hosts_editor import (
     build_ct_typosquat_watchdog_plan,
     build_cti_enrichment_plan,
     build_tls_certificate_preview_plan,
+    build_why_blocked_summary,
     build_portable_bundle_readme,
     build_scheduler_activity_report,
     build_scheduler_update_command,
@@ -174,6 +176,7 @@ from hosts_editor import (
     export_lines_as_bytes,
     export_provenance_events,
     extract_blocking_domains_from_lines,
+    extract_whitelist_domains_from_text,
     fetch_source_with_cache,
     fetch_source_with_retries,
     filter_provenance_events,
@@ -220,6 +223,8 @@ from hosts_editor import (
     format_cti_enrichment_plan,
     format_tls_certificate_preview_catalog,
     format_tls_certificate_preview_plan,
+    format_why_blocked_summary,
+    format_why_blocked_summary_catalog,
     format_cname_cloaking_catalog,
     format_cname_cloaking_plan,
     format_dns_rebinding_report,
@@ -1556,6 +1561,67 @@ class HostsEditorLogicTests(unittest.TestCase):
 
         self.assertEqual(domain, "")
         self.assertIn("multi-label domain", error)
+
+    def test_why_blocked_summary_uses_local_evidence_and_handoff_prompt(self):
+        report = build_why_blocked_summary(
+            "ads.example",
+            [
+                "0.0.0.0 ads.example",
+                "127.0.0.1 cdn.ads.example tracker.example",
+                "192.168.1.10 ads.example",
+            ],
+            whitelist_set={"example"},
+            pinned_domains={"ads.example"},
+            source_corpus={
+                "one": {"name": "Example Source", "text": "0.0.0.0 ads.example\n"},
+            },
+            source_issue_urls={"Example Source": "https://github.com/owner/repo/issues"},
+            provenance_events=[
+                {"ts": "2026-05-12T10:00:00", "kind": "pin", "domain": "ads.example", "source": "test"},
+                {"ts": "2026-05-12T10:01:00", "kind": "unpin", "domain": "other.example", "source": "test"},
+            ],
+        )
+        rendered = format_why_blocked_summary(report)
+
+        self.assertEqual(report["schema"], WHY_BLOCKED_SUMMARY_SCHEMA)
+        self.assertTrue(report["plan_only"])
+        self.assertTrue(report["offline"])
+        self.assertFalse(report["network_calls"])
+        self.assertFalse(report["llm_api_calls"])
+        self.assertEqual(report["status"], "blocked")
+        self.assertEqual(report["confidence"], "direct-hosts-entry")
+        self.assertEqual(report["evidence"]["blocked_line_count"], 2)
+        self.assertTrue(report["evidence"]["on_whitelist"])
+        self.assertTrue(report["evidence"]["is_pinned"])
+        self.assertEqual(report["evidence"]["source_matches"], ["Example Source"])
+        self.assertEqual(report["evidence"]["source_issue_urls"]["Example Source"], "https://github.com/owner/repo/issues")
+        self.assertEqual(len(report["evidence"]["provenance_events"]), 1)
+        prompt = report["llm_handoff"]["prompt_text"]
+        self.assertIn("ads.example", prompt)
+        self.assertIn("Use only the evidence below", prompt)
+        self.assertNotIn("192.168.1.10 ads.example", prompt)
+        self.assertIn("Why Blocked Summary", rendered)
+        self.assertIn("LLM/API calls: no", rendered)
+        self.assertIn("Example Source", rendered)
+
+    def test_why_blocked_summary_handles_source_only_and_catalog(self):
+        report = build_why_blocked_summary(
+            "ads.example",
+            ["192.168.1.10 ads.example"],
+            source_corpus={"one": {"name": "Example Source", "text": "||ads.example^\n"}},
+        )
+        catalog = format_why_blocked_summary_catalog()
+
+        self.assertEqual(report["status"], "source-only")
+        self.assertEqual(report["evidence"]["blocked_line_count"], 0)
+        self.assertIn("No LLM API calls are made", catalog)
+
+    def test_extract_whitelist_domains_from_text_supports_plain_and_hosts_lines(self):
+        domains = extract_whitelist_domains_from_text(
+            "# keep\nexample.com\n0.0.0.0 ads.example.org\nnot a domain\n"
+        )
+
+        self.assertEqual(domains, {"example.com", "ads.example.org"})
 
     def test_add_domain_to_whitelist_text_appends_and_dedupes_coverage(self):
         text, added = add_domain_to_whitelist_text("# keep\nexample.com\n", "ads.example.com")
@@ -3177,6 +3243,16 @@ profile:
                 0,
             )
             mocked_tls_plan.assert_called_once_with("hosts.txt", "tls-plan.json", 8443, 9, 25)
+
+        with mock.patch.object(hosts_editor, "_cli_why_blocked_summary", return_value=0) as mocked_why:
+            self.assertEqual(
+                hosts_editor._handle_cli_args([
+                    "--why-blocked-summary", "ads.example", "hosts.txt", "why.json",
+                    "--why-blocked-whitelist", "allow.txt",
+                ]),
+                0,
+            )
+            mocked_why.assert_called_once_with("ads.example", "hosts.txt", "why.json", "allow.txt")
 
     def test_handle_cli_args_routes_threat_feed_flags(self):
         with mock.patch.object(hosts_editor, "_cli_threat_feed_list", return_value=0) as mocked_list:
