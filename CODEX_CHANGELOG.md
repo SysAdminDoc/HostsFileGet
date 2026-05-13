@@ -109,6 +109,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F054 complete. Next roadmap item: F055 signed shareable allowlist/profile patches.
 - Completed F055: added signed allowlist/profile patch payloads, detached GPG signature verify/apply workflow, docs, and regression tests for config-only apply and fake-GPG sign/verify.
 - Updated `ROADMAP.md` to mark F055 complete. Next roadmap item: F044 restore-point or VSS-backed apply recovery spike.
+- Completed F044: added a plan-only restore-point/VSS recovery command, JSON output, docs, and regression tests. No restore point, VSS shadow, or hosts write is executed by the spike.
+- Updated `ROADMAP.md` to mark F044 complete. Next roadmap item: F056 WFP IP/CIDR blocker companion.
 
 ## Scope
 

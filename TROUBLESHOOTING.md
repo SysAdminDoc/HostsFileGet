@@ -154,6 +154,7 @@ Recovery options:
 - Rolling backup: `hosts.bak`.
 - Timestamped backups: `hosts.YYYYMMDD-HHMMSS.bak`.
 - Compare backups before restore.
+- `--recovery-plan` prints a restore-point/VSS review plan without executing machine-wide recovery commands.
 - Panic restore loads the stock Microsoft default into the editor.
 - Emergency DNS recovery is destructive and should be treated as a last resort.
 

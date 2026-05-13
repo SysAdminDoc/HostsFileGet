@@ -4,6 +4,10 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Recovery apply plan**
+- Added `--recovery-plan` and JSON output for a plan-only restore-point/VSS recovery spike before high-risk hosts writes.
+- The plan documents the existing backup contract, a reviewable `Checkpoint-Computer` command, and VSS boundaries without executing machine-wide recovery operations.
+
 **Signed share patches**
 - Added signed allowlist/profile patch helpers and CLI commands to build, sign, verify, and apply small reviewable patches.
 - Patch apply requires a detached GPG signature, updates app config only, and never writes the Windows hosts file.
