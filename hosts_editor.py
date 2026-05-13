@@ -46,9 +46,34 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback path
     tomllib = None
 
+# Phase 1 of the monolith breakdown: cleanly-isolated helpers now live under
+# the ``hostsfileget`` package. Importing them here keeps the public surface
+# stable for the existing test suite and external consumers (``hosts_editor``
+# is still the module name everything depends on).
+from hostsfileget.compression import (
+    MAX_DOWNLOAD_BYTES,
+    TEXT_FILE_ENCODINGS,
+    _decompress_with_cap,
+    _format_size_limit,
+    decode_downloaded_lines,
+    decode_text_bytes,
+    looks_like_html_document,
+    read_http_body_limited,
+    read_text_file_content,
+    read_text_file_lines,
+)
+from hostsfileget.atomic_io import (
+    _allocate_unique_sibling_temp_path,
+    copy_file_atomic,
+    disable_hosts_file_transactionally,
+    enable_hosts_file_transactionally,
+    write_bytes_file_atomic,
+    write_text_file_atomic,
+)
+
 APP_NAME = "Hosts File Get"
 APP_SLUG = "HostsFileGet"
-APP_VERSION = "2.23.0"
+APP_VERSION = "2.24.0"
 CONFIG_FILENAME = "hosts_editor_config.json"
 CONFIG_SCHEMA_VERSION = 4
 PROFILE_SCHEMA_VERSION = 1
@@ -412,10 +437,8 @@ DEFAULT_I18N_MESSAGES = {
     ),
 }
 
-# Hard cap for any single downloaded feed/whitelist payload (50 MB decompressed).
-# Even the biggest public blocklists are well under 20 MB; this guards against
-# runaway servers streaming gigabytes and OOMing the GUI process.
-MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
+# ``MAX_DOWNLOAD_BYTES`` is imported from ``hostsfileget.compression`` above.
+# It is the 50 MB hard cap applied both pre- and post-decompression.
 
 # Preview windows use difflib.ndiff which is O(n*m). On very large editors
 # (200K+ lines) ndiff can hang the UI for many seconds. Above this threshold
@@ -2881,278 +2904,14 @@ def compute_clean_impact_stats(
     _, stats = _get_canonical_cleaned_output_and_stats(original_lines, whitelist_set, pinned_domains)
     return stats
 
-TEXT_FILE_ENCODINGS = ("utf-8", "utf-8-sig", "cp1252", "latin-1")
+# ``TEXT_FILE_ENCODINGS``, ``decode_text_bytes``, ``read_text_file_*``,
+# ``write_text_file_atomic``, ``write_bytes_file_atomic``, ``copy_file_atomic``,
+# ``disable/enable_hosts_file_transactionally``, ``_decompress_with_cap``,
+# ``decode_downloaded_lines``, ``read_http_body_limited``,
+# ``_format_size_limit``, and ``looks_like_html_document`` are now imported
+# from ``hostsfileget.compression`` / ``hostsfileget.atomic_io`` near the top
+# of this module. The definitions used to live here inline.
 
-def decode_text_bytes(raw_bytes: bytes) -> str:
-    if raw_bytes.startswith(b'\xef\xbb\xbf'):
-        return raw_bytes.decode("utf-8-sig")
-
-    if raw_bytes.startswith((b'\xff\xfe', b'\xfe\xff')):
-        return raw_bytes.decode("utf-16")
-
-    null_bytes = raw_bytes.count(b"\x00")
-    if raw_bytes and null_bytes and (null_bytes / len(raw_bytes)) > 0.15:
-        for encoding in ("utf-16-le", "utf-16-be"):
-            try:
-                return raw_bytes.decode(encoding)
-            except UnicodeDecodeError:
-                continue
-
-    for encoding in TEXT_FILE_ENCODINGS:
-        try:
-            return raw_bytes.decode(encoding)
-        except UnicodeDecodeError:
-            continue
-    return raw_bytes.decode('utf-8', errors='ignore')
-
-def read_text_file_lines(path: str) -> list[str]:
-    with open(path, 'rb') as f:
-        return decode_text_bytes(f.read()).splitlines()
-
-def read_text_file_content(path: str) -> str:
-    return '\n'.join(read_text_file_lines(path))
-
-def write_text_file_atomic(path: str, content: str):
-    directory = os.path.dirname(path) or "."
-    fd, temp_path = tempfile.mkstemp(prefix="hosts_editor_", suffix=".tmp", dir=directory, text=True)
-    try:
-        with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as f:
-            f.write(content)
-            # Ensure a trailing newline. Some POSIX-style tools that consume
-            # the hosts file expect one, and hash comparisons here go through
-            # splitlines so an added terminator doesn't change equality.
-            if content and not content.endswith('\n'):
-                f.write('\n')
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(temp_path, path)
-    except Exception:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
-        raise
-
-
-def write_bytes_file_atomic(path: str, content: bytes):
-    directory = os.path.dirname(path) or "."
-    fd, temp_path = tempfile.mkstemp(prefix="hosts_editor_", suffix=".tmp", dir=directory)
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(content)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(temp_path, path)
-    except Exception:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
-        raise
-
-
-def _allocate_unique_sibling_temp_path(target_path: str, suffix: str) -> str:
-    """Reserve a unique temp path next to ``target_path`` and return it."""
-    directory = os.path.dirname(target_path) or "."
-    prefix = os.path.basename(target_path) + "."
-    fd, temp_path = tempfile.mkstemp(prefix=prefix, suffix=suffix, dir=directory)
-    os.close(fd)
-    try:
-        os.unlink(temp_path)
-    except OSError:
-        pass
-    return temp_path
-
-
-def copy_file_atomic(source_path: str, target_path: str) -> None:
-    """Copy ``source_path`` to ``target_path`` via a sibling temp + os.replace.
-
-    The naive ``shutil.copy2(src, dst)`` writes directly into ``dst`` and can
-    leave a half-written, corrupted file if the process is killed or the disk
-    fills mid-copy. This matters in particular for the system hosts file and
-    its ``.bak`` companions, where a torn write can wedge networking on next
-    boot. We stage into a unique sibling temp file, fsync the bytes, then
-    rename — which is atomic on POSIX and atomic-equivalent on NTFS.
-    """
-    directory = os.path.dirname(target_path) or "."
-    fd, temp_path = tempfile.mkstemp(prefix="hosts_editor_atomic_", suffix=".tmp", dir=directory)
-    try:
-        with os.fdopen(fd, "wb") as dst_f:
-            with open(source_path, "rb") as src_f:
-                while True:
-                    chunk = src_f.read(64 * 1024)
-                    if not chunk:
-                        break
-                    dst_f.write(chunk)
-            dst_f.flush()
-            os.fsync(dst_f.fileno())
-        # Preserve metadata so timestamps/perms continue to match what
-        # shutil.copy2 used to provide.
-        try:
-            shutil.copystat(source_path, temp_path)
-        except OSError:
-            pass
-        os.replace(temp_path, target_path)
-    except Exception:
-        try:
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
-        except OSError:
-            pass
-        raise
-
-
-def disable_hosts_file_transactionally(hosts_path: str, disabled_path: str, minimal_content: str) -> None:
-    """Disable the hosts file without leaving a stale disabled marker on failure."""
-    had_existing_hosts = os.path.exists(hosts_path)
-    staged_disabled_path = None
-
-    try:
-        if had_existing_hosts:
-            staged_disabled_path = _allocate_unique_sibling_temp_path(disabled_path, ".pending")
-            copy_file_atomic(hosts_path, staged_disabled_path)
-
-        write_text_file_atomic(hosts_path, minimal_content)
-
-        if staged_disabled_path:
-            os.replace(staged_disabled_path, disabled_path)
-    except Exception:
-        if staged_disabled_path and os.path.exists(staged_disabled_path):
-            if had_existing_hosts:
-                try:
-                    copy_file_atomic(staged_disabled_path, hosts_path)
-                except OSError:
-                    pass
-            try:
-                os.unlink(staged_disabled_path)
-            except OSError:
-                pass
-        raise
-
-
-def enable_hosts_file_transactionally(hosts_path: str, disabled_path: str) -> None:
-    """Re-enable the hosts file without leaving ``.disabled`` behind on success."""
-    staged_restore_path = _allocate_unique_sibling_temp_path(disabled_path, ".restore")
-    os.replace(disabled_path, staged_restore_path)
-
-    try:
-        # Atomic copy: a partial write to hosts_path would leave the OS
-        # resolver pointing at half-written content until the next save.
-        copy_file_atomic(staged_restore_path, hosts_path)
-        try:
-            os.unlink(staged_restore_path)
-        except OSError:
-            pass
-    except Exception:
-        if os.path.exists(staged_restore_path) and not os.path.exists(disabled_path):
-            try:
-                os.replace(staged_restore_path, disabled_path)
-            except OSError:
-                pass
-        raise
-
-def _format_size_limit(size_bytes: int) -> str:
-    if size_bytes >= 1024 * 1024:
-        return f"{size_bytes // (1024 * 1024)} MB"
-    if size_bytes >= 1024:
-        return f"{size_bytes // 1024} KB"
-    return f"{size_bytes} bytes"
-
-
-def read_http_body_limited(response, max_bytes: int = MAX_DOWNLOAD_BYTES) -> bytes:
-    """Read an HTTP response with a hard ceiling on total bytes.
-
-    ``response.read(max_bytes + 1)`` is used so we can detect overruns without
-    paying for an unbounded read. Returning the body as-is lets callers decode
-    and normalize it through the existing pipeline.
-    """
-    data = response.read(max_bytes + 1)
-    if len(data) > max_bytes:
-        raise ValueError(
-            f"Response exceeded {_format_size_limit(max_bytes)} size cap "
-            "(feed too large or server is streaming non-hosts content)."
-        )
-    return data
-
-
-def _decompress_with_cap(
-    raw_bytes: bytes,
-    decompressor_factory,
-    max_bytes: int = MAX_DOWNLOAD_BYTES,
-    chunk_size: int = 64 * 1024,
-) -> bytes:
-    """Stream-decompress ``raw_bytes`` while enforcing a hard output cap.
-
-    The previous implementation called the eager ``gzip.decompress`` /
-    ``bz2.decompress`` helpers which would happily materialize a multi-GB
-    decompression bomb into memory before the post-hoc size check could fire.
-    Streaming through a fileobj with a per-chunk read cap lets us bail out as
-    soon as we cross ``max_bytes`` without ever holding the unsafe payload.
-    """
-    if not raw_bytes:
-        return raw_bytes
-
-    decompressor = decompressor_factory(io.BytesIO(raw_bytes))
-    output = bytearray()
-    overflow_probe = max_bytes + 1
-    try:
-        while True:
-            chunk = decompressor.read(chunk_size)
-            if not chunk:
-                break
-            output.extend(chunk)
-            if len(output) > overflow_probe:
-                raise ValueError(
-                    f"Decompressed payload exceeded {_format_size_limit(max_bytes)} size cap."
-                )
-    finally:
-        try:
-            decompressor.close()
-        except Exception:
-            pass
-    if len(output) > max_bytes:
-        raise ValueError(
-            f"Decompressed payload exceeded {_format_size_limit(max_bytes)} size cap."
-        )
-    return bytes(output)
-
-
-def decode_downloaded_lines(url: str, raw_bytes: bytes, content_encoding: str = "") -> list[str]:
-    lowered_url = url.lower()
-    lowered_encoding = content_encoding.lower()
-
-    try:
-        if lowered_url.endswith(".bz2"):
-            raw_bytes = _decompress_with_cap(raw_bytes, bz2.BZ2File)
-        elif lowered_url.endswith(".gz") or "gzip" in lowered_encoding:
-            raw_bytes = _decompress_with_cap(
-                raw_bytes,
-                lambda fileobj: gzip.GzipFile(fileobj=fileobj, mode="rb"),
-            )
-    except (OSError, EOFError):
-        # Some mirrors advertise compression inconsistently; fall back to raw
-        # bytes only when decompression itself failed (truncated stream, bad
-        # magic, etc.). A size-cap overflow re-raises ValueError below so the
-        # bomb guard cannot be silently bypassed.
-        pass
-
-    # Defensive second guard: a non-compressed raw_bytes path could in theory
-    # still exceed the cap if a caller bypassed read_http_body_limited.
-    if len(raw_bytes) > MAX_DOWNLOAD_BYTES:
-        raise ValueError(
-            f"Decompressed payload exceeded {_format_size_limit(MAX_DOWNLOAD_BYTES)} size cap."
-        )
-
-    return decode_text_bytes(raw_bytes).splitlines()
-
-def looks_like_html_document(lines: list[str]) -> bool:
-    significant_lines = [line.strip().lower() for line in lines if line.strip()][:20]
-    if not significant_lines:
-        return False
-
-    combined = '\n'.join(significant_lines[:10])
-    html_markers = ("<!doctype html", "<html", "<head", "<body", "</html>", "<title", "<meta ")
-    if significant_lines[0].startswith(("<!doctype html", "<html")):
-        return True
-
-    marker_hits = sum(1 for marker in html_markers if marker in combined)
-    return marker_hits >= 2
 
 def _portable_config_path_candidate(config_filename: str = CONFIG_FILENAME) -> str:
     """Return the path where a portable-mode config would live.

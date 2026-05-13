@@ -3524,14 +3524,19 @@ profile:
             hosts_path.write_text("127.0.0.1 localhost\n", encoding="utf-8")
             disabled_path.write_text("0.0.0.0 restored.example\n", encoding="utf-8")
 
-            real_copy = hosts_editor.copy_file_atomic
+            from hostsfileget import atomic_io as _atomic_io
+
+            real_copy = _atomic_io.copy_file_atomic
 
             def flaky_copy(src, dst, *args, **kwargs):
                 if dst == str(hosts_path):
                     raise OSError("copy failed")
                 return real_copy(src, dst, *args, **kwargs)
 
-            with mock.patch.object(hosts_editor, "copy_file_atomic", side_effect=flaky_copy):
+            # ``enable_hosts_file_transactionally`` resolves ``copy_file_atomic``
+            # against its own module globals, so the mock has to land on the
+            # submodule, not on the legacy ``hosts_editor`` re-export.
+            with mock.patch.object(_atomic_io, "copy_file_atomic", side_effect=flaky_copy):
                 with self.assertRaises(OSError):
                     enable_hosts_file_transactionally(str(hosts_path), str(disabled_path))
 
