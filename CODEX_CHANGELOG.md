@@ -117,6 +117,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F057 complete. Next roadmap item: F058 Windows Sandbox and VM hosts injector.
 - Completed F058: added a plan-only Windows Sandbox and Hyper-V VM hosts staging bundle with `.wsb` generation, guest-side apply script, staged hosts artifact, optional `Copy-VMFile -WhatIf` review commands, docs, and regression tests. No sandbox or VM commands are executed by HostsFileGet.
 - Updated `ROADMAP.md` to mark F058 complete. Next roadmap item: F059 router/gateway push adapters.
+- Completed F059: added plan-only router/gateway push bundles for OpenWrt dnsmasq, generic dnsmasq, and Unbound with generated config artifacts, JSON review plans, guarded `HOSTSFILEGET_CONFIRM=apply` shell scripts, docs, and regression tests. HostsFileGet does not execute `scp`, `ssh`, router APIs, reload commands, or credential prompts.
+- Updated `ROADMAP.md` to mark F059 complete. Next roadmap item: F060 Intune/GPO/PDQ/SCCM package exports.
 
 ## Scope
 

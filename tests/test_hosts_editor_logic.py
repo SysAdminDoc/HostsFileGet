@@ -26,6 +26,7 @@ from hosts_editor import (
     PROFILE_SYNC_PAYLOAD_SCHEMA,
     PROVENANCE_EVENT_KINDS,
     PROFILE_SCHEMA_VERSION,
+    ROUTER_GATEWAY_PLAN_SCHEMA,
     SANDBOX_VM_HOSTS_PLAN_SCHEMA,
     SOURCE_HEALTH_REPORT_SCHEMA_VERSION,
     SOURCE_ADAPTER_PLUGIN_SCHEMA,
@@ -54,6 +55,7 @@ from hosts_editor import (
     build_recovery_apply_plan,
     build_restore_point_command,
     build_nrpt_policy_export_plan,
+    build_router_gateway_push_plan,
     build_sandbox_vm_hosts_plan,
     build_wfp_blocker_companion_plan,
     build_entry_provenance_report,
@@ -172,6 +174,8 @@ from hosts_editor import (
     format_share_patch_summary,
     format_nrpt_policy_export_plan,
     format_recovery_apply_plan,
+    format_router_gateway_adapter_catalog,
+    format_router_gateway_push_plan,
     format_sandbox_vm_hosts_plan,
     format_wfp_blocker_companion_plan,
     format_git_history_status_report,
@@ -215,6 +219,7 @@ from hosts_editor import (
     list_safesearch_templates,
     list_cloud_dns_adapters,
     list_dns_integration_packs,
+    list_router_gateway_adapters,
     list_threat_feed_packs,
     list_threat_feed_sources,
     looks_like_domain,
@@ -2829,6 +2834,31 @@ profile:
                 4096,
             )
 
+        with mock.patch.object(hosts_editor, "_cli_router_gateway_adapter_list", return_value=0) as mocked_router_list:
+            self.assertEqual(hosts_editor._handle_cli_args(["--router-adapter-list"]), 0)
+            mocked_router_list.assert_called_once_with()
+
+        with mock.patch.object(hosts_editor, "_cli_router_gateway_push_plan", return_value=0) as mocked_router_plan:
+            self.assertEqual(
+                hosts_editor._handle_cli_args([
+                    "--router-push-plan", "openwrt-dnsmasq", "hosts.txt", "router-bundle",
+                    "--router-host", "router.lan",
+                    "--router-user", "root",
+                    "--router-remote-path", "/etc/dnsmasq.d/hfg.conf",
+                    "--router-label", "Lab Router",
+                ]),
+                0,
+            )
+            mocked_router_plan.assert_called_once_with(
+                "openwrt-dnsmasq",
+                "hosts.txt",
+                "router-bundle",
+                "router.lan",
+                "root",
+                "/etc/dnsmasq.d/hfg.conf",
+                "Lab Router",
+            )
+
     def test_handle_cli_args_routes_cloud_dns_flags(self):
         with mock.patch.object(hosts_editor, "_cli_cloud_adapter_list", return_value=0) as mocked_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--cloud-adapter-list"]), 0)
@@ -3559,6 +3589,76 @@ profile:
         self.assertEqual(artifacts_exist, [True, True, True])
         self.assertIn("Copy-VMFile", payload["powershell_script"])
         self.assertIn("-WhatIf", payload["powershell_script"])
+
+    def test_router_gateway_push_plan_is_plan_only_and_generates_confirmed_script(self):
+        adapters = {adapter["id"] for adapter in list_router_gateway_adapters()}
+        self.assertEqual(adapters, {"openwrt-dnsmasq", "generic-dnsmasq", "generic-unbound"})
+
+        plan = build_router_gateway_push_plan(
+            [
+                "0.0.0.0 ads.example",
+                "0.0.0.0 tracker.example",
+                "192.168.1.10 printer",
+            ],
+            "openwrt",
+            remote_host="router.lan",
+            remote_user="root",
+            label="Lab Router",
+            now=datetime.datetime(2026, 5, 12, 15, 0, 0),
+        )
+        formatted = format_router_gateway_push_plan(plan)
+        catalog = format_router_gateway_adapter_catalog()
+
+        self.assertEqual(plan["schema"], ROUTER_GATEWAY_PLAN_SCHEMA)
+        self.assertTrue(plan["plan_only"])
+        self.assertTrue(plan["bundle_only"])
+        self.assertEqual(plan["execution"], "not-run")
+        self.assertEqual(plan["adapter_id"], "openwrt-dnsmasq")
+        self.assertEqual(plan["domain_count"], 2)
+        self.assertIn("address=/ads.example/0.0.0.0", plan["config_content"])
+        self.assertIn("HOSTSFILEGET_CONFIRM", plan["shell_script"])
+        self.assertIn('!= "apply"', plan["shell_script"])
+        self.assertIn("scp --", plan["shell_script"])
+        self.assertIn("ssh --", plan["shell_script"])
+        self.assertIn("dnsmasq --test", plan["shell_script"])
+        self.assertIn("router.lan", plan["commands"][0]["command"])
+        self.assertIn("S20", plan["references"])
+        self.assertIn("Plan only: yes", formatted)
+        self.assertIn("openwrt-dnsmasq", catalog)
+
+    def test_cli_router_gateway_push_plan_writes_bundle_without_remote_actions(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "hosts.txt"
+            output_dir = Path(tmpdir) / "router-bundle"
+            input_path.write_text("0.0.0.0 ads.example\n", encoding="utf-8")
+
+            with mock.patch.object(hosts_editor, "_cli_print"):
+                result = hosts_editor._cli_router_gateway_push_plan(
+                    "generic-unbound",
+                    str(input_path),
+                    str(output_dir),
+                    "gateway.lan",
+                    "admin",
+                    None,
+                    "Unit Gateway",
+                )
+            plan_path = output_dir / "router-gateway-push-plan.json"
+            config_path = output_dir / "hostsfileget-unbound.conf"
+            script_path = output_dir / "hostsfileget-router-push.sh"
+            payload = json.loads(plan_path.read_text(encoding="utf-8"))
+            config_text = config_path.read_text(encoding="utf-8")
+            script_text = script_path.read_text(encoding="utf-8")
+
+        self.assertEqual(result, 0)
+        self.assertTrue(payload["plan_only"])
+        self.assertEqual(payload["adapter_id"], "generic-unbound")
+        self.assertEqual(payload["remote"]["identity"], "admin@gateway.lan")
+        self.assertIn('local-zone: "ads.example." always_nxdomain', config_text)
+        self.assertIn("HOSTSFILEGET_CONFIRM", script_text)
+        self.assertIn("unbound-checkconf", payload["shell_script"])
 
     def test_cli_history_restore_refuses_when_hosts_file_is_disabled(self):
         import tempfile

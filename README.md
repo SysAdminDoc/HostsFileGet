@@ -71,6 +71,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - cleaned hosts, plain domains, Adblock, dnsmasq, and Pi-hole formats
   - Pi-hole, AdGuard Home/DNS, Technitium DNS Server, and blocky interoperability presets
   - plan-only NextDNS and Control D cloud DNS adapter plans that never store API keys or execute remote writes
+  - plan-only router/gateway adapter bundles for OpenWrt dnsmasq, generic dnsmasq, and Unbound that generate reviewable SSH scripts without executing them
   - RPZ, Unbound, Privoxy, gzip-compressed hosts, and bzip2-compressed hosts
 - Operational utilities:
   - DNS cache flush
@@ -234,6 +235,13 @@ Inspect scheduled-update status and recent silent-run activity with:
 ```powershell
 python hosts_editor.py --activity-report
 python hosts_editor.py --activity-report --activity-report-output scheduler-activity.json
+```
+
+Generate router/gateway handoff bundles without executing router writes:
+
+```powershell
+python hosts_editor.py --router-adapter-list
+python hosts_editor.py --router-push-plan openwrt-dnsmasq .\cleaned-hosts.txt .\router-bundle --router-host router.lan --router-user root
 ```
 
 Inspect active config location or create a managed portable bundle config:

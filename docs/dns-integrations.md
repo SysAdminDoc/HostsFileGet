@@ -6,6 +6,8 @@ Use this for handoff, source control, or a local web/static-file host that your 
 
 For plan-only NextDNS and Control D API replay artifacts plus their CSV log importers, see `docs/cloud-dns-adapters.md`.
 
+For guarded router/gateway dnsmasq and Unbound bundle generation, see `docs/router-gateway-adapters.md`.
+
 ## Presets
 
 | Preset | Output shape | Primary use |

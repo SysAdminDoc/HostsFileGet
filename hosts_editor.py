@@ -162,6 +162,80 @@ SANDBOX_VM_STAGED_HOSTS_NAME = "hosts"
 SANDBOX_VM_WSB_NAME = "HostsFileGet-Sandbox.wsb"
 SANDBOX_VM_PLAN_JSON_NAME = "sandbox-vm-hosts-plan.json"
 SANDBOX_VM_TARGET_HOSTS_PATH = r"C:\Windows\System32\drivers\etc\hosts"
+ROUTER_GATEWAY_PLAN_SCHEMA = "hostsfileget.router-gateway-plan.v1"
+ROUTER_GATEWAY_PLAN_JSON_NAME = "router-gateway-push-plan.json"
+ROUTER_GATEWAY_SCRIPT_NAME = "hostsfileget-router-push.sh"
+ROUTER_GATEWAY_DEFAULT_REMOTE_HOST = "router.local"
+ROUTER_GATEWAY_DEFAULT_REMOTE_USER = "root"
+ROUTER_GATEWAY_LABEL_MAX_LENGTH = 80
+ROUTER_GATEWAY_REMOTE_HOST_MAX_LENGTH = 253
+ROUTER_GATEWAY_REMOTE_PATH_MAX_LENGTH = 240
+ROUTER_GATEWAY_PUSH_WARNINGS = (
+    "Plan-only: HostsFileGet writes local artifacts but does not execute scp, ssh, router API, or reload commands.",
+    "No router credentials are stored or prompted for; authentication remains the operator's SSH/client responsibility.",
+    "Router and gateway DNS changes can break household or office connectivity; review backups, console access, and rollback before applying.",
+    "Hosts-file data is exact-domain data; wildcard, client-specific, rewrite, and policy semantics stay in the router or resolver.",
+)
+ROUTER_GATEWAY_ADAPTERS = (
+    {
+        "id": "openwrt-dnsmasq",
+        "label": "OpenWrt dnsmasq config push",
+        "target_system": "OpenWrt dnsmasq",
+        "export_format": "dnsmasq",
+        "rule_shape": "dnsmasq address=/domain/0.0.0.0 rows",
+        "config_filename": "hostsfileget-openwrt-dnsmasq.conf",
+        "remote_path": "/etc/dnsmasq.d/hostsfileget-blocklist.conf",
+        "stage_path": "/tmp/hostsfileget-blocklist.conf",
+        "validate_command": "dnsmasq --test",
+        "reload_command": "/etc/init.d/dnsmasq reload",
+        "source_urls": (
+            "https://openwrt.org/docs/guide-user/base-system/dhcp",
+            "https://dnsmasq.org/doc.html",
+        ),
+        "references": ("O6", "O7", "O8", "K1", "S20", "S21"),
+        "adapter_warning": "Verify the OpenWrt dnsmasq confdir before applying; not every router image loads /etc/dnsmasq.d by default.",
+    },
+    {
+        "id": "generic-dnsmasq",
+        "label": "Generic dnsmasq config push",
+        "target_system": "dnsmasq gateway",
+        "export_format": "dnsmasq",
+        "rule_shape": "dnsmasq address=/domain/0.0.0.0 rows",
+        "config_filename": "hostsfileget-dnsmasq.conf",
+        "remote_path": "/etc/dnsmasq.d/hostsfileget-blocklist.conf",
+        "stage_path": "/tmp/hostsfileget-dnsmasq.conf",
+        "validate_command": "dnsmasq --test",
+        "reload_command": "service dnsmasq reload || systemctl reload dnsmasq",
+        "source_urls": ("https://dnsmasq.org/doc.html",),
+        "references": ("O6", "O7", "O8", "K1", "S21"),
+        "adapter_warning": "Verify the target system reads this dnsmasq include directory before applying.",
+    },
+    {
+        "id": "generic-unbound",
+        "label": "Generic Unbound local-zone push",
+        "target_system": "Unbound gateway",
+        "export_format": "unbound",
+        "rule_shape": "Unbound local-zone always_nxdomain entries",
+        "config_filename": "hostsfileget-unbound.conf",
+        "remote_path": "/etc/unbound/unbound.conf.d/hostsfileget.conf",
+        "stage_path": "/tmp/hostsfileget-unbound.conf",
+        "validate_command": "unbound-checkconf",
+        "reload_command": "service unbound reload || systemctl reload unbound",
+        "source_urls": ("https://unbound.docs.nlnetlabs.nl/en/latest/manpages/unbound.conf.html",),
+        "references": ("O6", "O7", "O8", "K1", "S22"),
+        "adapter_warning": "Verify the target Unbound configuration includes this directory before applying.",
+    },
+)
+ROUTER_GATEWAY_ADAPTER_ALIASES = {
+    "openwrt": "openwrt-dnsmasq",
+    "openwrt-router": "openwrt-dnsmasq",
+    "router-dnsmasq": "openwrt-dnsmasq",
+    "dnsmasq-router": "generic-dnsmasq",
+    "dnsmasq": "generic-dnsmasq",
+    "unbound": "generic-unbound",
+    "unbound-router": "generic-unbound",
+    "gateway-unbound": "generic-unbound",
+}
 SCHEDULED_TASK_NAME = "HostsFileGet Auto-Update"
 CLI_LOG_FILENAME = "cli.log"
 CLI_ACTIVITY_FILENAME = "cli-activity.jsonl"
@@ -4936,6 +5010,318 @@ def format_sandbox_vm_hosts_plan(plan: dict) -> str:
             lines.append(f"- {command.get('id')}: {command.get('command')}")
     else:
         lines.append("- no VM staging commands requested")
+    lines.extend(["", "Warnings:"])
+    for warning in plan.get("warnings") or []:
+        lines.append(f"- {warning}")
+    references = plan.get("references") or []
+    if references:
+        lines.extend(["", "Roadmap source IDs:", f"- {', '.join(references)}"])
+    return "\n".join(lines)
+
+
+def _shell_single_quote(value: str) -> str:
+    return "'" + str(value).replace("'", "'\"'\"'") + "'"
+
+
+def normalize_router_gateway_adapter_id(adapter_id: str) -> str:
+    normalized = (adapter_id or "").strip().lower().replace("_", "-")
+    return ROUTER_GATEWAY_ADAPTER_ALIASES.get(normalized, normalized)
+
+
+def list_router_gateway_adapters() -> list[dict[str, str]]:
+    return [dict(adapter) for adapter in ROUTER_GATEWAY_ADAPTERS]
+
+
+def find_router_gateway_adapter(adapter_id: str) -> dict[str, str]:
+    normalized = normalize_router_gateway_adapter_id(adapter_id)
+    for adapter in ROUTER_GATEWAY_ADAPTERS:
+        if adapter["id"] == normalized:
+            return dict(adapter)
+    known = ", ".join(adapter["id"] for adapter in ROUTER_GATEWAY_ADAPTERS)
+    raise ValueError(f"Unknown router/gateway adapter: {adapter_id!r}. Known adapters: {known}")
+
+
+def sanitize_router_gateway_label(value: str | None, default: str) -> str:
+    candidate = re.sub(r"\s+", " ", str(value or default).strip())
+    if not candidate or _contains_control_chars(candidate):
+        candidate = default
+    return candidate[:ROUTER_GATEWAY_LABEL_MAX_LENGTH]
+
+
+def sanitize_router_gateway_remote_host(value: str | None = None) -> str:
+    candidate = str(value or ROUTER_GATEWAY_DEFAULT_REMOTE_HOST).strip()
+    if (
+        not candidate
+        or _contains_control_chars(candidate)
+        or len(candidate) > ROUTER_GATEWAY_REMOTE_HOST_MAX_LENGTH
+        or candidate.startswith("-")
+        or any(ch.isspace() for ch in candidate)
+        or "/" in candidate
+    ):
+        raise ValueError("router host must be a hostname or IP literal without whitespace or path characters")
+    return candidate
+
+
+def sanitize_router_gateway_remote_user(value: str | None = None) -> str:
+    candidate = str(value or ROUTER_GATEWAY_DEFAULT_REMOTE_USER).strip()
+    if not candidate:
+        return ""
+    if (
+        _contains_control_chars(candidate)
+        or len(candidate) > 64
+        or candidate.startswith("-")
+        or any(ch.isspace() for ch in candidate)
+        or "@" in candidate
+        or "/" in candidate
+    ):
+        raise ValueError("router user must be a local SSH username without whitespace, @, or path characters")
+    return candidate
+
+
+def sanitize_router_gateway_remote_path(value: str | None, default: str) -> str:
+    candidate = str(value or default).strip()
+    if (
+        not candidate
+        or _contains_control_chars(candidate)
+        or len(candidate) > ROUTER_GATEWAY_REMOTE_PATH_MAX_LENGTH
+        or not candidate.startswith("/")
+        or candidate.startswith("//")
+        or "\x00" in candidate
+    ):
+        raise ValueError("router remote path must be an absolute POSIX path")
+    return candidate
+
+
+def _router_gateway_remote_identity(remote_host: str, remote_user: str | None = None) -> str:
+    return f"{remote_user}@{remote_host}" if remote_user else remote_host
+
+
+def _router_gateway_backup_stamp(created_at: str) -> str:
+    stamp = re.sub(r"[^0-9]", "", str(created_at or ""))[:14]
+    return stamp or "review"
+
+
+def build_router_gateway_push_script(
+    *,
+    adapter_id: str,
+    label: str,
+    remote_identity: str,
+    remote_path: str,
+    stage_path: str,
+    config_filename: str,
+    remote_command: str,
+) -> str:
+    return "\n".join([
+        "#!/bin/sh",
+        "set -eu",
+        "",
+        "# HostsFileGet router/gateway push script",
+        "# Review this script and the generated config before applying.",
+        f"ADAPTER={_shell_single_quote(adapter_id)}",
+        f"LABEL={_shell_single_quote(label)}",
+        f"REMOTE={_shell_single_quote(remote_identity)}",
+        f"REMOTE_PATH={_shell_single_quote(remote_path)}",
+        f"STAGE_PATH={_shell_single_quote(stage_path)}",
+        f"REMOTE_APPLY_COMMAND={_shell_single_quote(remote_command)}",
+        f"CONFIG_FILE=${{HOSTSFILEGET_CONFIG_FILE:-./{config_filename}}}",
+        "",
+        'echo "HostsFileGet router/gateway push plan"',
+        'echo "Adapter: $ADAPTER ($LABEL)"',
+        'echo "Remote: $REMOTE"',
+        'echo "Config: $CONFIG_FILE -> $REMOTE:$REMOTE_PATH"',
+        'if [ "${HOSTSFILEGET_CONFIRM:-}" != "apply" ]; then',
+        '  echo "Dry run only. Set HOSTSFILEGET_CONFIRM=apply after review to execute scp/ssh."',
+        '  echo "Would run: scp -- $CONFIG_FILE $REMOTE:$STAGE_PATH"',
+        '  echo "Would run: ssh -- $REMOTE $REMOTE_APPLY_COMMAND"',
+        "  exit 0",
+        "fi",
+        "",
+        'scp -- "$CONFIG_FILE" "$REMOTE:$STAGE_PATH"',
+        'ssh -- "$REMOTE" "$REMOTE_APPLY_COMMAND"',
+        'echo "Router/gateway push complete. Validate client DNS resolution before deleting backups."',
+    ])
+
+
+def build_router_gateway_push_plan(
+    lines,
+    adapter_id: str,
+    *,
+    remote_host: str | None = None,
+    remote_user: str | None = None,
+    remote_path: str | None = None,
+    label: str | None = None,
+    now=None,
+) -> dict:
+    source_lines = str(lines or "").splitlines() if isinstance(lines, str) else list(lines or [])
+    adapter = find_router_gateway_adapter(adapter_id)
+    safe_label = sanitize_router_gateway_label(label, adapter["label"])
+    safe_host = sanitize_router_gateway_remote_host(remote_host)
+    safe_user = sanitize_router_gateway_remote_user(remote_user)
+    safe_remote_path = sanitize_router_gateway_remote_path(remote_path, adapter["remote_path"])
+    stage_path = adapter["stage_path"]
+    remote_identity = _router_gateway_remote_identity(safe_host, safe_user)
+    created_at = now or datetime.datetime.now()
+    if isinstance(created_at, datetime.datetime):
+        created_at = created_at.isoformat(timespec="seconds")
+    created_at = str(created_at)
+
+    records = build_export_domain_records(source_lines)
+    content = export_lines_as_format(source_lines, adapter["export_format"])
+    if content and not content.endswith("\n"):
+        content += "\n"
+    remote_dir = safe_remote_path.rsplit("/", 1)[0] or "/"
+    backup_path = f"{safe_remote_path}.bak.{_router_gateway_backup_stamp(created_at)}"
+    new_path = f"{safe_remote_path}.new"
+    remote_parts = [
+        "set -eu",
+        f"mkdir -p {_shell_single_quote(remote_dir)}",
+        (
+            f"if [ -f {_shell_single_quote(safe_remote_path)} ]; then "
+            f"cp {_shell_single_quote(safe_remote_path)} {_shell_single_quote(backup_path)}; fi"
+        ),
+        f"cp {_shell_single_quote(stage_path)} {_shell_single_quote(new_path)}",
+        f"mv {_shell_single_quote(new_path)} {_shell_single_quote(safe_remote_path)}",
+        (
+            f"if ! {adapter['validate_command']}; then "
+            f"if [ -f {_shell_single_quote(backup_path)} ]; then "
+            f"cp {_shell_single_quote(backup_path)} {_shell_single_quote(safe_remote_path)}; fi; "
+            "exit 1; fi"
+        ),
+        adapter["reload_command"],
+    ]
+    remote_command = "; ".join(remote_parts)
+    config_filename = adapter["config_filename"]
+    shell_script = build_router_gateway_push_script(
+        adapter_id=adapter["id"],
+        label=safe_label,
+        remote_identity=remote_identity,
+        remote_path=safe_remote_path,
+        stage_path=stage_path,
+        config_filename=config_filename,
+        remote_command=remote_command,
+    )
+    commands = [
+        {
+            "id": "stage-config",
+            "description": "Copy the generated config artifact to a temporary path on the gateway.",
+            "command": f"scp -- {_shell_single_quote(config_filename)} {_shell_single_quote(remote_identity + ':' + stage_path)}",
+            "requires_operator_execution": True,
+        },
+        {
+            "id": "backup-install-validate-reload",
+            "description": "Backup the current gateway config, install the staged file, validate DNS config, and reload the DNS service.",
+            "command": f"ssh -- {_shell_single_quote(remote_identity)} {_shell_single_quote(remote_command)}",
+            "requires_operator_execution": True,
+        },
+    ]
+    warnings = list(ROUTER_GATEWAY_PUSH_WARNINGS)
+    if adapter.get("adapter_warning"):
+        warnings.append(adapter["adapter_warning"])
+    if not records:
+        warnings.append("No blocking domains were exported; applying this adapter would stage an empty or header-only config.")
+
+    return {
+        "schema": ROUTER_GATEWAY_PLAN_SCHEMA,
+        "app_version": APP_VERSION,
+        "created_at": created_at,
+        "plan_only": True,
+        "bundle_only": True,
+        "execution": "not-run",
+        "adapter_id": adapter["id"],
+        "label": safe_label,
+        "target_system": adapter["target_system"],
+        "export_format": adapter["export_format"],
+        "rule_shape": adapter["rule_shape"],
+        "domain_count": len(records),
+        "line_count": len(content.splitlines()) if content else 0,
+        "config_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        "config_filename": config_filename,
+        "script_filename": ROUTER_GATEWAY_SCRIPT_NAME,
+        "plan_filename": ROUTER_GATEWAY_PLAN_JSON_NAME,
+        "remote": {
+            "host": safe_host,
+            "user": safe_user,
+            "identity": remote_identity,
+            "remote_path": safe_remote_path,
+            "stage_path": stage_path,
+            "backup_path": backup_path,
+        },
+        "config_content": content,
+        "shell_script": shell_script,
+        "commands": commands,
+        "warnings": warnings,
+        "source_urls": list(adapter["source_urls"]),
+        "references": list(adapter["references"]),
+    }
+
+
+def write_router_gateway_push_bundle(plan: dict, output_dir: str) -> dict:
+    root = os.path.abspath(output_dir)
+    os.makedirs(root, exist_ok=True)
+    bundled = dict(plan)
+    artifacts = {
+        "config": os.path.join(root, bundled["config_filename"]),
+        "script": os.path.join(root, bundled["script_filename"]),
+        "plan_json": os.path.join(root, bundled["plan_filename"]),
+    }
+    bundled["output_dir"] = root
+    bundled["artifacts"] = artifacts
+    write_text_file_atomic(artifacts["config"], bundled["config_content"])
+    write_text_file_atomic(artifacts["script"], bundled["shell_script"])
+    write_text_file_atomic(artifacts["plan_json"], json.dumps(bundled, indent=2))
+    return bundled
+
+
+def format_router_gateway_adapter_catalog() -> str:
+    lines = [
+        "Router/gateway push adapters",
+        "",
+        "All adapters are local artifact generators. HostsFileGet does not execute router writes.",
+        "",
+        "Supported adapters:",
+    ]
+    for adapter in ROUTER_GATEWAY_ADAPTERS:
+        lines.extend([
+            f"- {adapter['id']}: {adapter['label']}",
+            f"  Target: {adapter['target_system']}",
+            f"  Format: {adapter['export_format']} ({adapter['rule_shape']})",
+            f"  Default remote path: {adapter['remote_path']}",
+            f"  Validate: {adapter['validate_command']}",
+            f"  Reload: {adapter['reload_command']}",
+            f"  Sources: {', '.join(adapter['source_urls'])}",
+        ])
+    lines.append("")
+    lines.append("Warnings:")
+    lines.extend(f"- {warning}" for warning in ROUTER_GATEWAY_PUSH_WARNINGS)
+    return "\n".join(lines)
+
+
+def format_router_gateway_push_plan(plan: dict) -> str:
+    remote = plan.get("remote") or {}
+    lines = [
+        "Router/Gateway Push Plan",
+        f"Schema: {plan.get('schema')}",
+        f"Plan only: {'yes' if plan.get('plan_only') else 'no'}",
+        f"Bundle only: {'yes' if plan.get('bundle_only') else 'no'}",
+        f"Execution: {plan.get('execution')}",
+        f"Adapter: {plan.get('adapter_id')} - {plan.get('label')}",
+        f"Target: {plan.get('target_system')}",
+        f"Format: {plan.get('export_format')} ({plan.get('rule_shape')})",
+        f"Domains: {int(plan.get('domain_count') or 0):,}",
+        f"Lines: {int(plan.get('line_count') or 0):,}",
+        f"Config SHA-256: {plan.get('config_sha256')}",
+        f"Remote: {remote.get('identity')}:{remote.get('remote_path')}",
+    ]
+    if plan.get("output_dir"):
+        lines.append(f"Output: {plan.get('output_dir')}")
+    artifacts = plan.get("artifacts") or {}
+    if artifacts:
+        lines.extend(["", "Artifacts:"])
+        for name, path in artifacts.items():
+            lines.append(f"- {name}: {path}")
+    lines.extend(["", "Commands:"])
+    for command in plan.get("commands") or []:
+        lines.append(f"- {command.get('id')}: {_format_command_for_display(command.get('command'))}")
     lines.extend(["", "Warnings:"])
     for warning in plan.get("warnings") or []:
         lines.append(f"- {warning}")
@@ -22120,6 +22506,39 @@ def _cli_sandbox_vm_hosts_plan(
     return 0
 
 
+def _cli_router_gateway_adapter_list() -> int:
+    _cli_print(format_router_gateway_adapter_catalog())
+    return 0
+
+
+def _cli_router_gateway_push_plan(
+    adapter_id: str,
+    input_path: str,
+    output_dir: str,
+    remote_host: str | None = None,
+    remote_user: str | None = None,
+    remote_path: str | None = None,
+    label: str | None = None,
+) -> int:
+    try:
+        source_lines = read_text_file_lines(input_path)
+        plan = build_router_gateway_push_plan(
+            source_lines,
+            adapter_id,
+            remote_host=remote_host,
+            remote_user=remote_user,
+            remote_path=remote_path,
+            label=label,
+        )
+        plan = write_router_gateway_push_bundle(plan, output_dir)
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Router/gateway push plan failed: {exc}")
+        return 2
+    _cli_print(format_router_gateway_push_plan(plan))
+    _cli_print(f"Wrote router/gateway push bundle to {plan['output_dir']}")
+    return 0
+
+
 def _cli_profile_schedule_list(at_value: str | None = None) -> int:
     try:
         config_path = get_primary_config_path("hosts_editor_config.json")
@@ -22288,6 +22707,12 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--sandbox-networking",
         "--sandbox-vgpu",
         "--sandbox-memory-mb",
+        "--router-adapter-list",
+        "--router-push-plan",
+        "--router-host",
+        "--router-user",
+        "--router-remote-path",
+        "--router-label",
         "--profile-schedule-list",
         "--profile-schedule-add",
         "--profile-schedule-days",
@@ -22373,6 +22798,11 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--sandbox-networking=",
         "--sandbox-vgpu=",
         "--sandbox-memory-mb=",
+        "--router-push-plan=",
+        "--router-host=",
+        "--router-user=",
+        "--router-remote-path=",
+        "--router-label=",
         "--profile-schedule-add=",
         "--profile-schedule-days=",
         "--profile-schedule-name=",
@@ -22473,6 +22903,17 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--sandbox-networking", choices=("Enable", "Disable", "Default"), default="Disable", help="Windows Sandbox networking setting for --sandbox-vm-hosts-plan; defaults to Disable.")
     parser.add_argument("--sandbox-vgpu", choices=("Enable", "Disable", "Default"), default="Disable", help="Windows Sandbox vGPU setting for --sandbox-vm-hosts-plan; defaults to Disable.")
     parser.add_argument("--sandbox-memory-mb", type=int, metavar="MB", help="Optional Windows Sandbox memory size for --sandbox-vm-hosts-plan.")
+    parser.add_argument("--router-adapter-list", action="store_true", help="List plan-only router/gateway push adapters.")
+    parser.add_argument(
+        "--router-push-plan",
+        nargs=3,
+        metavar=("ADAPTER", "INPUT", "OUTPUT_DIR"),
+        help="Write a plan-only router/gateway push bundle from INPUT into OUTPUT_DIR. No scp, ssh, or router writes are executed.",
+    )
+    parser.add_argument("--router-host", default=ROUTER_GATEWAY_DEFAULT_REMOTE_HOST, metavar="HOST", help="Router/gateway SSH host placeholder for --router-push-plan.")
+    parser.add_argument("--router-user", default=ROUTER_GATEWAY_DEFAULT_REMOTE_USER, metavar="USER", help="Router/gateway SSH user placeholder for --router-push-plan.")
+    parser.add_argument("--router-remote-path", metavar="PATH", help="Remote DNS config path for --router-push-plan.")
+    parser.add_argument("--router-label", metavar="TEXT", help="Display label for --router-push-plan output.")
     parser.add_argument("--profile-schedule-list", action="store_true", help="Show the time-bound profile activation schedule without writing files.")
     parser.add_argument(
         "--profile-schedule-add",
@@ -22691,6 +23132,26 @@ def _handle_cli_args(argv: list[str]) -> int | None:
             args.sandbox_networking,
             args.sandbox_vgpu,
             args.sandbox_memory_mb,
+        )
+    router_options = [
+        args.router_remote_path,
+        args.router_label,
+        args.router_host != ROUTER_GATEWAY_DEFAULT_REMOTE_HOST,
+        args.router_user != ROUTER_GATEWAY_DEFAULT_REMOTE_USER,
+    ]
+    if any(router_options) and not args.router_push_plan:
+        parser.error("--router-* options require --router-push-plan ADAPTER INPUT OUTPUT_DIR")
+    if args.router_adapter_list:
+        return _cli_router_gateway_adapter_list()
+    if args.router_push_plan:
+        return _cli_router_gateway_push_plan(
+            args.router_push_plan[0],
+            args.router_push_plan[1],
+            args.router_push_plan[2],
+            args.router_host,
+            args.router_user,
+            args.router_remote_path,
+            args.router_label,
         )
     if args.profile_schedule_add:
         return _cli_profile_schedule_add(

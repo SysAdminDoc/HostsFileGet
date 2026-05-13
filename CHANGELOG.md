@@ -4,6 +4,10 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Router/gateway push adapters**
+- Added `--router-adapter-list` and `--router-push-plan` for plan-only OpenWrt dnsmasq, generic dnsmasq, and Unbound gateway bundles.
+- Bundles include a generated resolver config, JSON review plan, and guarded shell script that exits unless `HOSTSFILEGET_CONFIRM=apply` is set; HostsFileGet does not execute `scp`, `ssh`, reloads, router APIs, or credential prompts.
+
 **Windows Sandbox / VM hosts bundle**
 - Added `--sandbox-vm-hosts-plan` to write a lab bundle containing a staged hosts file, guest-side apply script, Windows Sandbox `.wsb` config, JSON plan, and optional Hyper-V `Copy-VMFile -WhatIf` staging commands.
 - The bundle is plan-only: HostsFileGet does not launch Sandbox, start VMs, enable integration services, or copy files into guests.
