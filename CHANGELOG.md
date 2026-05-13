@@ -4,6 +4,10 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Translation contribution workflow**
+- Added `--i18n-template` and `--i18n-validate` so contributors can generate locale catalogs and validate keys/placeholders before opening a PR.
+- Added translation contribution docs, data-folder notes, and a GitHub issue template for locale submissions.
+
 **Curated source manifest**
 - Moved the built-in curated blocklist catalog to `data/blocklist_sources.json` with schema validation and regression coverage.
 - Updated the launcher and PyInstaller spec so the manifest is validated and bundled with raw-script and executable launches.

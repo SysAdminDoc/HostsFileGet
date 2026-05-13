@@ -103,6 +103,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F046 complete. Next roadmap item: F052 Winget and Chocolatey manifests.
 - Completed F052: added Winget and Chocolatey manifest templates, a deterministic render script, release workflow packaging, docs, and regression tests for release input validation/rendered manifests.
 - Updated `ROADMAP.md` to mark F052 complete. Next roadmap item: F053 translation contribution workflow.
+- Completed F053: added translation contribution template and validation CLI commands, placeholder/key review helpers, data-folder notes, a GitHub issue template, docs, and regression tests.
+- Updated `ROADMAP.md` to mark F053 complete. Next roadmap item: F054 encrypted opt-in sync via Gist or local Git remote.
 
 ## Scope
 
