@@ -78,6 +78,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - opt-in loopback-only local REST API with bearer auth for read-only status and clean-preview automation
   - backup restore preview
   - restore-point/VSS recovery plan output for high-risk apply reviews
+  - plan-only Windows Firewall/WFP IP/CIDR blocker companion export
   - optional local Git history snapshot/status/restore commands
   - emergency DNS recovery helper
 - Configuration:
@@ -286,6 +287,13 @@ python hosts_editor.py --recovery-plan
 python hosts_editor.py --recovery-plan-output .\recovery-plan.json --recovery-plan-description "Before hosts update"
 ```
 
+Export a plan-only Windows Firewall/WFP IP/CIDR blocker companion:
+
+```powershell
+python hosts_editor.py --wfp-blocker-plan .\resolver-ips.txt .\wfp-blocker-plan.json
+python hosts_editor.py --wfp-blocker-plan .\resolver-ips.txt .\wfp-blocker-plan.json --wfp-rule-prefix "HostsFileGet Resolver Block"
+```
+
 Generate guarded cloud-DNS replay plans or extract blocked domains from cloud DNS CSV log exports:
 
 ```powershell
@@ -374,6 +382,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Encrypted profile sync: `docs/encrypted-sync.md`
 - Signed share patches: `docs/share-patches.md`
 - Recovery apply plan: `docs/recovery-plan.md`
+- WFP blocker companion: `docs/wfp-blocker-companion.md`
 - Optional Git history: `docs/git-history.md`
 - Scheduler activity report: `docs/scheduler-activity.md`
 - Portable bundle config: `docs/portable-config.md`

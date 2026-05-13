@@ -1,7 +1,7 @@
 # HostsFileGet Roadmap
 
 Version: 2026-05-12 roadmap execution update
-Repo state basis: `main` through F044/F045/F046/F051/F052/F053/F054/F055 implementation plus external research current to 2026-05-12
+Repo state basis: `main` through F044/F045/F046/F051/F052/F053/F054/F055/F056 implementation plus external research current to 2026-05-12
 Scope: Windows-first desktop hosts-file editor, importer, cleaner, diagnostics, and safe writer
 
 This document supersedes the earlier broad idea dump. Useful shipped history has been preserved as baseline context, but the forward roadmap is now source-backed and tiered. Every active candidate cites at least one source ID from the appendix.
@@ -75,6 +75,7 @@ Non-negotiables:
 - [x] F053 - Translation contribution workflow (`docs/i18n.md`, template/validation CLI, GitHub issue template)
 - [x] F054 - Encrypted opt-in sync via local Git remote (`docs/encrypted-sync.md`, GPG-encrypted profile bundle, config-only import/export)
 - [x] F055 - Signed shareable allowlist/profile patches (`docs/share-patches.md`, detached GPG signatures, config-only apply)
+- [x] F056 - WFP IP/CIDR blocker companion (`docs/wfp-blocker-companion.md`, plan-only Windows Firewall/WFP companion export)
 
 ## State Of The Repo
 
@@ -83,8 +84,8 @@ Non-negotiables:
 - Language and runtime: Python 3.x, Tkinter desktop UI, Windows-first assumptions, PowerShell launcher.
 - Entry points: `hosts_editor.py` for GUI and CLI, `PythonLauncher.ps1` for elevated launch/bootstrap, `HostsFileGet.spec` for PyInstaller.
 - Packaging: PyInstaller one-file Windows EXE with `uac_admin=True`; build artifacts exist locally under `build/` and `dist/` but are not tracked.
-- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, `tests/test_benchmarks.py`, and `tests/test_package_manifests.py` contain 292 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation and contribution fixtures, encrypted profile sync fixtures, signed share patch fixtures, recovery-plan fixtures, migration importer fixtures, export-format fixtures, DNS integration fixtures, cloud DNS adapter fixtures, source adapter plugin fixtures, local REST API fixtures, package manifest render fixtures, adblock syntax lint/quarantine fixtures, rule tier fixtures, IDN/homograph fixtures, threat-feed pack fixtures, CNAME cloaking workflow fixtures, encrypted-DNS bypass pack fixtures, DNS rebinding report fixtures, SafeSearch/restricted-mode template fixtures, profile activation schedule fixtures, profile quick-switch/tray dependency fixtures, source-bundle manifest fixtures, filter-builder query-history fixtures, watch-expression fixtures, source metrics fixtures, virtual-list fixtures, parallel import retry/order fixtures, provenance filter/export fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, NextDNS/Control D CSV logs, and find/replace.
-- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `data/i18n/README.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/cloud-dns-adapters.md`, `docs/adblock-lint.md`, `docs/rule-tiers.md`, `docs/idn-homograph.md`, `docs/threat-feed-packs.md`, `docs/cname-cloaking.md`, `docs/encrypted-dns-bypass.md`, `docs/encrypted-sync.md`, `docs/share-patches.md`, `docs/recovery-plan.md`, `docs/dns-rebinding.md`, `docs/safesearch-restricted-mode.md`, `docs/profile-activation-schedule.md`, `docs/profile-quick-switch.md`, `docs/source-adapter-plugins.md`, `docs/local-rest-api.md`, `docs/package-managers.md`, `docs/source-bundles.md`, `docs/filter-builder.md`, `docs/watch-expressions.md`, `docs/source-metrics.md`, `docs/parallel-imports.md`, `docs/virtualized-lists.md`, `docs/provenance-log.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `.github/ISSUE_TEMPLATE/translation.yml`, `LICENSE`, and this roadmap.
+- Tests: `tests/test_hosts_editor_logic.py`, `tests/test_gui_smoke.py`, `tests/test_benchmarks.py`, and `tests/test_package_manifests.py` contain 294 tests plus manifest-driven golden cleaned-output fixtures, deterministic parser fuzzers, accessibility contrast checks, i18n catalog validation and contribution fixtures, encrypted profile sync fixtures, signed share patch fixtures, recovery-plan fixtures, WFP blocker companion fixtures, migration importer fixtures, export-format fixtures, DNS integration fixtures, cloud DNS adapter fixtures, source adapter plugin fixtures, local REST API fixtures, package manifest render fixtures, adblock syntax lint/quarantine fixtures, rule tier fixtures, IDN/homograph fixtures, threat-feed pack fixtures, CNAME cloaking workflow fixtures, encrypted-DNS bypass pack fixtures, DNS rebinding report fixtures, SafeSearch/restricted-mode template fixtures, profile activation schedule fixtures, profile quick-switch/tray dependency fixtures, source-bundle manifest fixtures, filter-builder query-history fixtures, watch-expression fixtures, source metrics fixtures, virtual-list fixtures, parallel import retry/order fixtures, provenance filter/export fixtures, declarative config fixtures, Git-history fixtures, CLI profile fixtures, scheduler activity fixtures, portable config fixtures, report-dialog smoke coverage, and benchmark harness smoke coverage across parsing, normalization, config/profile sanitation, patched Tk startup/modals, transactional hosts enable/disable, CLI guards, scheduler commands, import helpers, pinned domains, provenance, Pi-hole FTL, AdGuard Home logs, NextDNS/Control D CSV logs, and find/replace.
+- Docs: `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`, `CLAUDE.md`, `CODEX_CHANGELOG.md`, `data/i18n/README.md`, `docs/accessibility.md`, `docs/i18n.md`, `docs/migration-imports.md`, `docs/export-formats.md`, `docs/dns-integrations.md`, `docs/cloud-dns-adapters.md`, `docs/adblock-lint.md`, `docs/rule-tiers.md`, `docs/idn-homograph.md`, `docs/threat-feed-packs.md`, `docs/cname-cloaking.md`, `docs/encrypted-dns-bypass.md`, `docs/encrypted-sync.md`, `docs/share-patches.md`, `docs/recovery-plan.md`, `docs/wfp-blocker-companion.md`, `docs/dns-rebinding.md`, `docs/safesearch-restricted-mode.md`, `docs/profile-activation-schedule.md`, `docs/profile-quick-switch.md`, `docs/source-adapter-plugins.md`, `docs/local-rest-api.md`, `docs/package-managers.md`, `docs/source-bundles.md`, `docs/filter-builder.md`, `docs/watch-expressions.md`, `docs/source-metrics.md`, `docs/parallel-imports.md`, `docs/virtualized-lists.md`, `docs/provenance-log.md`, `docs/declarative-config.md`, `docs/cli-profiles.md`, `docs/git-history.md`, `docs/scheduler-activity.md`, `docs/portable-config.md`, `.github/ISSUE_TEMPLATE/translation.yml`, `LICENSE`, and this roadmap.
 - License: MIT.
 
 ### Product Reality
@@ -121,6 +122,7 @@ HostsFileGet already provides:
 - `--dns-rebinding-report`, `--dns-rebinding-output`, and `--dns-rebinding-trusted-suffix` expose static DNS rebinding-sensitive hosts mapping reports without live DNS queries or resolver policy changes.
 - `--safesearch-template-list` and `--safesearch-template-plan` expose guarded SafeSearch and restricted-mode plans that separate hosts-reviewable provider targets from DNS CNAME handoffs.
 - `--recovery-plan` exposes a plan-only restore-point/VSS recovery spike for high-risk hosts writes without executing recovery commands.
+- `--wfp-blocker-plan` exports a plan-only Windows Firewall/WFP IP/CIDR blocker companion JSON with reviewable PowerShell and no live firewall mutation.
 - `--profile-schedule-list`, `--profile-schedule-add`, `--profile-schedule-apply`, and `--profile-schedule-at` expose guarded time-bound profile activation that switches app config only and never writes the system hosts file.
 - **Tools > Profile Quick Switch...** and optional **Tools > Start Tray Quick Switch...** expose config-only saved-profile switching without writing the system hosts file.
 - Optional local Git-backed history commands for snapshot, status, and admin-gated rollback with normal `.bak` backup creation.
@@ -359,18 +361,19 @@ Legend:
 32. Completed - Encrypted opt-in sync via local Git remote: F054.
 33. Completed - Signed shareable allowlist/profile patches: F055.
 34. Completed - Restore-point or VSS-backed apply recovery spike: F044.
+35. Completed - WFP IP/CIDR blocker companion: F056.
 
 Rationale: these items reduce maintenance risk, make the current product more trustworthy, and create the internal contracts needed for the larger profile/integration work.
 
 ### Next
 
-1. Later-stage platform and enterprise items: F056-F070.
+1. Later-stage platform and enterprise items: F057-F070.
 
 Rationale: these are valuable and well-supported by the market, but most require the Now-phase source manifest, profile model, and test/release foundations.
 
 ### Later
 
-1. Windows network stack companions: F056, F057, F058.
+1. Windows network stack companions: F057, F058.
 2. Router and enterprise deployment exports: F059, F060.
 3. Developer-side extension surfaces: F061, F062.
 4. Advanced DNS/security enrichment: F063, F064, F065, F066, F067, F068, F069, F070.

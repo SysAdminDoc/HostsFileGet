@@ -4,6 +4,10 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**WFP blocker companion**
+- Added `--wfp-blocker-plan` to export a plan-only Windows Firewall/WFP IP/CIDR blocker companion JSON with reviewable PowerShell commands.
+- The export parses IPv4, IPv6, and CIDR targets, rejects unsafe or unsupported remote-address tokens, and does not execute firewall rules or ship a WFP driver.
+
 **Recovery apply plan**
 - Added `--recovery-plan` and JSON output for a plan-only restore-point/VSS recovery spike before high-risk hosts writes.
 - The plan documents the existing backup contract, a reviewable `Checkpoint-Computer` command, and VSS boundaries without executing machine-wide recovery operations.
