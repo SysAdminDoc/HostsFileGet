@@ -48,7 +48,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback path
 
 APP_NAME = "Hosts File Get"
 APP_SLUG = "HostsFileGet"
-APP_VERSION = "2.22.0"
+APP_VERSION = "2.23.0"
 CONFIG_FILENAME = "hosts_editor_config.json"
 CONFIG_SCHEMA_VERSION = 4
 PROFILE_SCHEMA_VERSION = 1
@@ -3200,6 +3200,71 @@ def source_cache_key(url: str) -> str:
 
 def get_source_cache_body_path(url: str, cache_dir: str | None = None) -> str:
     return os.path.join(cache_dir or get_source_cache_dir(), f"{source_cache_key(url)}.bin")
+
+
+def prune_orphan_source_cache_files(
+    metadata: dict[str, dict],
+    cache_dir: str | None = None,
+) -> dict:
+    """Delete cached source body blobs that no longer have a metadata entry.
+
+    The source cache historically grew unbounded: when the user removed a
+    custom source or a curated source's URL changed, the corresponding
+    ``<sha256>.bin`` file in ``%LOCALAPPDATA%/HostsFileGet/source_cache/``
+    was left behind. Over months of use this can accumulate tens of MB
+    that have no live referrer. Build the set of cache keys that are still
+    referenced by ``metadata`` and unlink everything else under the cache
+    directory.
+
+    Returns a dict report with ``{removed, retained, freed_bytes,
+    errors}`` so callers can surface progress in the status bar or CLI
+    output.
+    """
+    cache_dir = cache_dir or get_source_cache_dir()
+    report = {"removed": 0, "retained": 0, "freed_bytes": 0, "errors": 0}
+    if not os.path.isdir(cache_dir):
+        return report
+    live_keys: set[str] = set()
+    if isinstance(metadata, dict):
+        for url, entry in metadata.items():
+            try:
+                live_keys.add(source_cache_key(str(url)))
+            except Exception:
+                continue
+            if isinstance(entry, dict):
+                fingerprint = str(entry.get("cache_key") or "").strip().lower()
+                if fingerprint:
+                    live_keys.add(fingerprint)
+    try:
+        entries = list(os.scandir(cache_dir))
+    except OSError:
+        return report
+    for entry in entries:
+        if not entry.is_file():
+            continue
+        name = entry.name
+        # Only touch our own ``<hex>.bin`` files - leave foreign blobs and
+        # other auxiliary files (e.g. README, .gitkeep) alone.
+        if not name.endswith(".bin"):
+            continue
+        key = name[:-4]
+        if len(key) != 64 or not all(ch in "0123456789abcdef" for ch in key):
+            continue
+        if key in live_keys:
+            report["retained"] += 1
+            continue
+        try:
+            size = entry.stat().st_size
+        except OSError:
+            size = 0
+        try:
+            os.unlink(entry.path)
+        except OSError:
+            report["errors"] += 1
+            continue
+        report["removed"] += 1
+        report["freed_bytes"] += size
+    return report
 
 
 def get_git_history_dir(base_dir: str | None = None) -> str:
@@ -18470,8 +18535,24 @@ class HostsFileEditor:
 
     # Extended Blocklist Definitions
     # Loaded from data/blocklist_sources.json so feed URLs are auditable outside the code.
-    BLOCKLIST_SOURCES = load_blocklist_sources_manifest()
-    SOURCE_BUNDLES = load_source_bundle_catalog(blocklist_sources=BLOCKLIST_SOURCES)
+    # We catch load failures defensively here. A corrupted or missing manifest
+    # would otherwise raise at class-creation time and prevent the entire app
+    # from importing — preferring a degraded "empty curated catalog" startup
+    # over a hard crash means the editor, custom sources, and CLI paths still
+    # work while the user fixes or restores the manifest. ``_manifest_load_error``
+    # surfaces the underlying message later in the UI's status bar.
+    try:
+        BLOCKLIST_SOURCES = load_blocklist_sources_manifest()
+        _manifest_load_error: str | None = None
+    except Exception as _manifest_exc:  # noqa: BLE001 - any load failure should degrade gracefully
+        BLOCKLIST_SOURCES = {}
+        _manifest_load_error = f"Source manifest could not be loaded: {_manifest_exc}"
+    try:
+        SOURCE_BUNDLES = load_source_bundle_catalog(blocklist_sources=BLOCKLIST_SOURCES)
+        _bundle_load_error: str | None = None
+    except Exception as _bundle_exc:  # noqa: BLE001
+        SOURCE_BUNDLES = []
+        _bundle_load_error = f"Source bundle catalog could not be loaded: {_bundle_exc}"
 
     def __init__(self, root):
         self.root = root
@@ -20395,14 +20476,21 @@ class HostsFileEditor:
             self.is_admin = False
             if os.name == 'nt' and ELEVATION_ATTEMPT_FLAG not in sys.argv:
                 try:
-                    relaunch_args = sys.argv[1:] + [ELEVATION_ATTEMPT_FLAG]
+                    relaunch_args = list(sys.argv[1:]) + [ELEVATION_ATTEMPT_FLAG]
+                    # Use subprocess.list2cmdline for Windows-correct quoting.
+                    # The previous ``'"%s"' % arg`` formatter did not escape
+                    # embedded double quotes or backslash-quote runs, so a
+                    # command-line argument containing ``"`` would corrupt
+                    # the relaunched command line per
+                    # CommandLineToArgvW parsing rules. ``list2cmdline``
+                    # implements the documented escape algorithm exactly.
                     if getattr(sys, 'frozen', False):
                         exe = sys.executable
-                        params = ' '.join(['"%s"' % arg for arg in relaunch_args])
+                        params = subprocess.list2cmdline(relaunch_args)
                     else:
                         exe = sys.executable
                         script = os.path.abspath(sys.argv[0])
-                        params = f'"{script}" ' + ' '.join(['"%s"' % arg for arg in relaunch_args])
+                        params = subprocess.list2cmdline([script, *relaunch_args])
                     launch_result = ctypes.windll.shell32.ShellExecuteW(
                         None, "runas", exe, params, None, 1
                     )
@@ -27195,6 +27283,46 @@ def _cli_config_location() -> int:
     return 0
 
 
+def _cli_source_cache_prune() -> int:
+    """Prune orphan source cache blobs based on the persisted metadata.
+
+    Reuses the active config so the user does not have to point the CLI
+    at a specific cache directory; matches how the GUI computes cache
+    locations for the import worker.
+    """
+    try:
+        config_path = get_primary_config_path(CONFIG_FILENAME)
+        payload = _read_cli_config_payload(config_path)
+        metadata = (
+            payload.get("source_cache_metadata", {})
+            if isinstance(payload, dict)
+            else {}
+        )
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Could not read config for cache pruning: {exc}")
+        return 2
+    report = prune_orphan_source_cache_files(metadata)
+    if report["removed"] == 0 and report["errors"] == 0:
+        _cli_print(
+            f"Source cache already clean ({report['retained']} entries retained)."
+        )
+        return 0
+    if report["errors"]:
+        _cli_print(
+            f"Pruned {report['removed']} orphan source cache file(s), "
+            f"{report['errors']} could not be deleted, "
+            f"{report['retained']} retained, "
+            f"{report['freed_bytes']:,} byte(s) freed."
+        )
+        return 1
+    _cli_print(
+        f"Pruned {report['removed']} orphan source cache file(s), "
+        f"{report['retained']} retained, "
+        f"{report['freed_bytes']:,} byte(s) freed."
+    )
+    return 0
+
+
 def _cli_portable_export(bundle_dir: str, overwrite: bool = False) -> int:
     try:
         config_path = get_primary_config_path(CONFIG_FILENAME)
@@ -28058,6 +28186,7 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--apply", metavar="PATH", help="Overwrite the hosts file with the contents of PATH (creates backup first).")
     parser.add_argument("--update", action="store_true", help="Re-fetch every source previously imported in the GUI and apply a Cleaned Save of the merged result.")
     parser.add_argument("--config-location", action="store_true", help="Show whether local-user or portable config is active, plus sidecar paths.")
+    parser.add_argument("--source-cache-prune", action="store_true", help="Delete cached source body blobs that no longer have a metadata referrer.")
     parser.add_argument("--config-plan", metavar="PATH", help="Validate a declarative YAML/TOML/JSON profile file and summarize the config change without writing.")
     parser.add_argument("--config-apply", metavar="PATH", help="Apply a declarative YAML/TOML/JSON profile file to the app config without writing the hosts file.")
     parser.add_argument("--config-export", metavar="PATH", help="Export the active app config profile as declarative YAML/TOML/JSON.")
@@ -28357,6 +28486,8 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         return _cli_update(hosts_path)
     if args.config_location:
         return _cli_config_location()
+    if args.source_cache_prune:
+        return _cli_source_cache_prune()
     if args.portable_export:
         return _cli_portable_export(args.portable_export, args.portable_overwrite)
     if args.config_plan:
