@@ -4,6 +4,11 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Modularization — v2.25.0 (Phase 2)**
+- New `hostsfileget.parsing` module owns the leaf-level domain/IP regex (`DOMAIN_REGEX`, `IPV4_REGEX`, `IPV6_REGEX`, `WILDCARD_STRIPPER`, `TOKEN_SPLITTER`, `DNSMASQ_RULE_REGEX`, `HOST_LABEL_REGEX`), the comment-prefix tuple, the standard blocking-IP / local-domain sets, and the small inspection helpers (`looks_like_domain`, `_looks_like_ip_token`, `_is_comment_line`, `_normalize_mapping_ip`, `_extract_domain_from_token`, `_domain_shape_matches`) plus the IDN encode/decode/non-ASCII primitives. ~190 lines lifted from `hosts_editor.py` and re-exported so existing imports keep working.
+- New `hostsfileget.theme` module owns the Catppuccin-inspired `PALETTE`, the `ACCESSIBILITY_CONTRAST_PAIRS` fixture, the sRGB math (`_hex_to_srgb`, `_linearize_srgb_channel`, `relative_luminance`, `contrast_ratio`), and the audit report builder/formatter. ~165 lines lifted and re-exported. The GUI continues to pull `PALETTE` and the audit dialog through the `hosts_editor` namespace so the breakdown is invisible to the existing call sites.
+- Tests: still 341 passing — no behaviour change, only relocation. Total package surface is now 5 modules / 713 lines, with `hosts_editor.py` shrinking commensurately.
+
 **Modularization — v2.24.0 (Phase 1)**
 - New `hostsfileget/` package begins the staged breakdown of the 28K-line `hosts_editor.py` monolith. Phase 1 extracts the two cleanest helper groups into focused submodules: `hostsfileget.compression` (gzip/bz2 streaming bomb guard, byte->text decoding, HTML-document detection, `MAX_DOWNLOAD_BYTES`) and `hostsfileget.atomic_io` (`copy_file_atomic`, `write_text_file_atomic`, `write_bytes_file_atomic`, the disable/enable transactional handoff). `hosts_editor.py` re-exports everything so the public surface, the 341-test suite, and external consumers (launcher, CLI) continue to work unchanged.
 - One existing test was updated to mock `hostsfileget.atomic_io.copy_file_atomic` instead of `hosts_editor.copy_file_atomic`. The function-resolution rule for module-internal references means a mock has to land on the module that owns the name, not on its re-export.
