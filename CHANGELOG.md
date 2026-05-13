@@ -4,6 +4,11 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Modularization — v2.24.0 (Phase 1)**
+- New `hostsfileget/` package begins the staged breakdown of the 28K-line `hosts_editor.py` monolith. Phase 1 extracts the two cleanest helper groups into focused submodules: `hostsfileget.compression` (gzip/bz2 streaming bomb guard, byte->text decoding, HTML-document detection, `MAX_DOWNLOAD_BYTES`) and `hostsfileget.atomic_io` (`copy_file_atomic`, `write_text_file_atomic`, `write_bytes_file_atomic`, the disable/enable transactional handoff). `hosts_editor.py` re-exports everything so the public surface, the 341-test suite, and external consumers (launcher, CLI) continue to work unchanged.
+- One existing test was updated to mock `hostsfileget.atomic_io.copy_file_atomic` instead of `hosts_editor.copy_file_atomic`. The function-resolution rule for module-internal references means a mock has to land on the module that owns the name, not on its re-export.
+- Further phases (parsing, fetch, cleaning, manifest, config_storage, plans, GUI, CLI) will continue to extract logically-cohesive blocks into the package over subsequent versions. Each phase keeps `hosts_editor.py` as the entry point and verifies the full test suite before commit.
+
 **Hardening pass — v2.23.0 (Pass 3)**
 - Class-level `BLOCKLIST_SOURCES` and `SOURCE_BUNDLES` loads now degrade gracefully instead of aborting module import on a malformed `data/blocklist_sources.json`. A corrupted manifest previously made the app fail to launch entirely; the editor, custom sources, and CLI tools now still come up with an empty curated catalog and the failure is surfaced via `_manifest_load_error` / `_bundle_load_error`.
 - Windows admin self-relaunch now uses `subprocess.list2cmdline(...)` instead of hand-rolled `'"%s"' % arg` formatting to build the parameter string passed to `ShellExecuteW`. The old quoting did not escape embedded `"` or backslash-quote runs and could corrupt the relaunched command line per `CommandLineToArgvW` parsing rules. `list2cmdline` implements the documented escape algorithm exactly.
