@@ -26,6 +26,7 @@ from hosts_editor import (
     PROFILE_SYNC_PAYLOAD_SCHEMA,
     PROVENANCE_EVENT_KINDS,
     PROFILE_SCHEMA_VERSION,
+    SANDBOX_VM_HOSTS_PLAN_SCHEMA,
     SOURCE_HEALTH_REPORT_SCHEMA_VERSION,
     SOURCE_ADAPTER_PLUGIN_SCHEMA,
     SOURCE_ADAPTER_PLUGIN_SCHEMA_VERSION,
@@ -53,6 +54,7 @@ from hosts_editor import (
     build_recovery_apply_plan,
     build_restore_point_command,
     build_nrpt_policy_export_plan,
+    build_sandbox_vm_hosts_plan,
     build_wfp_blocker_companion_plan,
     build_entry_provenance_report,
     build_pinned_export_payload,
@@ -170,6 +172,7 @@ from hosts_editor import (
     format_share_patch_summary,
     format_nrpt_policy_export_plan,
     format_recovery_apply_plan,
+    format_sandbox_vm_hosts_plan,
     format_wfp_blocker_companion_plan,
     format_git_history_status_report,
     format_cloud_dns_adapter_catalog,
@@ -2804,6 +2807,28 @@ profile:
                 "dc01",
             )
 
+        with mock.patch.object(hosts_editor, "_cli_sandbox_vm_hosts_plan", return_value=0) as mocked_sandbox:
+            self.assertEqual(
+                hosts_editor._handle_cli_args([
+                    "--sandbox-vm-hosts-plan", "hosts.txt", "bundle",
+                    "--sandbox-plan-name", "Lab Bundle",
+                    "--sandbox-vm-name", "Lab VM",
+                    "--sandbox-networking", "Disable",
+                    "--sandbox-vgpu", "Default",
+                    "--sandbox-memory-mb", "4096",
+                ]),
+                0,
+            )
+            mocked_sandbox.assert_called_once_with(
+                "hosts.txt",
+                "bundle",
+                ["Lab VM"],
+                "Lab Bundle",
+                "Disable",
+                "Default",
+                4096,
+            )
+
     def test_handle_cli_args_routes_cloud_dns_flags(self):
         with mock.patch.object(hosts_editor, "_cli_cloud_adapter_list", return_value=0) as mocked_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--cloud-adapter-list"]), 0)
@@ -3470,6 +3495,70 @@ profile:
         self.assertEqual(payload["name_servers"], ["10.0.0.53"])
         self.assertIn("Get-DnsClientNrptRule", payload["powershell_script"])
         self.assertIn("Add-DnsClientNrptRule", payload["powershell_script"])
+
+    def test_sandbox_vm_hosts_plan_builds_bundle_and_review_commands(self):
+        plan = build_sandbox_vm_hosts_plan(
+            "0.0.0.0 ads.example\n",
+            r"C:\Labs\HostsFileGet",
+            plan_name="Lab Hosts",
+            vm_names=["Lab VM"],
+            networking="Disable",
+            vgpu="Default",
+            memory_mb=4096,
+            now=datetime.datetime(2026, 5, 12, 14, 0, 0),
+        )
+        formatted = format_sandbox_vm_hosts_plan(plan)
+
+        self.assertEqual(plan["schema"], SANDBOX_VM_HOSTS_PLAN_SCHEMA)
+        self.assertTrue(plan["plan_only"])
+        self.assertTrue(plan["bundle_only"])
+        self.assertEqual(plan["hosts_line_count"], 1)
+        self.assertIn("<MappedFolder>", plan["windows_sandbox"]["wsb_config"])
+        self.assertIn("<ReadOnly>true</ReadOnly>", plan["windows_sandbox"]["wsb_config"])
+        self.assertIn("<LogonCommand>", plan["windows_sandbox"]["wsb_config"])
+        self.assertIn("Copy-Item -LiteralPath $Source", plan["windows_sandbox"]["setup_script"])
+        self.assertEqual(plan["windows_sandbox"]["networking"], "Disable")
+        self.assertEqual(plan["windows_sandbox"]["vgpu"], "Default")
+        self.assertEqual(plan["windows_sandbox"]["memory_mb"], 4096)
+        self.assertEqual(plan["hyperv"]["vm_names"], ["Lab VM"])
+        self.assertTrue(all("-WhatIf" in command["command"] for command in plan["hyperv"]["commands"]))
+        self.assertIn("Copy-VMFile", plan["powershell_script"])
+        self.assertIn("S17", plan["references"])
+        self.assertIn("Plan only: yes", formatted)
+
+    def test_cli_sandbox_vm_hosts_plan_writes_artifacts_without_launching(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "hosts.txt"
+            output_dir = Path(tmpdir) / "bundle"
+            input_path.write_text("0.0.0.0 ads.example\n", encoding="utf-8")
+
+            with mock.patch.object(hosts_editor, "_cli_print"):
+                result = hosts_editor._cli_sandbox_vm_hosts_plan(
+                    str(input_path),
+                    str(output_dir),
+                    ["Lab VM"],
+                    "Unit Bundle",
+                    "Disable",
+                    "Disable",
+                    2048,
+            )
+            plan_path = output_dir / "sandbox-vm-hosts-plan.json"
+            payload = json.loads(plan_path.read_text(encoding="utf-8"))
+            artifacts_exist = [
+                (output_dir / "hosts").exists(),
+                (output_dir / "Apply-HostsFileGetHosts.ps1").exists(),
+                (output_dir / "HostsFileGet-Sandbox.wsb").exists(),
+            ]
+
+        self.assertEqual(result, 0)
+        self.assertTrue(payload["plan_only"])
+        self.assertEqual(payload["hosts_line_count"], 1)
+        self.assertEqual(artifacts_exist, [True, True, True])
+        self.assertIn("Copy-VMFile", payload["powershell_script"])
+        self.assertIn("-WhatIf", payload["powershell_script"])
 
     def test_cli_history_restore_refuses_when_hosts_file_is_disabled(self):
         import tempfile

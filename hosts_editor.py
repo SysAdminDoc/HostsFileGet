@@ -153,6 +153,15 @@ NRPT_POLICY_PLAN_SCHEMA = "hostsfileget.nrpt-policy-plan.v1"
 NRPT_RULE_PREFIX = "HostsFileGet NRPT"
 NRPT_NAMESPACE_CHUNK_SIZE = 25
 NRPT_PREFIX_MAX_LENGTH = 64
+SANDBOX_VM_HOSTS_PLAN_SCHEMA = "hostsfileget.sandbox-vm-hosts-plan.v1"
+SANDBOX_VM_PLAN_NAME = "HostsFileGet Sandbox Hosts"
+SANDBOX_VM_PLAN_NAME_MAX_LENGTH = 80
+SANDBOX_VM_SANDBOX_FOLDER = r"C:\HostsFileGet"
+SANDBOX_VM_SETUP_SCRIPT_NAME = "Apply-HostsFileGetHosts.ps1"
+SANDBOX_VM_STAGED_HOSTS_NAME = "hosts"
+SANDBOX_VM_WSB_NAME = "HostsFileGet-Sandbox.wsb"
+SANDBOX_VM_PLAN_JSON_NAME = "sandbox-vm-hosts-plan.json"
+SANDBOX_VM_TARGET_HOSTS_PATH = r"C:\Windows\System32\drivers\etc\hosts"
 SCHEDULED_TASK_NAME = "HostsFileGet Auto-Update"
 CLI_LOG_FILENAME = "cli.log"
 CLI_ACTIVITY_FILENAME = "cli-activity.jsonl"
@@ -4611,6 +4620,322 @@ def format_nrpt_policy_export_plan(plan: dict) -> str:
         lines.extend(["", "Rejected samples:"])
         for item in rejected[:5]:
             lines.append(f"- line {item.get('line')}: {item.get('token')} ({item.get('reason')})")
+    lines.extend(["", "Warnings:"])
+    for warning in plan.get("warnings") or []:
+        lines.append(f"- {warning}")
+    references = plan.get("references") or []
+    if references:
+        lines.extend(["", "Roadmap source IDs:", f"- {', '.join(references)}"])
+    return "\n".join(lines)
+
+
+def sanitize_sandbox_vm_plan_name(value: str | None = None) -> str:
+    name = re.sub(r"\s+", " ", str(value or SANDBOX_VM_PLAN_NAME).strip())
+    if not name or _contains_control_chars(name):
+        name = SANDBOX_VM_PLAN_NAME
+    return name[:SANDBOX_VM_PLAN_NAME_MAX_LENGTH]
+
+
+def sanitize_sandbox_vm_names(values) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for value in values or []:
+        name = re.sub(r"\s+", " ", str(value or "").strip())
+        if not name:
+            continue
+        if _contains_control_chars(name):
+            raise ValueError("VM name contains control characters")
+        name = name[:SANDBOX_VM_PLAN_NAME_MAX_LENGTH]
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+    return names
+
+
+def normalize_sandbox_config_value(value: str | None, *, default: str = "Disable") -> str:
+    allowed = {"enable": "Enable", "disable": "Disable", "default": "Default"}
+    normalized = str(value or default).strip().lower()
+    if normalized not in allowed:
+        raise ValueError("sandbox config value must be Enable, Disable, or Default")
+    return allowed[normalized]
+
+
+def normalize_sandbox_memory_mb(value) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        memory_mb = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("sandbox memory must be an integer number of MB") from exc
+    if memory_mb < 2048:
+        raise ValueError("sandbox memory must be at least 2048 MB")
+    if memory_mb > 65536:
+        raise ValueError("sandbox memory must be 65536 MB or less")
+    return memory_mb
+
+
+def _xml_text(value: str) -> str:
+    from xml.sax.saxutils import escape
+    return escape(str(value), {"'": "&apos;", '"': "&quot;"})
+
+
+def build_sandbox_hosts_setup_script(
+    *,
+    sandbox_folder: str = SANDBOX_VM_SANDBOX_FOLDER,
+    target_hosts_path: str = SANDBOX_VM_TARGET_HOSTS_PATH,
+) -> str:
+    source_path = f"{sandbox_folder}\\{SANDBOX_VM_STAGED_HOSTS_NAME}"
+    return "\n".join([
+        "$ErrorActionPreference = 'Stop'",
+        f"$Source = {_powershell_single_quote(source_path)}",
+        f"$Target = {_powershell_single_quote(target_hosts_path)}",
+        "$Backup = \"$Target.hostsfileget-lab.bak\"",
+        "if (-not (Test-Path -LiteralPath $Source)) { throw \"Staged hosts file not found: $Source\" }",
+        "Copy-Item -LiteralPath $Target -Destination $Backup -Force",
+        "Copy-Item -LiteralPath $Source -Destination $Target -Force",
+        "ipconfig /flushdns | Out-Null",
+        "Write-Host \"HostsFileGet staged hosts file applied. Backup: $Backup\"",
+        "",
+    ])
+
+
+def build_windows_sandbox_wsb_config(
+    host_folder: str,
+    *,
+    sandbox_folder: str = SANDBOX_VM_SANDBOX_FOLDER,
+    setup_script_name: str = SANDBOX_VM_SETUP_SCRIPT_NAME,
+    networking: str = "Disable",
+    vgpu: str = "Disable",
+    memory_mb: int | None = None,
+) -> str:
+    safe_networking = normalize_sandbox_config_value(networking, default="Disable")
+    safe_vgpu = normalize_sandbox_config_value(vgpu, default="Disable")
+    safe_memory = normalize_sandbox_memory_mb(memory_mb)
+    command = f"powershell.exe -NoProfile -ExecutionPolicy Bypass -File {sandbox_folder}\\{setup_script_name}"
+    lines = [
+        "<Configuration>",
+        f"  <VGpu>{_xml_text(safe_vgpu)}</VGpu>",
+        f"  <Networking>{_xml_text(safe_networking)}</Networking>",
+    ]
+    if safe_memory:
+        lines.append(f"  <MemoryInMB>{safe_memory}</MemoryInMB>")
+    lines.extend([
+        "  <MappedFolders>",
+        "    <MappedFolder>",
+        f"      <HostFolder>{_xml_text(os.path.abspath(host_folder))}</HostFolder>",
+        f"      <SandboxFolder>{_xml_text(sandbox_folder)}</SandboxFolder>",
+        "      <ReadOnly>true</ReadOnly>",
+        "    </MappedFolder>",
+        "  </MappedFolders>",
+        "  <LogonCommand>",
+        f"    <Command>{_xml_text(command)}</Command>",
+        "  </LogonCommand>",
+        "</Configuration>",
+        "",
+    ])
+    return "\n".join(lines)
+
+
+def build_hyperv_hosts_stage_commands(
+    vm_name: str,
+    *,
+    host_folder: str,
+    guest_folder: str = SANDBOX_VM_SANDBOX_FOLDER,
+) -> list[dict]:
+    safe_name = sanitize_sandbox_vm_names([vm_name])
+    if not safe_name:
+        raise ValueError("VM name is required")
+    name = safe_name[0]
+    staged_hosts_path = os.path.join(os.path.abspath(host_folder), SANDBOX_VM_STAGED_HOSTS_NAME)
+    setup_script_path = os.path.join(os.path.abspath(host_folder), SANDBOX_VM_SETUP_SCRIPT_NAME)
+    guest_hosts_path = f"{guest_folder}\\{SANDBOX_VM_STAGED_HOSTS_NAME}"
+    guest_setup_script_path = f"{guest_folder}\\{SANDBOX_VM_SETUP_SCRIPT_NAME}"
+    return [
+        {
+            "id": f"enable-guest-service-{name}",
+            "description": "Review enabling the Hyper-V Guest Service Interface required by Copy-VMFile.",
+            "command": (
+                "Enable-VMIntegrationService "
+                f"-VMName {_powershell_single_quote(name)} "
+                "-Name 'Guest Service Interface' -WhatIf"
+            ),
+        },
+        {
+            "id": f"stage-hosts-{name}",
+            "description": "Review staging the hosts file inside the guest; remove -WhatIf only after VM snapshot/approval.",
+            "command": (
+                "Copy-VMFile "
+                f"-Name {_powershell_single_quote(name)} "
+                f"-SourcePath {_powershell_single_quote(staged_hosts_path)} "
+                f"-DestinationPath {_powershell_single_quote(guest_hosts_path)} "
+                "-CreateFullPath -FileSource Host -WhatIf"
+            ),
+        },
+        {
+            "id": f"stage-setup-script-{name}",
+            "description": "Review staging the guest-side apply script; execute it inside the guest after review.",
+            "command": (
+                "Copy-VMFile "
+                f"-Name {_powershell_single_quote(name)} "
+                f"-SourcePath {_powershell_single_quote(setup_script_path)} "
+                f"-DestinationPath {_powershell_single_quote(guest_setup_script_path)} "
+                "-CreateFullPath -FileSource Host -WhatIf"
+            ),
+        },
+    ]
+
+
+def build_sandbox_vm_hosts_plan(
+    hosts_text: str,
+    output_dir: str,
+    *,
+    plan_name: str | None = None,
+    vm_names=None,
+    networking: str = "Disable",
+    vgpu: str = "Disable",
+    memory_mb=None,
+    now=None,
+) -> dict:
+    safe_name = sanitize_sandbox_vm_plan_name(plan_name)
+    safe_vm_names = sanitize_sandbox_vm_names(vm_names)
+    safe_networking = normalize_sandbox_config_value(networking, default="Disable")
+    safe_vgpu = normalize_sandbox_config_value(vgpu, default="Disable")
+    safe_memory = normalize_sandbox_memory_mb(memory_mb)
+    root = os.path.abspath(output_dir)
+    staged_hosts_path = os.path.join(root, SANDBOX_VM_STAGED_HOSTS_NAME)
+    setup_script_path = os.path.join(root, SANDBOX_VM_SETUP_SCRIPT_NAME)
+    wsb_path = os.path.join(root, SANDBOX_VM_WSB_NAME)
+    plan_json_path = os.path.join(root, SANDBOX_VM_PLAN_JSON_NAME)
+    payload = str(hosts_text or "")
+    if payload and not payload.endswith("\n"):
+        payload += "\n"
+    created_at = now or datetime.datetime.now()
+    if isinstance(created_at, datetime.datetime):
+        created_at = created_at.isoformat(timespec="seconds")
+
+    setup_script = build_sandbox_hosts_setup_script()
+    wsb_config = build_windows_sandbox_wsb_config(
+        root,
+        networking=safe_networking,
+        vgpu=safe_vgpu,
+        memory_mb=safe_memory,
+    )
+
+    hyperv_commands = []
+    for vm_name in safe_vm_names:
+        hyperv_commands.extend(build_hyperv_hosts_stage_commands(vm_name, host_folder=root))
+
+    warnings = [
+        "Bundle-only: HostsFileGet writes review artifacts but does not launch Windows Sandbox, start VMs, or copy files into guests.",
+        "Opening the generated .wsb runs the mapped setup script inside the disposable sandbox and changes only that sandbox's hosts file.",
+        "The Windows Sandbox mapped folder is read-only to reduce host exposure.",
+        "Hyper-V commands include -WhatIf and stage files only; remove -WhatIf only after VM snapshot, backup, and operator approval.",
+    ]
+    if safe_networking != "Disable":
+        warnings.append("Sandbox networking is not disabled; this can expose the sandbox to internal network paths.")
+    if not payload.strip():
+        warnings.append("The staged hosts file is empty; opening the bundle would replace the sandbox hosts file with an empty file.")
+
+    powershell_script_lines = [
+        "# HostsFileGet Sandbox/VM hosts staging plan",
+        "# Review before running. Commands are not executed by HostsFileGet.",
+    ]
+    if hyperv_commands:
+        powershell_script_lines.extend(command["command"] for command in hyperv_commands)
+    else:
+        powershell_script_lines.append("# No Hyper-V VM names were provided; only Windows Sandbox artifacts were generated.")
+
+    return {
+        "schema": SANDBOX_VM_HOSTS_PLAN_SCHEMA,
+        "app_version": APP_VERSION,
+        "created_at": str(created_at),
+        "plan_only": True,
+        "bundle_only": True,
+        "name": safe_name,
+        "output_dir": root,
+        "hosts_line_count": len(payload.splitlines()),
+        "hosts_sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+        "artifacts": {
+            "staged_hosts": staged_hosts_path,
+            "setup_script": setup_script_path,
+            "wsb_config": wsb_path,
+            "plan_json": plan_json_path,
+        },
+        "windows_sandbox": {
+            "enabled": True,
+            "networking": safe_networking,
+            "vgpu": safe_vgpu,
+            "memory_mb": safe_memory,
+            "sandbox_folder": SANDBOX_VM_SANDBOX_FOLDER,
+            "mapped_folder_read_only": True,
+            "wsb_config": wsb_config,
+            "setup_script": setup_script,
+            "launch_command": ["cmd.exe", "/c", wsb_path],
+        },
+        "hyperv": {
+            "enabled": bool(safe_vm_names),
+            "vm_names": safe_vm_names,
+            "guest_folder": SANDBOX_VM_SANDBOX_FOLDER,
+            "guest_apply_command": (
+                f"powershell.exe -NoProfile -ExecutionPolicy Bypass -File "
+                f"{SANDBOX_VM_SANDBOX_FOLDER}\\{SANDBOX_VM_SETUP_SCRIPT_NAME}"
+            ),
+            "commands": hyperv_commands,
+        },
+        "powershell_script": "\n".join(powershell_script_lines),
+        "warnings": warnings,
+        "references": ["S17", "S18", "S19"],
+    }
+
+
+def write_sandbox_vm_hosts_bundle(plan: dict, hosts_text: str) -> None:
+    artifacts = plan.get("artifacts") or {}
+    output_dir = plan.get("output_dir") or os.path.dirname(os.path.abspath(artifacts.get("plan_json") or "."))
+    os.makedirs(output_dir, exist_ok=True)
+    payload = str(hosts_text or "")
+    if payload and not payload.endswith("\n"):
+        payload += "\n"
+    write_text_file_atomic(artifacts["staged_hosts"], payload)
+    write_text_file_atomic(artifacts["setup_script"], plan["windows_sandbox"]["setup_script"])
+    write_text_file_atomic(artifacts["wsb_config"], plan["windows_sandbox"]["wsb_config"])
+    write_text_file_atomic(artifacts["plan_json"], json.dumps(plan, indent=2))
+
+
+def format_sandbox_vm_hosts_plan(plan: dict) -> str:
+    lines = [
+        "Windows Sandbox / VM Hosts Plan",
+        f"Schema: {plan.get('schema')}",
+        f"Plan only: {'yes' if plan.get('plan_only') else 'no'}",
+        f"Bundle only: {'yes' if plan.get('bundle_only') else 'no'}",
+        f"Output: {plan.get('output_dir')}",
+        f"Hosts lines: {int(plan.get('hosts_line_count') or 0):,}",
+        f"Hosts SHA-256: {plan.get('hosts_sha256')}",
+        "",
+        "Artifacts:",
+    ]
+    for name, path in (plan.get("artifacts") or {}).items():
+        lines.append(f"- {name}: {path}")
+    sandbox = plan.get("windows_sandbox") or {}
+    lines.extend([
+        "",
+        "Windows Sandbox:",
+        f"- networking: {sandbox.get('networking')}",
+        f"- vGPU: {sandbox.get('vgpu')}",
+        f"- mapped folder read-only: {'yes' if sandbox.get('mapped_folder_read_only') else 'no'}",
+    ])
+    if sandbox.get("memory_mb"):
+        lines.append(f"- memory MB: {sandbox.get('memory_mb')}")
+    hyperv = plan.get("hyperv") or {}
+    lines.extend(["", "Hyper-V:"])
+    if hyperv.get("vm_names"):
+        lines.append(f"- VMs: {', '.join(hyperv.get('vm_names') or [])}")
+        lines.append(f"- guest apply command: {hyperv.get('guest_apply_command')}")
+        for command in hyperv.get("commands") or []:
+            lines.append(f"- {command.get('id')}: {command.get('command')}")
+    else:
+        lines.append("- no VM staging commands requested")
     lines.extend(["", "Warnings:"])
     for warning in plan.get("warnings") or []:
         lines.append(f"- {warning}")
@@ -21766,6 +22091,35 @@ def _cli_nrpt_policy_plan(
     return 0
 
 
+def _cli_sandbox_vm_hosts_plan(
+    input_path: str,
+    output_dir: str,
+    vm_names: list[str] | None = None,
+    plan_name: str | None = None,
+    networking: str | None = None,
+    vgpu: str | None = None,
+    memory_mb=None,
+) -> int:
+    try:
+        text = read_text_file_content(input_path)
+        plan = build_sandbox_vm_hosts_plan(
+            text,
+            output_dir,
+            plan_name=plan_name,
+            vm_names=vm_names or [],
+            networking=networking or "Disable",
+            vgpu=vgpu or "Disable",
+            memory_mb=memory_mb,
+        )
+        write_sandbox_vm_hosts_bundle(plan, text)
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Sandbox/VM hosts plan failed: {exc}")
+        return 2
+    _cli_print(format_sandbox_vm_hosts_plan(plan))
+    _cli_print(f"Wrote Sandbox/VM hosts bundle to {plan['output_dir']}")
+    return 0
+
+
 def _cli_profile_schedule_list(at_value: str | None = None) -> int:
     try:
         config_path = get_primary_config_path("hosts_editor_config.json")
@@ -21928,6 +22282,12 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--nrpt-rule-prefix",
         "--nrpt-gpo-name",
         "--nrpt-server",
+        "--sandbox-vm-hosts-plan",
+        "--sandbox-plan-name",
+        "--sandbox-vm-name",
+        "--sandbox-networking",
+        "--sandbox-vgpu",
+        "--sandbox-memory-mb",
         "--profile-schedule-list",
         "--profile-schedule-add",
         "--profile-schedule-days",
@@ -22007,6 +22367,12 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--nrpt-rule-prefix=",
         "--nrpt-gpo-name=",
         "--nrpt-server=",
+        "--sandbox-vm-hosts-plan=",
+        "--sandbox-plan-name=",
+        "--sandbox-vm-name=",
+        "--sandbox-networking=",
+        "--sandbox-vgpu=",
+        "--sandbox-memory-mb=",
         "--profile-schedule-add=",
         "--profile-schedule-days=",
         "--profile-schedule-name=",
@@ -22096,6 +22462,17 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--nrpt-rule-prefix", metavar="TEXT", help="Display-name prefix for --nrpt-plan rules.")
     parser.add_argument("--nrpt-gpo-name", metavar="NAME", help="Optional GPO name for --nrpt-plan output; otherwise local-client NRPT is planned.")
     parser.add_argument("--nrpt-server", metavar="SERVER", help="Optional GPO server for --nrpt-plan; requires --nrpt-gpo-name.")
+    parser.add_argument(
+        "--sandbox-vm-hosts-plan",
+        nargs=2,
+        metavar=("INPUT", "OUTPUT_DIR"),
+        help="Write a plan-only Windows Sandbox/VM hosts staging bundle from INPUT into OUTPUT_DIR.",
+    )
+    parser.add_argument("--sandbox-plan-name", metavar="TEXT", help="Display name for --sandbox-vm-hosts-plan output.")
+    parser.add_argument("--sandbox-vm-name", action="append", metavar="NAME", help="Optional Hyper-V VM name for Copy-VMFile -WhatIf staging commands. Repeat for multiple VMs.")
+    parser.add_argument("--sandbox-networking", choices=("Enable", "Disable", "Default"), default="Disable", help="Windows Sandbox networking setting for --sandbox-vm-hosts-plan; defaults to Disable.")
+    parser.add_argument("--sandbox-vgpu", choices=("Enable", "Disable", "Default"), default="Disable", help="Windows Sandbox vGPU setting for --sandbox-vm-hosts-plan; defaults to Disable.")
+    parser.add_argument("--sandbox-memory-mb", type=int, metavar="MB", help="Optional Windows Sandbox memory size for --sandbox-vm-hosts-plan.")
     parser.add_argument("--profile-schedule-list", action="store_true", help="Show the time-bound profile activation schedule without writing files.")
     parser.add_argument(
         "--profile-schedule-add",
@@ -22295,6 +22672,25 @@ def _handle_cli_args(argv: list[str]) -> int | None:
             args.nrpt_rule_prefix,
             args.nrpt_gpo_name,
             args.nrpt_server,
+        )
+    sandbox_options = [
+        args.sandbox_plan_name,
+        args.sandbox_vm_name,
+        args.sandbox_memory_mb,
+        args.sandbox_networking != "Disable",
+        args.sandbox_vgpu != "Disable",
+    ]
+    if any(sandbox_options) and not args.sandbox_vm_hosts_plan:
+        parser.error("--sandbox-* options require --sandbox-vm-hosts-plan INPUT OUTPUT_DIR")
+    if args.sandbox_vm_hosts_plan:
+        return _cli_sandbox_vm_hosts_plan(
+            args.sandbox_vm_hosts_plan[0],
+            args.sandbox_vm_hosts_plan[1],
+            args.sandbox_vm_name,
+            args.sandbox_plan_name,
+            args.sandbox_networking,
+            args.sandbox_vgpu,
+            args.sandbox_memory_mb,
         )
     if args.profile_schedule_add:
         return _cli_profile_schedule_add(

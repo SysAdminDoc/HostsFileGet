@@ -80,6 +80,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - restore-point/VSS recovery plan output for high-risk apply reviews
   - plan-only Windows Firewall/WFP IP/CIDR blocker companion export
   - plan-only NRPT policy export for reviewed namespace-to-resolver routing
+  - plan-only Windows Sandbox and Hyper-V VM hosts staging bundles for lab workflows
   - optional local Git history snapshot/status/restore commands
   - emergency DNS recovery helper
 - Configuration:
@@ -302,6 +303,13 @@ python hosts_editor.py --nrpt-plan .\namespaces.txt .\nrpt-plan.json --nrpt-name
 python hosts_editor.py --nrpt-plan .\namespaces.txt .\nrpt-plan.json --nrpt-name-server 10.0.0.53 --nrpt-gpo-name "Corp NRPT Policy" --nrpt-server dc01
 ```
 
+Build a Windows Sandbox / Hyper-V VM hosts staging bundle:
+
+```powershell
+python hosts_editor.py --sandbox-vm-hosts-plan .\cleaned-hosts.txt .\sandbox-hosts-bundle
+python hosts_editor.py --sandbox-vm-hosts-plan .\cleaned-hosts.txt .\sandbox-hosts-bundle --sandbox-vm-name "Lab VM"
+```
+
 Generate guarded cloud-DNS replay plans or extract blocked domains from cloud DNS CSV log exports:
 
 ```powershell
@@ -392,6 +400,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Recovery apply plan: `docs/recovery-plan.md`
 - WFP blocker companion: `docs/wfp-blocker-companion.md`
 - NRPT policy export: `docs/nrpt-policy-export.md`
+- Windows Sandbox / VM hosts bundle: `docs/sandbox-vm-hosts.md`
 - Optional Git history: `docs/git-history.md`
 - Scheduler activity report: `docs/scheduler-activity.md`
 - Portable bundle config: `docs/portable-config.md`

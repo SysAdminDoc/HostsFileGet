@@ -4,6 +4,10 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Windows Sandbox / VM hosts bundle**
+- Added `--sandbox-vm-hosts-plan` to write a lab bundle containing a staged hosts file, guest-side apply script, Windows Sandbox `.wsb` config, JSON plan, and optional Hyper-V `Copy-VMFile -WhatIf` staging commands.
+- The bundle is plan-only: HostsFileGet does not launch Sandbox, start VMs, enable integration services, or copy files into guests.
+
 **NRPT policy export**
 - Added `--nrpt-plan` to export a plan-only Windows DNS Client NRPT namespace routing JSON with reviewable PowerShell commands.
 - The export validates resolver IPs, IDNA/Punycode-encodes namespaces, supports optional GPO-scoped command output, and does not apply local or Group Policy NRPT changes.

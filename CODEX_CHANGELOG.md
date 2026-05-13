@@ -115,6 +115,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F056 complete. Next roadmap item: F057 NRPT policy editor/export.
 - Completed F057: added a plan-only Windows DNS Client NRPT namespace routing export with resolver validation, IDNA/Punycode namespace normalization, optional GPO-scoped command rendering, docs, and regression tests. No NRPT or Group Policy commands are executed.
 - Updated `ROADMAP.md` to mark F057 complete. Next roadmap item: F058 Windows Sandbox and VM hosts injector.
+- Completed F058: added a plan-only Windows Sandbox and Hyper-V VM hosts staging bundle with `.wsb` generation, guest-side apply script, staged hosts artifact, optional `Copy-VMFile -WhatIf` review commands, docs, and regression tests. No sandbox or VM commands are executed by HostsFileGet.
+- Updated `ROADMAP.md` to mark F058 complete. Next roadmap item: F059 router/gateway push adapters.
 
 ## Scope
 
