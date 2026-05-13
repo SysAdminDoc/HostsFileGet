@@ -4370,7 +4370,7 @@ profile:
 
         editor = FakeEditor()
 
-        with mock.patch.object(hosts_editor.urllib.request, "urlopen", return_value=FakeResponse()):
+        with mock.patch.object(hosts_editor, "safe_urlopen", return_value=FakeResponse()):
             HostsFileEditor._import_worker_thread(
                 editor,
                 [("Big Source", "https://example.com/huge.txt")],
@@ -4478,7 +4478,7 @@ profile:
 
         editor = FakeEditor()
 
-        with mock.patch.object(hosts_editor.urllib.request, "urlopen", return_value=FakeResponse(editor)):
+        with mock.patch.object(hosts_editor, "safe_urlopen", return_value=FakeResponse(editor)):
             HostsFileEditor._import_worker_thread(
                 editor,
                 [("Only Source", "https://example.com/list.txt")],
@@ -4706,6 +4706,47 @@ profile:
         )
         self.assertLess(len(result[0]), 300)
         self.assertLess(len(result[-1]), 300)
+
+    def test_safe_urlopen_rejects_redirect_to_file_scheme(self):
+        """A malicious feed mirror must not be able to bounce us to file:// or
+        ftp:// targets via an HTTP 302 response."""
+        handler = hosts_editor._HttpsOnlyRedirectHandler()
+        with self.assertRaises(urllib.error.HTTPError):
+            handler.redirect_request(
+                urllib.request.Request("https://example.com/list.txt"),
+                fp=io.BytesIO(b""),
+                code=302,
+                msg="Found",
+                headers={"Location": "file:///etc/passwd"},
+                newurl="file:///etc/passwd",
+            )
+
+    def test_safe_urlopen_rejects_redirect_to_ftp_scheme(self):
+        handler = hosts_editor._HttpsOnlyRedirectHandler()
+        with self.assertRaises(urllib.error.HTTPError):
+            handler.redirect_request(
+                urllib.request.Request("https://example.com/list.txt"),
+                fp=io.BytesIO(b""),
+                code=301,
+                msg="Moved Permanently",
+                headers={"Location": "ftp://internal.example.local/list.txt"},
+                newurl="ftp://internal.example.local/list.txt",
+            )
+
+    def test_safe_urlopen_allows_http_to_https_redirect(self):
+        """The handler must continue to permit normal http<->https
+        redirects that real-world CDNs and mirrors rely on."""
+        handler = hosts_editor._HttpsOnlyRedirectHandler()
+        rebuilt = handler.redirect_request(
+            urllib.request.Request("http://example.com/list.txt"),
+            fp=io.BytesIO(b""),
+            code=301,
+            msg="Moved Permanently",
+            headers={"Location": "https://example.com/list.txt"},
+            newurl="https://example.com/list.txt",
+        )
+        self.assertIsNotNone(rebuilt)
+        self.assertEqual(rebuilt.full_url, "https://example.com/list.txt")
 
     def test_default_hosts_file_path_uses_systemroot(self):
         with mock.patch.dict(os.environ, {"SystemRoot": r"D:\Windows"}, clear=False):
@@ -6503,6 +6544,55 @@ profile:
         result, count = apply_find_replace(lines, "", "x")
         self.assertEqual(result, lines)
         self.assertEqual(count, 0)
+
+    def test_apply_find_replace_literal_with_regex_metachars_is_safe(self):
+        """A literal pattern containing regex metacharacters must not be
+        interpreted as a regex when ``use_regex=False``."""
+        lines = ["bad.foo (xyz) {1,3}"]
+        # Pattern is a literal sequence of metachars; should match literally.
+        result, count = apply_find_replace(
+            lines,
+            "(xyz)",
+            "[hit]",
+            use_regex=False,
+            case_sensitive=False,
+        )
+        self.assertEqual(count, 1)
+        self.assertEqual(result[0], "bad.foo [hit] {1,3}")
+
+    def test_apply_find_replace_literal_replacement_treats_backslash_literally(self):
+        """``replacement`` must not be parsed for regex backreferences in the
+        literal find/replace path."""
+        lines = ["0.0.0.0 example.com"]
+        result, count = apply_find_replace(
+            lines,
+            "example.com",
+            r"replaced\1\g<1>",
+            use_regex=False,
+            case_sensitive=False,
+        )
+        self.assertEqual(count, 1)
+        self.assertEqual(result[0], r"0.0.0.0 replaced\1\g<1>")
+
+    def test_apply_find_replace_case_insensitive_handles_unicode_casefold(self):
+        """Regression: the old hand-rolled lowercased-index walk silently
+        misaligned on Unicode characters whose lowercased form has a
+        different length (e.g. Turkish dotted-I). ``re.IGNORECASE`` driven
+        replacement is unicode-aware and survives that.
+        """
+        # 'İ' lowercases to 'i\u0307' (length 2) in Python's default casing.
+        lines = ["domain İSTANBUL.example"]
+        result, count = apply_find_replace(
+            lines,
+            "istanbul",
+            "Istanbul",
+            use_regex=False,
+            case_sensitive=False,
+        )
+        self.assertGreaterEqual(count, 1)
+        # Whichever case fold the platform applies, the result must remain
+        # well-formed - no truncation, no leftover original-case fragments.
+        self.assertIn("Istanbul.example", result[0])
 
     # ---- v2.16: source freshness ----
     def test_classify_source_freshness_buckets(self):

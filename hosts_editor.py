@@ -48,7 +48,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback path
 
 APP_NAME = "Hosts File Get"
 APP_SLUG = "HostsFileGet"
-APP_VERSION = "2.21.0"
+APP_VERSION = "2.22.0"
 CONFIG_FILENAME = "hosts_editor_config.json"
 CONFIG_SCHEMA_VERSION = 4
 PROFILE_SCHEMA_VERSION = 1
@@ -7159,6 +7159,46 @@ def read_source_cache_body(url: str, metadata: dict, cache_dir: str | None = Non
     return raw_bytes
 
 
+class _HttpsOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject HTTP redirects to non-``http``/``https`` schemes.
+
+    Python's stock handler already refuses ``file://`` targets on modern
+    builds, but older 3.x releases were laxer and ``ftp://`` is still
+    technically permitted there. We explicitly whitelist only ``http`` and
+    ``https`` so a malicious feed mirror cannot bounce a blocklist download
+    to ``file:///etc/...`` or an internal FTP service for SSRF probing.
+    """
+
+    _ALLOWED_REDIRECT_SCHEMES = ("http", "https")
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        scheme = urllib.parse.urlsplit(newurl).scheme.lower()
+        if scheme not in self._ALLOWED_REDIRECT_SCHEMES:
+            raise urllib.error.HTTPError(
+                newurl,
+                code,
+                f"Redirect to disallowed scheme {scheme!r} blocked.",
+                headers,
+                fp,
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_SAFE_URL_OPENER = urllib.request.build_opener(_HttpsOnlyRedirectHandler())
+
+
+def safe_urlopen(request, timeout: float = 15):
+    """Open ``request`` through the redirect-scheme-restricted opener.
+
+    Centralizing the opener keeps the SSRF guard consistent across the
+    curated-source fetch path, the whitelist web import, the preview
+    pre-fetcher, and the source-health probe. All of these accept user-
+    configured URLs and would otherwise expose the local machine to
+    arbitrary HTTP server behavior.
+    """
+    return _SAFE_URL_OPENER.open(request, timeout=timeout)
+
+
 def fetch_source_with_cache(
     url: str,
     metadata_store: dict[str, dict] | None = None,
@@ -7167,7 +7207,7 @@ def fetch_source_with_cache(
     opener=None,
 ) -> tuple[list[str], dict[str, str | int], str]:
     if opener is None:
-        opener = urllib.request.urlopen
+        opener = safe_urlopen
     metadata_store = metadata_store if isinstance(metadata_store, dict) else {}
     cache_metadata = metadata_store.get(url, {})
     request = urllib.request.Request(url, headers=build_source_request_headers(cache_metadata))
@@ -8223,7 +8263,7 @@ def check_source_health_record(
 ) -> dict:
     """Fetch a bounded sample from one curated source and classify reachability."""
     if opener is None:
-        opener = urllib.request.urlopen
+        opener = safe_urlopen
     checked_at = _utc_timestamp()
     result = _source_health_base_result(source, checked_at)
     started = time.monotonic()
@@ -17281,8 +17321,7 @@ def apply_find_replace(
             new_lines.append(new_line)
         return new_lines, count
 
-    # Literal replace: case-insensitive impl hand-rolled so we preserve
-    # original case of *surrounding* text even when matching case-folded.
+    # Literal replace.
     if case_sensitive:
         new_lines = []
         count = 0
@@ -17294,27 +17333,28 @@ def apply_find_replace(
             new_lines.append(line)
         return new_lines, count
 
-    needle = pattern.lower()
+    # Case-insensitive literal find/replace was historically hand-rolled by
+    # walking ``line.lower()`` indices and substituting at the same offsets
+    # in the original-case line. That works for pure-ASCII patterns but
+    # silently misaligns on Unicode case-folding mismatches: ``"İ".lower()``
+    # expands to ``"i̇"`` (2 codepoints) on most platforms, ``"ß".upper()``
+    # is ``"SS"`` (length 2 vs 1), and a handful of other code points change
+    # length when lowercased. Using the lowered length as the cursor into
+    # the original-case string then either skips characters or drops part
+    # of the replacement.
+    #
+    # Route the literal path through ``re.sub`` with ``re.escape`` so regex
+    # metacharacters in ``pattern`` stay literal, ``re.IGNORECASE`` does
+    # the correct Unicode-aware case fold, and the replacement is passed
+    # via a constant-returning lambda so backreference syntax in
+    # ``replacement`` is also treated as literal text.
+    compiled = re.compile(re.escape(pattern), re.IGNORECASE)
     new_lines = []
     count = 0
     for line in lines:
-        lowered = line.lower()
-        if needle not in lowered:
-            new_lines.append(line)
-            continue
-        # Walk indices to replace in the original case.
-        rebuilt: list[str] = []
-        i = 0
-        while i < len(line):
-            j = lowered.find(needle, i)
-            if j < 0:
-                rebuilt.append(line[i:])
-                break
-            rebuilt.append(line[i:j])
-            rebuilt.append(replacement)
-            count += 1
-            i = j + len(pattern)
-        new_lines.append(''.join(rebuilt))
+        new_line, n = compiled.subn(lambda _m: replacement, line)
+        count += n
+        new_lines.append(new_line)
     return new_lines, count
 
 
@@ -18331,6 +18371,14 @@ class LocalApiRequestHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(raw)))
         self.send_header("Cache-Control", "no-store")
+        # Defensive headers: even though the API is loopback + bearer-only,
+        # a misconfigured client embedding a response in a browser would
+        # otherwise be susceptible to content-type sniffing, framing, and
+        # referer leaks. The Block Page server already sets the same
+        # baseline - keep parity so the two surfaces don't drift.
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Frame-Options", "DENY")
         for key, value in (extra_headers or {}).items():
             self.send_header(str(key), str(value))
         self.end_headers()
@@ -20068,6 +20116,16 @@ class HostsFileEditor:
     _STATUS_MESSAGE_MAX_LEN = 220
 
     def update_status(self, message, is_error=False):
+        # Background threads call ``update_status`` directly for convenience
+        # (tray menu, ping/resolve workers, whitelist web fetch). Tk widget
+        # mutation from a non-main thread is officially undefined and can
+        # race with shutdown teardown - marshal those calls onto the Tk
+        # main loop via ``_safe_after`` so the only thread touching widgets
+        # is the one Tk created them on.
+        if threading.current_thread() is not threading.main_thread():
+            self._safe_after(0, lambda m=message, e=is_error: self.update_status(m, e))
+            return
+
         self._cancel_after_job("_status_reset_job")
         # Collapse newlines and truncate so a multi-line exception message
         # can't distort the status bar layout or push the hint label off
@@ -24207,7 +24265,7 @@ class HostsFileEditor:
         def worker():
             try:
                 req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=15) as response:
+                with safe_urlopen(req, timeout=15) as response:
                     if response.getcode() != 200:
                         raise urllib.error.HTTPError(url, response.getcode(), f"HTTP {response.getcode()}", response.info(), response.fp)
                     raw = read_http_body_limited(response, max_bytes=SOURCE_PREVIEW_MAX_BYTES)
@@ -25663,7 +25721,7 @@ class HostsFileEditor:
         def _fetch():
             try:
                 req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=15) as response:
+                with safe_urlopen(req, timeout=15) as response:
                     if response.getcode() != 200:
                         raise urllib.error.HTTPError(
                             url, response.getcode(), f"HTTP {response.getcode()}",

@@ -257,7 +257,7 @@ Generate managed deployment handoff bundles without uploading to Intune, editing
 
 ```powershell
 python hosts_editor.py --managed-package-list
-python hosts_editor.py --managed-package-export intune-win32 .\managed-hosts.txt .\managed-bundle --managed-package-version 2.21.0 --managed-installer-url https://github.com/SysAdminDoc/HostsFileGet/releases/download/v2.21.0/HostsFileGet.exe --managed-sha256 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA --managed-label "Corp Managed"
+python hosts_editor.py --managed-package-export intune-win32 .\managed-hosts.txt .\managed-bundle --managed-package-version 2.22.0 --managed-installer-url https://github.com/SysAdminDoc/HostsFileGet/releases/download/v2.22.0/HostsFileGet.exe --managed-sha256 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA --managed-label "Corp Managed"
 ```
 
 Inspect active config location or create a managed portable bundle config:
