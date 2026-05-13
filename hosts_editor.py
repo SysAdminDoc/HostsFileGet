@@ -140,6 +140,8 @@ PROFILE_SYNC_METADATA_FILENAME = "hostsfileget-profile-sync.metadata.json"
 PROFILE_SYNC_PASSPHRASE_ENV = "HOSTSFILEGET_SYNC_PASSPHRASE"
 PROFILE_SYNC_MIN_PASSPHRASE_LENGTH = 16
 PROFILE_SYNC_ENV_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+SHARE_PATCH_SCHEMA = "hostsfileget.share-patch.v1"
+SHARE_PATCH_TYPES = ("allowlist", "profile")
 SCHEDULED_TASK_NAME = "HostsFileGet Auto-Update"
 CLI_LOG_FILENAME = "cli.log"
 CLI_ACTIVITY_FILENAME = "cli-activity.jsonl"
@@ -3600,6 +3602,294 @@ def format_profile_sync_report(report: dict) -> str:
         lines.append("Pulled: yes")
     lines.append("Hosts file writes: none")
     return "\n".join(lines)
+
+
+def _share_patch_timestamp(now=None) -> str:
+    value = now or datetime.datetime.now()
+    if isinstance(value, datetime.datetime):
+        return value.isoformat(timespec="seconds")
+    return str(value)
+
+
+def _sanitize_share_patch_author(value) -> str:
+    if not isinstance(value, str):
+        return ""
+    author = re.sub(r"\s+", " ", value.strip())
+    if _contains_control_chars(author):
+        return ""
+    return author[:120]
+
+
+def _normalize_allowlist_patch_domains(values) -> list[str]:
+    if isinstance(values, str):
+        raw_values = [line.strip() for line in values.splitlines()]
+    elif isinstance(values, (list, tuple, set)):
+        raw_values = [str(value).strip() for value in values]
+    else:
+        raw_values = []
+    return sanitize_pinned_domains(raw_values)
+
+
+def parse_allowlist_patch_text(text: str) -> list[str]:
+    return _normalize_allowlist_patch_domains(_sanitize_whitelist_text(text).splitlines())
+
+
+def build_allowlist_share_patch(domains, author: str | None = None, now=None) -> dict:
+    normalized_domains = _normalize_allowlist_patch_domains(domains)
+    if not normalized_domains:
+        raise ValueError("allowlist patch must contain at least one valid domain")
+    return {
+        "schema": SHARE_PATCH_SCHEMA,
+        "patch_type": "allowlist",
+        "app_version": APP_VERSION,
+        "created_at": _share_patch_timestamp(now),
+        "author": _sanitize_share_patch_author(author),
+        "domains": normalized_domains,
+    }
+
+
+def build_profile_share_patch(profile: dict, author: str | None = None, now=None) -> dict:
+    sanitized = sanitize_profile_snapshot(
+        profile,
+        fallback_id=sanitize_profile_id(profile.get("id"), DEFAULT_PROFILE_ID) if isinstance(profile, dict) else DEFAULT_PROFILE_ID,
+    )
+    return {
+        "schema": SHARE_PATCH_SCHEMA,
+        "patch_type": "profile",
+        "app_version": APP_VERSION,
+        "created_at": _share_patch_timestamp(now),
+        "author": _sanitize_share_patch_author(author),
+        "profile": sanitized,
+    }
+
+
+def sanitize_share_patch_payload(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("share patch must be a JSON object")
+    if payload.get("schema") != SHARE_PATCH_SCHEMA:
+        raise ValueError(f"share patch schema must be {SHARE_PATCH_SCHEMA}")
+    patch_type = str(payload.get("patch_type") or "").strip().lower()
+    if patch_type not in SHARE_PATCH_TYPES:
+        raise ValueError(f"share patch type must be one of {', '.join(SHARE_PATCH_TYPES)}")
+    created_at = str(payload.get("created_at") or "")
+    if not created_at or _contains_control_chars(created_at) or len(created_at) > 80:
+        created_at = datetime.datetime.now().isoformat(timespec="seconds")
+    base = {
+        "schema": SHARE_PATCH_SCHEMA,
+        "patch_type": patch_type,
+        "app_version": str(payload.get("app_version") or APP_VERSION)[:40],
+        "created_at": created_at,
+        "author": _sanitize_share_patch_author(payload.get("author")),
+    }
+    if patch_type == "allowlist":
+        domains = _normalize_allowlist_patch_domains(payload.get("domains", []))
+        if not domains:
+            raise ValueError("allowlist patch must contain at least one valid domain")
+        base["domains"] = domains
+    else:
+        profile_payload = payload.get("profile")
+        if not isinstance(profile_payload, dict):
+            raise ValueError("profile patch requires a profile object")
+        base["profile"] = sanitize_profile_snapshot(
+            profile_payload,
+            fallback_id=sanitize_profile_id(profile_payload.get("id"), DEFAULT_PROFILE_ID),
+        )
+    return base
+
+
+def _merge_domains_into_whitelist_text(whitelist_text: str, domains: list[str]) -> str:
+    existing = [line for line in _sanitize_whitelist_text(whitelist_text).splitlines() if line.strip()]
+    seen = {line.casefold() for line in existing}
+    merged = list(existing)
+    for domain in domains:
+        key = domain.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(domain)
+    return "\n".join(merged) + ("\n" if merged else "")
+
+
+def apply_share_patch_payload_to_config(
+    config: dict,
+    payload: dict,
+    default_last_open_dir: str | None = None,
+) -> tuple[dict, dict]:
+    default_dir = default_last_open_dir or os.path.expanduser("~")
+    current = sanitize_config_snapshot(config, default_dir)
+    patch = sanitize_share_patch_payload(payload)
+    if patch["patch_type"] == "allowlist":
+        before = len([line for line in current.get("whitelist", "").splitlines() if line.strip()])
+        current["whitelist"] = _merge_domains_into_whitelist_text(current.get("whitelist", ""), patch["domains"])
+        current["profiles"], current["active_profile_id"] = update_active_profile_snapshot(
+            current.get("profiles", []),
+            current.get("active_profile_id", DEFAULT_PROFILE_ID),
+            current,
+        )
+        merged = sanitize_config_snapshot(current, default_dir)
+        after = len([line for line in merged.get("whitelist", "").splitlines() if line.strip()])
+        report = {
+            "action": "apply",
+            "patch_type": "allowlist",
+            "status": "applied",
+            "added_count": max(0, after - before),
+            "domain_count": len(patch["domains"]),
+            "active_profile_id": merged.get("active_profile_id"),
+        }
+        return merged, report
+    merged = upsert_profile_in_config(current, patch["profile"], default_dir, activate=False)
+    report = {
+        "action": "apply",
+        "patch_type": "profile",
+        "status": "applied",
+        "profile_id": patch["profile"]["id"],
+        "active_profile_id": merged.get("active_profile_id"),
+    }
+    return merged, report
+
+
+def format_share_patch_summary(report: dict) -> str:
+    lines = [
+        "Signed Share Patch",
+        f"Action: {report.get('action', '-')}",
+        f"Type: {report.get('patch_type', '-')}",
+        f"Status: {report.get('status', '-')}",
+    ]
+    if report.get("patch_path"):
+        lines.append(f"Patch: {report.get('patch_path')}")
+    if report.get("signature_path"):
+        lines.append(f"Signature: {report.get('signature_path')}")
+    if report.get("verified") is not None:
+        lines.append(f"Signature verified: {'yes' if report.get('verified') else 'no'}")
+    if report.get("domain_count") is not None:
+        lines.append(f"Domains: {report.get('domain_count')}")
+    if report.get("added_count") is not None:
+        lines.append(f"Added domains: {report.get('added_count')}")
+    if report.get("profile_id"):
+        lines.append(f"Profile: {report.get('profile_id')}")
+    if report.get("active_profile_id"):
+        lines.append(f"Active profile: {report.get('active_profile_id')}")
+    if report.get("signer"):
+        lines.append(f"Signer: {report.get('signer')}")
+    lines.append("Hosts file writes: none")
+    return "\n".join(lines)
+
+
+def write_share_patch_payload(payload: dict, output_path: str) -> dict:
+    sanitized = sanitize_share_patch_payload(payload)
+    output_dir = os.path.dirname(os.path.abspath(output_path))
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    write_text_file_atomic(output_path, json.dumps(sanitized, indent=2, sort_keys=True))
+    summary = {
+        "action": "build",
+        "patch_type": sanitized["patch_type"],
+        "status": "written",
+        "patch_path": output_path,
+    }
+    if sanitized["patch_type"] == "allowlist":
+        summary["domain_count"] = len(sanitized["domains"])
+    else:
+        summary["profile_id"] = sanitized["profile"]["id"]
+    return summary
+
+
+def load_share_patch_payload(path: str) -> dict:
+    try:
+        payload = json.loads(read_text_file_content(path))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"share patch JSON is invalid: {exc}") from exc
+    return sanitize_share_patch_payload(payload)
+
+
+def sign_share_patch_file(
+    patch_path: str,
+    signature_path: str,
+    gpg_key: str | None = None,
+    gpg_executable: str | None = None,
+    runner=None,
+) -> dict:
+    if not os.path.isfile(patch_path):
+        raise OSError(f"share patch not found: {patch_path}")
+    gpg = resolve_gpg_executable(gpg_executable)
+    if not gpg:
+        raise OSError("gpg executable not found")
+    output_dir = os.path.dirname(os.path.abspath(signature_path))
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    args = [
+        gpg,
+        "--batch",
+        "--yes",
+        "--armor",
+        "--detach-sign",
+        "--output",
+        signature_path,
+    ]
+    if gpg_key:
+        args.extend(["--local-user", str(gpg_key)])
+    args.append(patch_path)
+    run = runner or subprocess.run
+    try:
+        result = run(args, capture_output=True, text=True, timeout=60, check=False)
+    except FileNotFoundError as exc:
+        raise OSError("gpg executable not found") from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise OSError(f"gpg sign failed: {detail}")
+    payload = load_share_patch_payload(patch_path)
+    report = {
+        "action": "sign",
+        "patch_type": payload["patch_type"],
+        "status": "signed",
+        "patch_path": patch_path,
+        "signature_path": signature_path,
+    }
+    if payload["patch_type"] == "allowlist":
+        report["domain_count"] = len(payload["domains"])
+    else:
+        report["profile_id"] = payload["profile"]["id"]
+    return report
+
+
+def verify_share_patch_signature(
+    patch_path: str,
+    signature_path: str,
+    gpg_executable: str | None = None,
+    runner=None,
+) -> dict:
+    if not os.path.isfile(patch_path):
+        raise OSError(f"share patch not found: {patch_path}")
+    if not os.path.isfile(signature_path):
+        raise OSError(f"share patch signature not found: {signature_path}")
+    gpg = resolve_gpg_executable(gpg_executable)
+    if not gpg:
+        raise OSError("gpg executable not found")
+    run = runner or subprocess.run
+    args = [gpg, "--batch", "--verify", signature_path, patch_path]
+    try:
+        result = run(args, capture_output=True, text=True, timeout=60, check=False)
+    except FileNotFoundError as exc:
+        raise OSError("gpg executable not found") from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise OSError(f"gpg verify failed: {detail}")
+    payload = load_share_patch_payload(patch_path)
+    signer = (result.stderr or result.stdout or "").strip()
+    report = {
+        "action": "verify",
+        "patch_type": payload["patch_type"],
+        "status": "verified",
+        "patch_path": patch_path,
+        "signature_path": signature_path,
+        "verified": True,
+        "signer": re.sub(r"\s+", " ", signer)[:240],
+    }
+    if payload["patch_type"] == "allowlist":
+        report["domain_count"] = len(payload["domains"])
+    else:
+        report["profile_id"] = payload["profile"]["id"]
+    return report
 
 
 def _parse_valid_http_source_url(url: str):
@@ -20614,6 +20904,78 @@ def _cli_profile_sync_import(repo_dir: str, passphrase_env: str | None = None, p
     return 0
 
 
+def _cli_patch_build_allowlist(input_path: str, output_path: str) -> int:
+    try:
+        domains = parse_allowlist_patch_text(read_text_file_content(input_path))
+        payload = build_allowlist_share_patch(domains)
+        report = write_share_patch_payload(payload, output_path)
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Share patch allowlist build failed: {exc}")
+        return 2
+    _cli_print(format_share_patch_summary(report))
+    return 0
+
+
+def _cli_patch_build_profile(profile_id: str, output_path: str) -> int:
+    try:
+        config_path = get_primary_config_path("hosts_editor_config.json")
+        current = _read_cli_config_payload(config_path)
+        profile = find_profile_snapshot(current, profile_id, os.path.expanduser("~"))
+        payload = build_profile_share_patch(profile)
+        report = write_share_patch_payload(payload, output_path)
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Share patch profile build failed: {exc}")
+        return 2
+    _cli_print(format_share_patch_summary(report))
+    return 0
+
+
+def _cli_patch_sign(patch_path: str, signature_path: str, gpg_key: str | None = None) -> int:
+    try:
+        report = sign_share_patch_file(patch_path, signature_path, gpg_key=gpg_key)
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Share patch signing failed: {exc}")
+        return 2
+    _cli_print(format_share_patch_summary(report))
+    return 0
+
+
+def _cli_patch_verify(patch_path: str, signature_path: str) -> int:
+    try:
+        report = verify_share_patch_signature(patch_path, signature_path)
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Share patch verification failed: {exc}")
+        return 2
+    _cli_print(format_share_patch_summary(report))
+    return 0
+
+
+def _cli_patch_apply(patch_path: str, signature_path: str) -> int:
+    try:
+        verify_report = verify_share_patch_signature(patch_path, signature_path)
+        payload = load_share_patch_payload(patch_path)
+        config_path = get_primary_config_path("hosts_editor_config.json")
+        current = _read_cli_config_payload(config_path)
+        config, apply_report = apply_share_patch_payload_to_config(
+            current,
+            payload,
+            os.path.expanduser("~"),
+        )
+        apply_report.update({
+            "patch_path": patch_path,
+            "signature_path": signature_path,
+            "verified": True,
+            "signer": verify_report.get("signer", ""),
+        })
+        _write_cli_config_payload(config_path, config)
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Share patch apply failed: {exc}")
+        return 2
+    _cli_print(format_share_patch_summary(apply_report))
+    _cli_print(f"Wrote config: {config_path}")
+    return 0
+
+
 def _cli_profile_schedule_list(at_value: str | None = None) -> int:
     try:
         config_path = get_primary_config_path("hosts_editor_config.json")
@@ -20760,6 +21122,12 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--sync-passphrase-env",
         "--sync-git-push",
         "--sync-git-pull",
+        "--patch-build-allowlist",
+        "--patch-build-profile",
+        "--patch-sign",
+        "--patch-verify",
+        "--patch-apply",
+        "--patch-gpg-key",
         "--profile-schedule-list",
         "--profile-schedule-add",
         "--profile-schedule-days",
@@ -20824,6 +21192,12 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--sync-git-export=",
         "--sync-git-import=",
         "--sync-passphrase-env=",
+        "--patch-build-allowlist=",
+        "--patch-build-profile=",
+        "--patch-sign=",
+        "--patch-verify=",
+        "--patch-apply=",
+        "--patch-gpg-key=",
         "--profile-schedule-add=",
         "--profile-schedule-days=",
         "--profile-schedule-name=",
@@ -20887,6 +21261,12 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--sync-passphrase-env", default=PROFILE_SYNC_PASSPHRASE_ENV, metavar="ENV", help=f"Environment variable containing the sync passphrase; defaults to {PROFILE_SYNC_PASSPHRASE_ENV}.")
     parser.add_argument("--sync-git-push", action="store_true", help="After --sync-git-export, push HEAD to origin. Tokens are not stored or prompted for.")
     parser.add_argument("--sync-git-pull", action="store_true", help="Before --sync-git-import, run git pull --ff-only in the sync worktree.")
+    parser.add_argument("--patch-build-allowlist", nargs=2, metavar=("INPUT", "PATCH"), help="Build an unsigned allowlist share patch from INPUT domains into PATCH.")
+    parser.add_argument("--patch-build-profile", nargs=2, metavar=("ID", "PATCH"), help="Build an unsigned profile share patch for saved profile ID into PATCH.")
+    parser.add_argument("--patch-sign", nargs=2, metavar=("PATCH", "SIGNATURE"), help="Create an armored detached GPG signature for PATCH.")
+    parser.add_argument("--patch-verify", nargs=2, metavar=("PATCH", "SIGNATURE"), help="Verify a signed share patch without applying it.")
+    parser.add_argument("--patch-apply", nargs=2, metavar=("PATCH", "SIGNATURE"), help="Verify and apply a signed share patch to app config only.")
+    parser.add_argument("--patch-gpg-key", metavar="KEY", help="Optional GPG key identity for --patch-sign.")
     parser.add_argument("--profile-schedule-list", action="store_true", help="Show the time-bound profile activation schedule without writing files.")
     parser.add_argument(
         "--profile-schedule-add",
@@ -21053,6 +21433,18 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         return _cli_profile_sync_export(args.sync_git_export, args.sync_passphrase_env, args.sync_git_push)
     if args.sync_git_import:
         return _cli_profile_sync_import(args.sync_git_import, args.sync_passphrase_env, args.sync_git_pull)
+    if args.patch_gpg_key and not args.patch_sign:
+        parser.error("--patch-gpg-key requires --patch-sign PATCH SIGNATURE")
+    if args.patch_build_allowlist:
+        return _cli_patch_build_allowlist(args.patch_build_allowlist[0], args.patch_build_allowlist[1])
+    if args.patch_build_profile:
+        return _cli_patch_build_profile(args.patch_build_profile[0], args.patch_build_profile[1])
+    if args.patch_sign:
+        return _cli_patch_sign(args.patch_sign[0], args.patch_sign[1], args.patch_gpg_key)
+    if args.patch_verify:
+        return _cli_patch_verify(args.patch_verify[0], args.patch_verify[1])
+    if args.patch_apply:
+        return _cli_patch_apply(args.patch_apply[0], args.patch_apply[1])
     if args.profile_schedule_add:
         return _cli_profile_schedule_add(
             args.profile_schedule_add[0],

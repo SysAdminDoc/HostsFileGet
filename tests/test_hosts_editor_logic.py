@@ -46,6 +46,8 @@ from hosts_editor import (
     build_local_api_clean_preview_payload,
     build_local_api_status_payload,
     build_profile_sync_payload,
+    build_allowlist_share_patch,
+    build_profile_share_patch,
     build_entry_provenance_report,
     build_pinned_export_payload,
     build_provenance_log_report,
@@ -105,9 +107,11 @@ from hosts_editor import (
     load_declarative_config_text,
     apply_declarative_profile_to_config,
     apply_profile_sync_payload_to_config,
+    apply_share_patch_payload_to_config,
     upsert_profile_in_config,
     parse_pihole_ftl_blocked_domains,
     parse_switchhosts_export_text,
+    parse_allowlist_patch_text,
     parse_windows_dns_client_events_xml,
     sanitize_git_history_ref,
     summarize_source_contributions,
@@ -155,6 +159,7 @@ from hosts_editor import (
     format_declarative_profile_summary,
     format_profile_list_summary,
     format_profile_sync_report,
+    format_share_patch_summary,
     format_git_history_status_report,
     format_cloud_dns_adapter_catalog,
     format_cloud_dns_adapter_report,
@@ -218,6 +223,7 @@ from hosts_editor import (
     read_cli_activity_events,
     read_git_history_snapshot,
     read_profile_sync_git_import,
+    load_share_patch_payload,
     read_text_file_lines,
     quarantine_adblock_rule_lines,
     remove_import_section,
@@ -235,6 +241,7 @@ from hosts_editor import (
     sanitize_profile_activation_schedule,
     sanitize_profile_id,
     sanitize_profile_sync_payload,
+    sanitize_share_patch_payload,
     sanitize_profile_snapshot,
     sanitize_profiles_snapshot,
     sanitize_source_cache_metadata,
@@ -256,6 +263,9 @@ from hosts_editor import (
     upsert_watch_expression,
     write_git_history_snapshot,
     write_profile_sync_git_export,
+    write_share_patch_payload,
+    sign_share_patch_file,
+    verify_share_patch_signature,
     write_portable_bundle_config,
     write_text_file_atomic,
     write_bytes_file_atomic,
@@ -2711,6 +2721,37 @@ profile:
             )
             mocked_sync_import.assert_called_once_with("sync-repo", "HOSTSFILEGET_SYNC_PASSPHRASE", True)
 
+        with mock.patch.object(hosts_editor, "_cli_patch_build_allowlist", return_value=0) as mocked_patch_allow:
+            self.assertEqual(
+                hosts_editor._handle_cli_args(["--patch-build-allowlist", "domains.txt", "allow.patch.json"]),
+                0,
+            )
+            mocked_patch_allow.assert_called_once_with("domains.txt", "allow.patch.json")
+
+        with mock.patch.object(hosts_editor, "_cli_patch_build_profile", return_value=0) as mocked_patch_profile:
+            self.assertEqual(
+                hosts_editor._handle_cli_args(["--patch-build-profile", "work", "work.patch.json"]),
+                0,
+            )
+            mocked_patch_profile.assert_called_once_with("work", "work.patch.json")
+
+        with mock.patch.object(hosts_editor, "_cli_patch_sign", return_value=0) as mocked_patch_sign:
+            self.assertEqual(
+                hosts_editor._handle_cli_args([
+                    "--patch-sign", "work.patch.json", "work.patch.json.asc",
+                    "--patch-gpg-key", "test@example",
+                ]),
+                0,
+            )
+            mocked_patch_sign.assert_called_once_with("work.patch.json", "work.patch.json.asc", "test@example")
+
+        with mock.patch.object(hosts_editor, "_cli_patch_apply", return_value=0) as mocked_patch_apply:
+            self.assertEqual(
+                hosts_editor._handle_cli_args(["--patch-apply", "work.patch.json", "work.patch.json.asc"]),
+                0,
+            )
+            mocked_patch_apply.assert_called_once_with("work.patch.json", "work.patch.json.asc")
+
     def test_handle_cli_args_routes_cloud_dns_flags(self):
         with mock.patch.object(hosts_editor, "_cli_cloud_adapter_list", return_value=0) as mocked_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--cloud-adapter-list"]), 0)
@@ -3153,6 +3194,82 @@ profile:
         self.assertEqual(imported["config"]["active_profile_id"], "family")
         self.assertEqual(imported["config"]["whitelist"], "school.example\n")
         self.assertIn("Hosts file writes: none", format_profile_sync_report(imported))
+
+    def test_share_patch_payloads_apply_allowlist_and_profile_config_only(self):
+        allowlist_patch = build_allowlist_share_patch(
+            parse_allowlist_patch_text("Allow.Example\nbad value\nsecond.example\n"),
+            author="Ops",
+            now=datetime.datetime(2026, 5, 12, 10, 0, 0),
+        )
+        self.assertEqual(sanitize_share_patch_payload(allowlist_patch)["domains"], ["allow.example", "second.example"])
+
+        config, report = apply_share_patch_payload_to_config(
+            {
+                "whitelist": "existing.example\n",
+                "profiles": [{"id": "default", "name": "Default", "whitelist": "existing.example\n"}],
+                "active_profile_id": "default",
+            },
+            allowlist_patch,
+            os.getcwd(),
+        )
+
+        self.assertEqual(report["added_count"], 2)
+        self.assertIn("allow.example", config["whitelist"])
+        self.assertIn("second.example", config["profiles"][0]["whitelist"])
+
+        profile_patch = build_profile_share_patch({
+            "id": "shared",
+            "name": "Shared",
+            "whitelist": "shared.example\n",
+            "pinned_domains": ["pin.example"],
+        })
+        config, profile_report = apply_share_patch_payload_to_config(config, profile_patch, os.getcwd())
+
+        self.assertEqual(profile_report["profile_id"], "shared")
+        self.assertEqual(config["active_profile_id"], "default")
+        self.assertTrue(any(profile["id"] == "shared" for profile in config["profiles"]))
+        self.assertIn("Hosts file writes: none", format_share_patch_summary(profile_report))
+
+    def test_share_patch_file_sign_and_verify_with_fake_gpg(self):
+        import tempfile
+        from pathlib import Path
+
+        def fake_gpg(args, capture_output=None, text=None, timeout=None, check=None):
+            if "--detach-sign" in args:
+                signature_path = Path(args[args.index("--output") + 1])
+                patch_path = Path(args[-1])
+                signature_path.write_text("signature-for:" + patch_path.read_text(encoding="utf-8"), encoding="utf-8")
+                return type("Result", (), {"returncode": 0, "stdout": "", "stderr": "signed by test@example"})()
+            signature_path = Path(args[-2])
+            if not signature_path.read_text(encoding="utf-8").startswith("signature-for:"):
+                return type("Result", (), {"returncode": 1, "stdout": "", "stderr": "bad signature"})()
+            return type("Result", (), {"returncode": 0, "stdout": "", "stderr": "Good signature from Test"})()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            patch_path = Path(tmpdir) / "allowlist.patch.json"
+            signature_path = Path(tmpdir) / "allowlist.patch.json.asc"
+            write_share_patch_payload(
+                build_allowlist_share_patch(["allow.example"]),
+                str(patch_path),
+            )
+            signed = sign_share_patch_file(
+                str(patch_path),
+                str(signature_path),
+                gpg_key="test@example",
+                gpg_executable="fake-gpg",
+                runner=fake_gpg,
+            )
+            verified = verify_share_patch_signature(
+                str(patch_path),
+                str(signature_path),
+                gpg_executable="fake-gpg",
+                runner=fake_gpg,
+            )
+            loaded = load_share_patch_payload(str(patch_path))
+
+        self.assertEqual(signed["status"], "signed")
+        self.assertTrue(verified["verified"])
+        self.assertEqual(loaded["domains"], ["allow.example"])
 
     def test_cli_history_restore_refuses_when_hosts_file_is_disabled(self):
         import tempfile
