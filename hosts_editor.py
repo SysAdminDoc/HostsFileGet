@@ -14,6 +14,7 @@ import urllib.parse
 import json
 import webbrowser
 import hashlib
+import uuid
 import sys
 import csv
 import io
@@ -10768,6 +10769,104 @@ CT_WATCHDOG_WARNINGS = (
     "Typosquat permutations can false-positive legitimate brands, vendors, customer domains, and unrelated registrants.",
     "Hosts files cannot monitor CT logs continuously and should not auto-block candidates from this plan.",
 )
+CTI_ENRICHMENT_PLAN_SCHEMA = "hostsfileget.cti-enrichment-plan.v1"
+CTI_ENRICHMENT_DEFAULT_MAX_IOCS = 500
+CTI_ENRICHMENT_MAX_IOCS = 5000
+CTI_ENRICHMENT_DEFAULT_MISP_URL = "https://misp.example.local"
+CTI_ENRICHMENT_SOURCE_IDS = ("C6", "A1", "A2", "S44", "S45", "S46", "S47", "S48", "S49")
+CTI_ENRICHMENT_WARNINGS = (
+    "Plan-only: HostsFileGet prepares request templates and local STIX artifacts; it does not call VirusTotal, URLhaus, MISP, or TAXII services.",
+    "Do not paste API keys into generated JSON; inject them only in the external client that executes a reviewed request.",
+    "Submitting domains, URLs, or IP addresses to third-party intelligence services can reveal local browsing, incident, or business context.",
+    "Provider labels, detections, and scores are enrichment signals, not hosts-file verdicts; keep human triage between enrichment and policy changes.",
+    "Respect provider terms, rate limits, sharing groups, TLP markings, and commercial entitlement boundaries before executing templates.",
+)
+CTI_ENRICHMENT_PROVIDER_CATALOG = (
+    {
+        "id": "virustotal-domain",
+        "label": "VirusTotal domain report",
+        "provider": "VirusTotal API v3",
+        "kind": "external-api",
+        "supported_ioc_types": ("domain",),
+        "method": "GET",
+        "endpoint_template": "https://www.virustotal.com/api/v3/domains/{domain}",
+        "auth": "x-apikey header supplied by external client",
+        "expected_fields": ("last_analysis_stats", "reputation", "categories", "total_votes", "tags", "relationships"),
+        "quota_note": "API key and quota are operator-managed outside HostsFileGet.",
+        "privacy_note": "Domain queries are sent to VirusTotal when an external client executes the template.",
+        "references": ("S44", "S45", "C6"),
+    },
+    {
+        "id": "urlhaus-host",
+        "label": "URLhaus host lookup",
+        "provider": "abuse.ch URLhaus API",
+        "kind": "external-api",
+        "supported_ioc_types": ("domain", "ipv4"),
+        "method": "POST",
+        "endpoint_template": "https://urlhaus-api.abuse.ch/v1/host/",
+        "auth": "optional Auth-Key header supplied by external client",
+        "expected_fields": ("query_status", "url_count", "blacklists", "urls", "firstseen"),
+        "quota_note": "Use API-friendly batch sizes and avoid repeating stale host queries.",
+        "privacy_note": "Host queries are sent to URLhaus when an external client executes the template.",
+        "references": ("S46", "A1", "A2"),
+    },
+    {
+        "id": "urlhaus-url",
+        "label": "URLhaus URL lookup",
+        "provider": "abuse.ch URLhaus API",
+        "kind": "external-api",
+        "supported_ioc_types": ("url",),
+        "method": "POST",
+        "endpoint_template": "https://urlhaus-api.abuse.ch/v1/url/",
+        "auth": "optional Auth-Key header supplied by external client",
+        "expected_fields": ("query_status", "url_status", "host", "threat", "tags", "payloads", "blacklists"),
+        "quota_note": "Submit only URLs that are in-scope for malware or incident review.",
+        "privacy_note": "Full URL paths are sent to URLhaus when an external client executes the template.",
+        "references": ("S46", "A1", "A2"),
+    },
+    {
+        "id": "misp-attribute-restsearch",
+        "label": "MISP attribute restSearch",
+        "provider": "MISP",
+        "kind": "external-api",
+        "supported_ioc_types": ("domain", "url", "ipv4", "ipv6"),
+        "method": "POST",
+        "endpoint_template": "{misp_base_url}/attributes/restSearch",
+        "auth": "Authorization header supplied by external client",
+        "expected_fields": ("Attribute", "Event", "Tag", "Galaxy", "to_ids"),
+        "quota_note": "Query scope, sharing groups, retention windows, and pagination are MISP-instance policy decisions.",
+        "privacy_note": "IoCs are sent to the configured MISP instance when an external client executes the template.",
+        "references": ("S47", "S48"),
+    },
+    {
+        "id": "stix-bundle",
+        "label": "STIX 2.1 observable bundle",
+        "provider": "Local STIX export",
+        "kind": "local-artifact",
+        "supported_ioc_types": ("domain", "url", "ipv4", "ipv6"),
+        "method": "LOCAL",
+        "endpoint_template": "artifacts.stix_bundle",
+        "auth": "none",
+        "expected_fields": ("bundle", "domain-name", "url", "ipv4-addr", "ipv6-addr"),
+        "quota_note": "No network quota; bundle size is capped by --cti-enrichment-max-iocs.",
+        "privacy_note": "Local artifact only until the operator imports or shares it elsewhere.",
+        "references": ("S49",),
+    },
+)
+CTI_ENRICHMENT_PROVIDER_ALIASES = {
+    "vt": "virustotal-domain",
+    "virustotal": "virustotal-domain",
+    "virustotal-domains": "virustotal-domain",
+    "urlhaus": "urlhaus-host",
+    "urlhaus-domain": "urlhaus-host",
+    "urlhaus-hosts": "urlhaus-host",
+    "urlhaus-urls": "urlhaus-url",
+    "misp": "misp-attribute-restsearch",
+    "misp-restsearch": "misp-attribute-restsearch",
+    "stix": "stix-bundle",
+    "stix21": "stix-bundle",
+    "stix-bundle": "stix-bundle",
+}
 THREAT_FEED_PACK_WARNINGS = (
     "Plan-only: HostsFileGet lists vetted feed URLs and review controls; it does not fetch or auto-apply threat feeds.",
     "NRD and DGA feeds can false-positive newly launched, parked, CDN, or campaign-specific legitimate domains.",
@@ -12437,6 +12536,467 @@ def format_ct_typosquat_watchdog_plan(plan: dict) -> str:
     for warning in plan.get("warnings") or CT_WATCHDOG_WARNINGS:
         lines.append(f"- {warning}")
     lines.extend(["", "Roadmap source IDs:", f"- {', '.join(plan.get('references') or CT_WATCHDOG_SOURCE_IDS)}"])
+    return "\n".join(lines)
+
+
+def sanitize_cti_enrichment_max_iocs(value: int | str | None = None) -> int:
+    if value is None:
+        return CTI_ENRICHMENT_DEFAULT_MAX_IOCS
+    try:
+        limit = int(value)
+    except (TypeError, ValueError):
+        raise ValueError("CTI enrichment max IoCs must be an integer") from None
+    if limit < 1 or limit > CTI_ENRICHMENT_MAX_IOCS:
+        raise ValueError(f"CTI enrichment max IoCs must be between 1 and {CTI_ENRICHMENT_MAX_IOCS}")
+    return limit
+
+
+def sanitize_cti_enrichment_misp_url(value: str | None = None) -> str:
+    candidate = (value or CTI_ENRICHMENT_DEFAULT_MISP_URL).strip().rstrip("/")
+    if not candidate or _contains_control_chars(candidate):
+        raise ValueError("MISP base URL must be a non-empty HTTP(S) URL")
+    parsed = urllib.parse.urlsplit(candidate)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("MISP base URL must include http(s) scheme and host")
+    return urllib.parse.urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), parsed.path.rstrip("/"), "", ""))
+
+
+def normalize_cti_enrichment_provider_id(provider_id: str) -> str:
+    normalized = (provider_id or "").strip().lower().replace("_", "-")
+    return CTI_ENRICHMENT_PROVIDER_ALIASES.get(normalized, normalized)
+
+
+def list_cti_enrichment_providers() -> list[dict]:
+    return [dict(provider) for provider in CTI_ENRICHMENT_PROVIDER_CATALOG]
+
+
+def find_cti_enrichment_provider(provider_id: str) -> dict:
+    normalized = normalize_cti_enrichment_provider_id(provider_id)
+    for provider in CTI_ENRICHMENT_PROVIDER_CATALOG:
+        if provider["id"] == normalized:
+            return dict(provider)
+    known = ", ".join(provider["id"] for provider in CTI_ENRICHMENT_PROVIDER_CATALOG)
+    raise ValueError(f"Unknown CTI enrichment provider: {provider_id!r}. Known providers: {known}")
+
+
+def _resolve_cti_enrichment_provider_ids(provider_ids: list[str] | tuple[str, ...] | None = None) -> list[str]:
+    if not provider_ids:
+        return [provider["id"] for provider in CTI_ENRICHMENT_PROVIDER_CATALOG]
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for provider_id in provider_ids:
+        provider = find_cti_enrichment_provider(provider_id)
+        if provider["id"] not in seen:
+            seen.add(provider["id"])
+            resolved.append(provider["id"])
+    return resolved
+
+
+def _normalize_cti_enrichment_domain(value: str) -> str:
+    candidate = (value or "").strip().strip(" \t\r\n'\"`<>()[]{}")
+    candidate = candidate.removeprefix("||").removeprefix("|").removeprefix("@@")
+    candidate = candidate.lstrip("*.").split("^", 1)[0].split("/", 1)[0].split(":", 1)[0]
+    candidate = candidate.rstrip(".").lower()
+    if not candidate or _contains_control_chars(candidate):
+        return ""
+    try:
+        candidate = candidate.encode("idna").decode("ascii")
+    except UnicodeError:
+        return ""
+    if not looks_like_domain(candidate, allow_single_label=False):
+        return ""
+    return candidate
+
+
+def _normalize_cti_enrichment_url(value: str) -> str:
+    candidate = (value or "").strip().strip(" \t\r\n'\"`<>")
+    while candidate and candidate[-1] in ".,;)]}":
+        candidate = candidate[:-1]
+    if _contains_control_chars(candidate):
+        return ""
+    parsed = urllib.parse.urlsplit(candidate)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        return ""
+    hostname = (parsed.hostname or "").strip().lower().rstrip(".")
+    if not hostname:
+        return ""
+    try:
+        hostname = hostname.encode("idna").decode("ascii")
+    except UnicodeError:
+        return ""
+    netloc = f"[{hostname}]" if ":" in hostname else hostname
+    if parsed.port:
+        netloc = f"{netloc}:{parsed.port}"
+    path = parsed.path or ""
+    return urllib.parse.urlunsplit((parsed.scheme.lower(), netloc, path, parsed.query, ""))
+
+
+def _normalize_cti_enrichment_ip(value: str) -> tuple[str, str | None]:
+    token = (value or "").strip().strip(" \t\r\n'\"`<>()[]{}")
+    if not token or _contains_control_chars(token):
+        return "", None
+    try:
+        ip_obj = ipaddress.ip_address(token)
+    except ValueError:
+        return "", None
+    if not ip_obj.is_global:
+        return "", None
+    return str(ip_obj), "ipv6" if ip_obj.version == 6 else "ipv4"
+
+
+def _cti_enrichment_url_host_kind(normalized_url: str) -> tuple[str, str | None]:
+    parsed = urllib.parse.urlsplit(normalized_url)
+    host = (parsed.hostname or "").strip().lower().rstrip(".")
+    if not host:
+        return "", None
+    ip_value, ip_kind = _normalize_cti_enrichment_ip(host)
+    if ip_kind:
+        return ip_value, ip_kind
+    domain = _normalize_cti_enrichment_domain(host)
+    if domain:
+        return domain, "domain"
+    return "", None
+
+
+def _add_cti_enrichment_ioc(
+    iocs: dict[tuple[str, str], dict],
+    kind: str,
+    value: str,
+    line_number: int,
+    source: str,
+    limit: int,
+) -> bool:
+    if not value:
+        return False
+    key = (kind, value)
+    if key not in iocs:
+        if len(iocs) >= limit:
+            return False
+        iocs[key] = {"type": kind, "value": value, "source_lines": [], "sources": []}
+    record = iocs[key]
+    if line_number not in record["source_lines"]:
+        record["source_lines"].append(line_number)
+    if source not in record["sources"]:
+        record["sources"].append(source)
+    return True
+
+
+def parse_cti_enrichment_iocs(text: str, max_iocs: int | str | None = None) -> dict:
+    limit = sanitize_cti_enrichment_max_iocs(max_iocs)
+    iocs: dict[tuple[str, str], dict] = {}
+    rejected: list[dict] = []
+    truncated = False
+    url_pattern = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+    for line_number, raw_line in enumerate((text or "").splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        line_without_comment = line.split("#", 1)[0].strip()
+        if not line_without_comment:
+            continue
+
+        for raw_url in url_pattern.findall(line_without_comment):
+            normalized_url = _normalize_cti_enrichment_url(raw_url)
+            if normalized_url:
+                if not _add_cti_enrichment_ioc(iocs, "url", normalized_url, line_number, "url", limit):
+                    truncated = True
+                host_value, host_kind = _cti_enrichment_url_host_kind(normalized_url)
+                if host_kind and not _add_cti_enrichment_ioc(iocs, host_kind, host_value, line_number, "url-host", limit):
+                    truncated = True
+
+        parsed_entries, _transformed = parse_hosts_line_entries(line_without_comment)
+        for _entry, domain, is_block in parsed_entries:
+            if is_block and not _add_cti_enrichment_ioc(iocs, "domain", domain, line_number, "hosts-entry", limit):
+                truncated = True
+
+        saw_candidate = bool(parsed_entries) or bool(url_pattern.search(line_without_comment))
+        for token in re.split(r"[\s,;]+", line_without_comment):
+            if not token:
+                continue
+            normalized_url = _normalize_cti_enrichment_url(token)
+            if normalized_url:
+                saw_candidate = True
+                continue
+            ip_value, ip_kind = _normalize_cti_enrichment_ip(token)
+            if ip_kind:
+                saw_candidate = True
+                if not _add_cti_enrichment_ioc(iocs, ip_kind, ip_value, line_number, "ip-token", limit):
+                    truncated = True
+                continue
+            domain = _normalize_cti_enrichment_domain(token)
+            if domain:
+                saw_candidate = True
+                if not _add_cti_enrichment_ioc(iocs, "domain", domain, line_number, "domain-token", limit):
+                    truncated = True
+
+        if not saw_candidate:
+            rejected.append({"line": line_number, "text": line[:120], "reason": "no supported domain, URL, or public IP IoC found"})
+
+    records = sorted(iocs.values(), key=lambda item: (item["type"], item["value"]))
+    for record in records:
+        record["source_lines"].sort()
+        record["sources"].sort()
+    return {
+        "max_iocs": limit,
+        "truncated": truncated,
+        "iocs": records,
+        "domains": [record["value"] for record in records if record["type"] == "domain"],
+        "urls": [record["value"] for record in records if record["type"] == "url"],
+        "ip_addresses": [record["value"] for record in records if record["type"] in {"ipv4", "ipv6"}],
+        "rejected": rejected,
+    }
+
+
+def _cti_enrichment_stix_id(stix_type: str, value: str) -> str:
+    stable_uuid = uuid.uuid5(uuid.NAMESPACE_URL, f"{APP_SLUG}:cti-enrichment:{stix_type}:{value}")
+    return f"{stix_type}--{stable_uuid}"
+
+
+def _cti_enrichment_stix_object(ioc: dict) -> dict | None:
+    kind = ioc.get("type")
+    value = ioc.get("value")
+    stix_type = {
+        "domain": "domain-name",
+        "url": "url",
+        "ipv4": "ipv4-addr",
+        "ipv6": "ipv6-addr",
+    }.get(kind)
+    if not stix_type or not value:
+        return None
+    return {
+        "type": stix_type,
+        "spec_version": "2.1",
+        "id": _cti_enrichment_stix_id(stix_type, value),
+        "value": value,
+        "x_hostsfileget_source_lines": list(ioc.get("source_lines") or []),
+    }
+
+
+def build_cti_enrichment_stix_bundle(iocs: list[dict]) -> dict:
+    objects = []
+    for ioc in iocs:
+        stix_object = _cti_enrichment_stix_object(ioc)
+        if stix_object:
+            objects.append(stix_object)
+    bundle_seed = "|".join(f"{obj['type']}:{obj['value']}" for obj in objects) or "empty"
+    return {
+        "type": "bundle",
+        "id": _cti_enrichment_stix_id("bundle", bundle_seed),
+        "objects": objects,
+    }
+
+
+def _cti_enrichment_misp_types(kind: str) -> list[str]:
+    return {
+        "domain": ["domain", "hostname"],
+        "url": ["url"],
+        "ipv4": ["ip-src", "ip-dst"],
+        "ipv6": ["ip-src", "ip-dst"],
+    }.get(kind, [])
+
+
+def _cti_enrichment_request_template(provider: dict, ioc: dict, misp_base_url: str) -> dict | None:
+    provider_id = provider.get("id")
+    kind = ioc.get("type")
+    value = ioc.get("value")
+    if kind not in set(provider.get("supported_ioc_types") or ()) or not value:
+        return None
+    if provider_id == "stix-bundle":
+        return None
+    endpoint_template = provider["endpoint_template"]
+    request = {
+        "provider_id": provider_id,
+        "provider": provider["provider"],
+        "ioc_type": kind,
+        "value": value,
+        "method": provider["method"],
+        "auth": provider["auth"],
+        "expected_fields": list(provider.get("expected_fields") or ()),
+        "quota_note": provider["quota_note"],
+        "privacy_note": provider["privacy_note"],
+        "references": list(provider.get("references") or ()),
+    }
+    if provider_id == "virustotal-domain":
+        request.update({
+            "url": endpoint_template.format(domain=urllib.parse.quote(value, safe="")),
+            "headers": {"x-apikey": "${VT_API_KEY}"},
+        })
+    elif provider_id == "urlhaus-host":
+        request.update({
+            "url": endpoint_template,
+            "headers": {"Auth-Key": "${URLHAUS_AUTH_KEY_OPTIONAL}"},
+            "body_form": {"host": value},
+        })
+    elif provider_id == "urlhaus-url":
+        request.update({
+            "url": endpoint_template,
+            "headers": {"Auth-Key": "${URLHAUS_AUTH_KEY_OPTIONAL}"},
+            "body_form": {"url": value},
+        })
+    elif provider_id == "misp-attribute-restsearch":
+        request.update({
+            "url": endpoint_template.format(misp_base_url=misp_base_url),
+            "headers": {
+                "Authorization": "${MISP_API_KEY}",
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+            "body_json": {
+                "returnFormat": "json",
+                "value": value,
+                "type": _cti_enrichment_misp_types(kind),
+            },
+        })
+    return request
+
+
+def _cti_enrichment_review_csv(request_templates: list[dict], stix_bundle: dict | None = None) -> str:
+    output = io.StringIO()
+    fieldnames = ("provider_id", "ioc_type", "value", "method", "url", "auth_required", "review_action")
+    writer = csv.DictWriter(output, fieldnames=fieldnames, lineterminator="\n")
+    writer.writeheader()
+    for request in request_templates:
+        writer.writerow({
+            "provider_id": request["provider_id"],
+            "ioc_type": request["ioc_type"],
+            "value": request["value"],
+            "method": request["method"],
+            "url": request["url"],
+            "auth_required": "yes" if "${" in json.dumps(request.get("headers") or {}) else "no",
+            "review_action": "Execute externally only after scope, quota, and privacy review; do not auto-block on enrichment alone.",
+        })
+    if stix_bundle is not None:
+        for stix_object in stix_bundle.get("objects") or []:
+            writer.writerow({
+                "provider_id": "stix-bundle",
+                "ioc_type": stix_object["type"],
+                "value": stix_object["value"],
+                "method": "LOCAL",
+                "url": "artifacts.stix_bundle",
+                "auth_required": "no",
+                "review_action": "Import/share only into systems allowed to receive these IoCs and markings.",
+            })
+    return output.getvalue()
+
+
+def build_cti_enrichment_plan(
+    text: str,
+    provider_ids: list[str] | tuple[str, ...] | None = None,
+    max_iocs: int | str | None = None,
+    misp_base_url: str | None = None,
+) -> dict:
+    parsed = parse_cti_enrichment_iocs(text, max_iocs=max_iocs)
+    resolved_provider_ids = _resolve_cti_enrichment_provider_ids(provider_ids)
+    providers = [find_cti_enrichment_provider(provider_id) for provider_id in resolved_provider_ids]
+    safe_misp_base_url = sanitize_cti_enrichment_misp_url(misp_base_url)
+    request_templates: list[dict] = []
+    for provider in providers:
+        for ioc in parsed["iocs"]:
+            request = _cti_enrichment_request_template(provider, ioc, safe_misp_base_url)
+            if request:
+                request_templates.append(request)
+    stix_bundle = None
+    if "stix-bundle" in resolved_provider_ids:
+        stix_bundle = build_cti_enrichment_stix_bundle(parsed["iocs"])
+
+    controls = [
+        "Execute generated external request templates outside HostsFileGet with explicit API-key handling.",
+        "Batch and rate-limit queries by provider entitlement; keep request logs separate from hosts-file history.",
+        "Map returned labels/scores into a triage decision first, then use existing allowlist, provenance, and source-isolation tools for policy changes.",
+        "Use the local STIX bundle as a handoff artifact; add TLP, confidence, and sharing metadata in the downstream CTI platform.",
+    ]
+    warnings = list(CTI_ENRICHMENT_WARNINGS)
+    if parsed["truncated"]:
+        warnings.append("Input contained more supported IoCs than the configured cap; increase --cti-enrichment-max-iocs only after quota review.")
+    if parsed["rejected"]:
+        warnings.append("Some input rows were ignored because no supported IoC could be extracted.")
+
+    references = sorted({
+        reference
+        for provider in providers
+        for reference in provider.get("references", ())
+    } | set(CTI_ENRICHMENT_SOURCE_IDS))
+    artifacts = {
+        "request_templates": request_templates,
+        "review_csv": _cti_enrichment_review_csv(request_templates, stix_bundle),
+    }
+    if stix_bundle is not None:
+        artifacts["stix_bundle"] = stix_bundle
+
+    return {
+        "schema": CTI_ENRICHMENT_PLAN_SCHEMA,
+        "plan_only": True,
+        "input_ioc_count": len(parsed["iocs"]),
+        "domain_count": len(parsed["domains"]),
+        "url_count": len(parsed["urls"]),
+        "ip_count": len(parsed["ip_addresses"]),
+        "provider_count": len(providers),
+        "request_template_count": len(request_templates),
+        "max_iocs": parsed["max_iocs"],
+        "misp_base_url": safe_misp_base_url,
+        "providers": providers,
+        "iocs": parsed["iocs"],
+        "rejected": parsed["rejected"],
+        "controls": controls,
+        "warnings": warnings,
+        "artifacts": artifacts,
+        "references": references,
+    }
+
+
+def format_cti_enrichment_catalog() -> str:
+    lines = [
+        "CTI enrichment providers",
+        "",
+        "This is a plan-only enrichment workflow. HostsFileGet prepares provider request templates and a local STIX 2.1 observable bundle; it does not perform live lookups or store API keys.",
+        "",
+        "Supported providers:",
+    ]
+    for provider in CTI_ENRICHMENT_PROVIDER_CATALOG:
+        lines.extend([
+            f"- {provider['id']}: {provider['label']}",
+            f"  Provider: {provider['provider']} | Type: {provider['kind']}",
+            f"  IoCs: {', '.join(provider['supported_ioc_types'])}",
+            f"  Auth: {provider['auth']}",
+            f"  Privacy: {provider['privacy_note']}",
+        ])
+    lines.extend(["", "Warnings:"])
+    lines.extend(f"- {warning}" for warning in CTI_ENRICHMENT_WARNINGS)
+    lines.extend(["", "Roadmap source IDs:", f"- {', '.join(CTI_ENRICHMENT_SOURCE_IDS)}"])
+    return "\n".join(lines)
+
+
+def format_cti_enrichment_plan(plan: dict) -> str:
+    lines = [
+        "CTI Enrichment Plan",
+        f"Schema: {plan.get('schema')}",
+        f"Plan only: {'yes' if plan.get('plan_only') else 'no'}",
+        f"IoCs: {int(plan.get('input_ioc_count') or 0):,}",
+        f"Domains: {int(plan.get('domain_count') or 0):,}",
+        f"URLs: {int(plan.get('url_count') or 0):,}",
+        f"Public IPs: {int(plan.get('ip_count') or 0):,}",
+        f"Providers: {int(plan.get('provider_count') or 0):,}",
+        f"External request templates: {int(plan.get('request_template_count') or 0):,}",
+        "",
+        "Providers:",
+    ]
+    for provider in plan.get("providers") or []:
+        lines.append(f"- {provider.get('id')}: {provider.get('provider')} ({', '.join(provider.get('supported_ioc_types') or [])})")
+    stix_bundle = (plan.get("artifacts") or {}).get("stix_bundle")
+    if stix_bundle:
+        lines.extend(["", f"STIX objects: {len(stix_bundle.get('objects') or []):,}"])
+    rejected = plan.get("rejected") or []
+    if rejected:
+        lines.extend(["", "Rejected rows:"])
+        for row in rejected[:10]:
+            lines.append(f"- line {row.get('line')}: {row.get('reason')}")
+    lines.extend(["", "Controls:"])
+    for control in plan.get("controls") or []:
+        lines.append(f"- {control}")
+    lines.extend(["", "Warnings:"])
+    for warning in plan.get("warnings") or CTI_ENRICHMENT_WARNINGS:
+        lines.append(f"- {warning}")
+    lines.extend(["", "Roadmap source IDs:", f"- {', '.join(plan.get('references') or CTI_ENRICHMENT_SOURCE_IDS)}"])
     return "\n".join(lines)
 
 
@@ -17879,6 +18439,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="Rule Tier Report...", command=self.show_rule_tier_report)
         tools_menu.add_command(label="IDN / Homograph Report...", command=self.show_idn_homograph_report)
         tools_menu.add_command(label="CT / Typosquat Watchdog...", command=self.show_ct_typosquat_watchdog)
+        tools_menu.add_command(label="CTI Enrichment Plans...", command=self.show_cti_enrichment_plans)
         tools_menu.add_command(label="NRD / DGA Threat Feed Packs...", command=self.show_threat_feed_packs)
         tools_menu.add_command(label="CNAME Cloaking Workflow...", command=self.show_cname_cloaking_workflow)
         tools_menu.add_command(label="DNS Bypass Diagnostics...", command=self.show_dns_bypass_diagnostics)
@@ -18962,6 +19523,16 @@ class HostsFileEditor:
             tone="warning",
             width=960,
             height=720,
+        )
+
+    def show_cti_enrichment_plans(self):
+        self._show_text_report_dialog(
+            "CTI enrichment plans",
+            "Plan-only VirusTotal, URLhaus, MISP, and STIX enrichment templates for reviewed IoCs.",
+            format_cti_enrichment_catalog(),
+            tone="warning",
+            width=980,
+            height=740,
         )
 
     def show_cname_cloaking_workflow(self):
@@ -24532,6 +25103,37 @@ def _cli_ct_watchdog_plan(input_path: str, output_path: str, max_variants: int) 
     return 0
 
 
+def _cli_cti_enrichment_list() -> int:
+    _cli_print(format_cti_enrichment_catalog())
+    return 0
+
+
+def _cli_cti_enrichment_plan(
+    input_path: str,
+    output_path: str,
+    provider_ids: list[str] | tuple[str, ...] | None,
+    max_iocs: int,
+    misp_base_url: str,
+) -> int:
+    try:
+        plan = build_cti_enrichment_plan(
+            read_text_file_content(input_path),
+            provider_ids=provider_ids,
+            max_iocs=max_iocs,
+            misp_base_url=misp_base_url,
+        )
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        write_text_file_atomic(output_path, json.dumps(plan, indent=2))
+    except (OSError, ValueError) as exc:
+        _cli_print(f"CTI enrichment plan failed: {exc}")
+        return 2
+    _cli_print(format_cti_enrichment_plan(plan))
+    _cli_print(f"Wrote CTI enrichment plan to {output_path}")
+    return 0
+
+
 def _cli_threat_feed_list() -> int:
     _cli_print(format_threat_feed_pack_catalog())
     return 0
@@ -25471,6 +26073,11 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--ct-watchdog-list",
         "--ct-watchdog-plan",
         "--ct-watchdog-max-variants",
+        "--cti-enrichment-list",
+        "--cti-enrichment-plan",
+        "--cti-enrichment-provider",
+        "--cti-enrichment-max-iocs",
+        "--cti-enrichment-misp-url",
         "--threat-feed-list",
         "--threat-feed-plan",
         "--cname-cloaking-list",
@@ -25579,6 +26186,10 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--dns-rewrite-ttl=",
         "--ct-watchdog-plan=",
         "--ct-watchdog-max-variants=",
+        "--cti-enrichment-plan=",
+        "--cti-enrichment-provider=",
+        "--cti-enrichment-max-iocs=",
+        "--cti-enrichment-misp-url=",
         "--threat-feed-plan=",
         "--cname-cloaking-plan=",
         "--encrypted-dns-bypass-plan=",
@@ -25773,6 +26384,16 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         help="Write a plan-only CT search and typosquat candidate JSON plan from INPUT domains to OUTPUT.",
     )
     parser.add_argument("--ct-watchdog-max-variants", type=int, default=CT_WATCHDOG_DEFAULT_MAX_VARIANTS, metavar="COUNT", help=f"Maximum typosquat variants per base domain; defaults to {CT_WATCHDOG_DEFAULT_MAX_VARIANTS}.")
+    parser.add_argument("--cti-enrichment-list", action="store_true", help="Describe plan-only VirusTotal, URLhaus, MISP, and STIX enrichment providers.")
+    parser.add_argument(
+        "--cti-enrichment-plan",
+        nargs=2,
+        metavar=("INPUT", "OUTPUT"),
+        help="Write a plan-only CTI enrichment JSON plan from INPUT IoCs to OUTPUT. No provider requests are executed.",
+    )
+    parser.add_argument("--cti-enrichment-provider", action="append", metavar="PROVIDER", help="Limit --cti-enrichment-plan to a provider ID or alias. Repeat for multiple providers.")
+    parser.add_argument("--cti-enrichment-max-iocs", type=int, default=CTI_ENRICHMENT_DEFAULT_MAX_IOCS, metavar="COUNT", help=f"Maximum IoCs to include in --cti-enrichment-plan; defaults to {CTI_ENRICHMENT_DEFAULT_MAX_IOCS}.")
+    parser.add_argument("--cti-enrichment-misp-url", default=CTI_ENRICHMENT_DEFAULT_MISP_URL, metavar="URL", help="MISP base URL placeholder for --cti-enrichment-plan request templates.")
     parser.add_argument("--threat-feed-list", action="store_true", help="List curated NRD/DGA/TIF threat feed packs.")
     parser.add_argument(
         "--threat-feed-plan",
@@ -26117,6 +26738,23 @@ def _handle_cli_args(argv: list[str]) -> int | None:
             args.ct_watchdog_plan[0],
             args.ct_watchdog_plan[1],
             args.ct_watchdog_max_variants,
+        )
+    cti_options = [
+        args.cti_enrichment_provider,
+        args.cti_enrichment_max_iocs != CTI_ENRICHMENT_DEFAULT_MAX_IOCS,
+        args.cti_enrichment_misp_url != CTI_ENRICHMENT_DEFAULT_MISP_URL,
+    ]
+    if any(cti_options) and not args.cti_enrichment_plan:
+        parser.error("--cti-enrichment-* options require --cti-enrichment-plan INPUT OUTPUT")
+    if args.cti_enrichment_list:
+        return _cli_cti_enrichment_list()
+    if args.cti_enrichment_plan:
+        return _cli_cti_enrichment_plan(
+            args.cti_enrichment_plan[0],
+            args.cti_enrichment_plan[1],
+            args.cti_enrichment_provider,
+            args.cti_enrichment_max_iocs,
+            args.cti_enrichment_misp_url,
         )
     if args.threat_feed_list:
         return _cli_threat_feed_list()

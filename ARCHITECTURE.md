@@ -30,6 +30,8 @@ Advanced DNS rewrite support is export-only. HostsFileGet can parse reviewed A, 
 
 Certificate Transparency and typosquat watchdog support is also plan-only. HostsFileGet can extract authorized domains, generate deterministic typo candidates, and write review queues with CT search URLs, but it does not poll CT logs, store external-service credentials, register background watchers, or auto-write hosts entries from OSINT matches.
 
+CTI enrichment support follows the same boundary. HostsFileGet can extract domains, URLs, and public IPs, then write VirusTotal, URLhaus, and MISP request templates plus a local STIX 2.1 observable bundle, but it does not execute enrichment requests, store API keys, call TAXII services, or convert provider scores directly into hosts-file changes.
+
 DNS rebinding protection is also advisory. HostsFileGet can report static hosts entries that map external-looking names to private, local, loopback, link-local, ULA, CGNAT, or special-use ranges, but live DNS rebinding enforcement belongs in the resolver, router, or managed endpoint policy.
 
 SafeSearch and restricted-mode templates follow the same boundary. HostsFileGet can produce reviewable hosts-line and DNS CNAME plans for Google, Bing, DuckDuckGo, and YouTube, but it does not apply parental controls, create DNS records, install browser policy, or enforce account/device controls.
@@ -116,6 +118,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `docs/rule-tiers.md` | Exact, subdomain, wildcard, regex, path, exception, and browser-only tier reporting |
 | `docs/idn-homograph.md` | IDN/Punycode decoding and deterministic homograph-risk report behavior |
 | `docs/ct-typosquat-watchdog.md` | Plan-only Certificate Transparency search and typosquat candidate review workflow |
+| `docs/cti-enrichment.md` | Plan-only VirusTotal, URLhaus, MISP, and STIX enrichment request templates |
 | `docs/threat-feed-packs.md` | NRD, DGA, and threat-intel feed pack planning with freshness and false-positive controls |
 | `docs/cname-cloaking.md` | CNAME cloaking source packs, hosts-file limits, and DNS handoff guidance |
 | `docs/encrypted-dns-bypass.md` | Encrypted-DNS bypass source packs and router/firewall handoff guidance |
@@ -193,6 +196,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Rule tier reporting: `classify_rule_tier_line`, `build_rule_tier_report`, `format_rule_tier_report`.
 - IDN/homograph reporting: `classify_idn_domain`, `build_idn_homograph_report`, `format_idn_homograph_report`.
 - CT/typosquat watchdog planning: `parse_ct_watchdog_domains`, `generate_ct_typosquat_variants`, `build_ct_typosquat_watchdog_plan`, `format_ct_typosquat_watchdog_plan`.
+- CTI enrichment planning: `parse_cti_enrichment_iocs`, `build_cti_enrichment_plan`, `build_cti_enrichment_stix_bundle`, `format_cti_enrichment_plan`.
 - Threat feed pack planning: `list_threat_feed_packs`, `build_threat_feed_pack_plan`, `format_threat_feed_pack_catalog`, `format_threat_feed_pack_plan`.
 - CNAME cloaking workflow planning: `list_cname_cloaking_packs`, `build_cname_cloaking_plan`, `format_cname_cloaking_catalog`, `format_cname_cloaking_plan`.
 - Encrypted-DNS bypass pack planning: `list_encrypted_dns_bypass_packs`, `build_encrypted_dns_bypass_pack_plan`, `format_encrypted_dns_bypass_catalog`, `format_encrypted_dns_bypass_pack_plan`.

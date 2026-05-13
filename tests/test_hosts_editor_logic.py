@@ -22,6 +22,7 @@ from hosts_editor import (
     DEFAULT_PROFILE_ID,
     DNS_REWRITE_PLAN_SCHEMA,
     CT_WATCHDOG_PLAN_SCHEMA,
+    CTI_ENRICHMENT_PLAN_SCHEMA,
     DOMAIN_CATEGORY_RULES,
     FTL_BLOCKED_STATUS_CODES,
     HostsFileEditor,
@@ -100,6 +101,7 @@ from hosts_editor import (
     parse_cloud_dns_log_export,
     parse_controld_activity_csv,
     parse_ct_watchdog_domains,
+    parse_cti_enrichment_iocs,
     parse_dns_rewrite_records,
     parse_pinned_import_payload,
     read_provenance_events,
@@ -150,6 +152,7 @@ from hosts_editor import (
     build_dns_integration_export,
     build_dns_rewrite_plan,
     build_ct_typosquat_watchdog_plan,
+    build_cti_enrichment_plan,
     build_portable_bundle_readme,
     build_scheduler_activity_report,
     build_scheduler_update_command,
@@ -210,6 +213,8 @@ from hosts_editor import (
     format_dns_rewrite_provider_catalog,
     format_ct_typosquat_watchdog_catalog,
     format_ct_typosquat_watchdog_plan,
+    format_cti_enrichment_catalog,
+    format_cti_enrichment_plan,
     format_cname_cloaking_catalog,
     format_cname_cloaking_plan,
     format_dns_rebinding_report,
@@ -246,6 +251,7 @@ from hosts_editor import (
     list_cloud_dns_adapters,
     list_dns_integration_packs,
     list_dns_rewrite_providers,
+    list_cti_enrichment_providers,
     list_managed_package_targets,
     list_router_gateway_adapters,
     list_threat_feed_packs,
@@ -3128,6 +3134,29 @@ profile:
             )
             mocked_ct_plan.assert_called_once_with("domains.txt", "ct-plan.json", 40)
 
+        with mock.patch.object(hosts_editor, "_cli_cti_enrichment_list", return_value=0) as mocked_cti_list:
+            self.assertEqual(hosts_editor._handle_cli_args(["--cti-enrichment-list"]), 0)
+            mocked_cti_list.assert_called_once_with()
+
+        with mock.patch.object(hosts_editor, "_cli_cti_enrichment_plan", return_value=0) as mocked_cti_plan:
+            self.assertEqual(
+                hosts_editor._handle_cli_args([
+                    "--cti-enrichment-plan", "iocs.txt", "cti-plan.json",
+                    "--cti-enrichment-provider", "vt",
+                    "--cti-enrichment-provider", "stix",
+                    "--cti-enrichment-max-iocs", "25",
+                    "--cti-enrichment-misp-url", "https://misp.local",
+                ]),
+                0,
+            )
+            mocked_cti_plan.assert_called_once_with(
+                "iocs.txt",
+                "cti-plan.json",
+                ["vt", "stix"],
+                25,
+                "https://misp.local",
+            )
+
     def test_handle_cli_args_routes_threat_feed_flags(self):
         with mock.patch.object(hosts_editor, "_cli_threat_feed_list", return_value=0) as mocked_list:
             self.assertEqual(hosts_editor._handle_cli_args(["--threat-feed-list"]), 0)
@@ -4878,6 +4907,69 @@ profile:
         self.assertIn("plan-only OSINT workflow", catalog)
         self.assertIn("Permutation families", catalog)
         self.assertIn("S41", catalog)
+
+    def test_cti_enrichment_plan_extracts_iocs_and_builds_templates(self):
+        text = "\n".join([
+            "0.0.0.0 bad.example.com",
+            "https://payload.example.net/drop.exe?campaign=alpha",
+            "8.8.8.8",
+            "192.168.1.10",
+            "not-an-ioc",
+        ])
+
+        parsed = parse_cti_enrichment_iocs(text, max_iocs=20)
+        plan = build_cti_enrichment_plan(
+            text,
+            provider_ids=["virustotal", "urlhaus-url", "misp", "stix"],
+            max_iocs=20,
+            misp_base_url="https://misp.local/",
+        )
+        rendered = format_cti_enrichment_plan(plan)
+
+        self.assertEqual(plan["schema"], CTI_ENRICHMENT_PLAN_SCHEMA)
+        self.assertTrue(plan["plan_only"])
+        self.assertIn("bad.example.com", parsed["domains"])
+        self.assertIn("payload.example.net", parsed["domains"])
+        self.assertIn("https://payload.example.net/drop.exe?campaign=alpha", parsed["urls"])
+        self.assertIn("8.8.8.8", parsed["ip_addresses"])
+        self.assertNotIn("192.168.1.10", parsed["ip_addresses"])
+        self.assertEqual(plan["misp_base_url"], "https://misp.local")
+        self.assertEqual({provider["id"] for provider in plan["providers"]}, {
+            "virustotal-domain",
+            "urlhaus-url",
+            "misp-attribute-restsearch",
+            "stix-bundle",
+        })
+
+        templates = plan["artifacts"]["request_templates"]
+        self.assertTrue(any(template["provider_id"] == "virustotal-domain" and "x-apikey" in template["headers"] for template in templates))
+        self.assertTrue(any(template["provider_id"] == "urlhaus-url" and template["body_form"]["url"].startswith("https://payload.example.net/") for template in templates))
+        self.assertTrue(any(template["provider_id"] == "misp-attribute-restsearch" and template["url"] == "https://misp.local/attributes/restSearch" for template in templates))
+        stix_types = {stix_object["type"] for stix_object in plan["artifacts"]["stix_bundle"]["objects"]}
+        self.assertIn("domain-name", stix_types)
+        self.assertIn("url", stix_types)
+        self.assertIn("ipv4-addr", stix_types)
+        self.assertIn("stix-bundle", plan["artifacts"]["review_csv"])
+        self.assertIn("Plan only: yes", rendered)
+        self.assertIn("Roadmap source IDs", rendered)
+
+    def test_cti_enrichment_catalog_is_guarded_and_lists_providers(self):
+        provider_ids = {provider["id"] for provider in list_cti_enrichment_providers()}
+        catalog = format_cti_enrichment_catalog()
+
+        self.assertEqual(provider_ids, {
+            "virustotal-domain",
+            "urlhaus-host",
+            "urlhaus-url",
+            "misp-attribute-restsearch",
+            "stix-bundle",
+        })
+        self.assertIn("VirusTotal", catalog)
+        self.assertIn("URLhaus", catalog)
+        self.assertIn("MISP", catalog)
+        self.assertIn("STIX 2.1", catalog)
+        self.assertIn("does not perform live lookups", catalog)
+        self.assertIn("S44", catalog)
 
     def test_threat_feed_catalog_lists_guarded_packs_and_sources(self):
         pack_ids = {pack["id"] for pack in list_threat_feed_packs()}

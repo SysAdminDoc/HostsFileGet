@@ -4,6 +4,10 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**CTI enrichment plans**
+- Added `--cti-enrichment-list` and `--cti-enrichment-plan` for plan-only VirusTotal, URLhaus, MISP, and STIX enrichment handoffs.
+- The plan exports normalized IoCs, provider request templates with API-key placeholders, a local STIX 2.1 observable bundle, and CSV review rows while warning that enrichment signals are not automatic hosts-file verdicts.
+
 **Certificate Transparency / typosquat watchdog**
 - Added `--ct-watchdog-list` and `--ct-watchdog-plan` for plan-only CT search queues and deterministic typosquat candidate generation.
 - The plan exports crt.sh review URLs, a deduplicated watchlist, and CSV review rows while warning that CT matches and typo permutations are OSINT leads, not automatic hosts-file blocks.
