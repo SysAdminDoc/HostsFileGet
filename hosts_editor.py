@@ -40,6 +40,7 @@ import http.client
 import socketserver
 import secrets
 import string
+import plistlib
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback path
@@ -11020,6 +11021,101 @@ CLOUD_DNS_LOG_IMPORT_ALIASES = {
     "control-d": "controld",
     "controld": "controld",
 }
+MOBILE_DNS_PROFILE_EXPORT_SCHEMA = "hostsfileget.mobile-dns-profile-export.v1"
+MOBILE_DNS_PROFILE_EXPORT_JSON_NAME = "mobile-dns-profile-export.json"
+MOBILE_DNS_PROFILE_MOBILECONFIG_NAME = "hostsfileget-mobile-dns.mobileconfig"
+MOBILE_DNS_QR_PAYLOADS_NAME = "mobile-dns-qr-payloads.txt"
+MOBILE_DNS_README_NAME = "MOBILE_DNS_PROFILE_EXPORT.md"
+MOBILE_DNS_SOURCE_IDS = ("C1", "C5", "K5", "S56", "S57", "S58", "S59", "S60")
+MOBILE_DNS_PROFILE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+MOBILE_DNS_DISPLAY_NAME_MAX_LENGTH = 80
+MOBILE_DNS_WARNINGS = (
+    "Export-only: HostsFileGet writes local setup artifacts but does not install mobile profiles, call provider APIs, or change device DNS settings.",
+    "Mobile operating systems do not consume Windows hosts files; use encrypted DNS/provider profiles for roaming devices.",
+    "Android Private DNS accepts a DNS-over-TLS provider hostname, not a hosts file or plain IP-only resolver.",
+    "Apple DNS Settings profiles must be reviewed before installation; generated profiles are unsigned local artifacts.",
+    "VPNs, browser Secure DNS settings, Private Relay, captive portals, and managed-device policies can override or bypass OS-level DNS settings.",
+)
+MOBILE_DNS_PROFILE_TARGETS = (
+    {
+        "id": "generic-dot",
+        "label": "Generic DNS-over-TLS mobile profile",
+        "provider": "Generic DoT resolver",
+        "protocol": "TLS",
+        "requires": ("hostname",),
+        "android": True,
+        "apple": True,
+        "description": "Use a reviewed DNS-over-TLS hostname on Android Private DNS and Apple DNS Settings.",
+        "source_urls": (
+            "https://support.google.com/android/answer/9654714",
+            "https://developer.apple.com/documentation/devicemanagement/dnssettings/dnssettings-data.dictionary",
+        ),
+        "references": ("S56", "S57"),
+    },
+    {
+        "id": "generic-doh",
+        "label": "Generic DNS-over-HTTPS Apple profile",
+        "provider": "Generic DoH resolver",
+        "protocol": "HTTPS",
+        "requires": ("doh_url",),
+        "android": False,
+        "apple": True,
+        "description": "Use a reviewed DNS-over-HTTPS URL where Apple DNS Settings or browser Secure DNS accepts DoH.",
+        "source_urls": (
+            "https://developer.apple.com/documentation/devicemanagement/dnssettings/dnssettings-data.dictionary",
+        ),
+        "references": ("S57",),
+    },
+    {
+        "id": "nextdns",
+        "label": "NextDNS profile handoff",
+        "provider": "NextDNS",
+        "protocol": "HTTPS",
+        "requires": ("profile_id",),
+        "android": True,
+        "apple": True,
+        "dot_hostname_template": "{profile_host_label}.dns.nextdns.io",
+        "doh_url_template": "https://dns.nextdns.io/{profile_path}",
+        "apple_setup_url_template": "https://apple.nextdns.io/?profile={profile_query}",
+        "description": "Export NextDNS profile endpoints for Android Private DNS, Apple configuration-profile setup, and QR-ready handoff.",
+        "source_urls": (
+            "https://apple.nextdns.io/",
+            "https://github.com/nextdns/nextdns/wiki/Configuration",
+        ),
+        "references": ("C1", "C5", "K5", "S58", "S60"),
+    },
+    {
+        "id": "controld",
+        "label": "Control D endpoint handoff",
+        "provider": "Control D",
+        "protocol": "HTTPS",
+        "requires": ("profile_id",),
+        "android": True,
+        "apple": True,
+        "doh_url_template": "https://dns.controld.com/{profile_path}",
+        "description": "Export Control D endpoint handoff artifacts while keeping the provider-issued DoT hostname reviewable.",
+        "source_urls": (
+            "https://docs.controld.com/docs/deployment",
+            "https://docs.controld.com/docs/android-platform",
+            "https://docs.controld.com/docs/ios-platform",
+            "https://docs.controld.com/docs/control-d-ip-ranges",
+        ),
+        "references": ("C5", "K5", "S59", "S60"),
+    },
+)
+MOBILE_DNS_PROFILE_TARGET_ALIASES = {
+    "dot": "generic-dot",
+    "dns-over-tls": "generic-dot",
+    "tls": "generic-dot",
+    "doh": "generic-doh",
+    "dns-over-https": "generic-doh",
+    "https": "generic-doh",
+    "next-dns": "nextdns",
+    "next": "nextdns",
+    "control-d": "controld",
+    "control-dns": "controld",
+    "cd": "controld",
+}
 DNS_REWRITE_PLAN_SCHEMA = "hostsfileget.dns-rewrite-plan.v1"
 DNS_REWRITE_DEFAULT_TTL = 300
 DNS_REWRITE_MAX_RECORDS = 1000
@@ -12186,6 +12282,422 @@ def parse_cloud_dns_log_export(provider: str, text: str) -> list[str]:
     if normalized == "controld":
         return parse_controld_activity_csv(text)
     raise ValueError(f"Unknown cloud DNS log provider: {provider!r}. Known providers: nextdns, controld")
+
+
+def normalize_mobile_dns_profile_target_id(target_id: str) -> str:
+    normalized = str(target_id or "").strip().lower().replace("_", "-")
+    return MOBILE_DNS_PROFILE_TARGET_ALIASES.get(normalized, normalized)
+
+
+def list_mobile_dns_profile_targets() -> list[dict]:
+    return [dict(target) for target in MOBILE_DNS_PROFILE_TARGETS]
+
+
+def find_mobile_dns_profile_target(target_id: str) -> dict:
+    normalized = normalize_mobile_dns_profile_target_id(target_id)
+    for target in MOBILE_DNS_PROFILE_TARGETS:
+        if target["id"] == normalized:
+            return dict(target)
+    known = ", ".join(target["id"] for target in MOBILE_DNS_PROFILE_TARGETS)
+    raise ValueError(f"Unknown mobile DNS profile target: {target_id!r}. Known targets: {known}")
+
+
+def sanitize_mobile_dns_profile_id(value: str | None = None, *, default: str = "PROFILE-ID") -> str:
+    candidate = str(value or default).strip() or default
+    if _contains_control_chars(candidate) or not MOBILE_DNS_PROFILE_ID_PATTERN.match(candidate):
+        raise ValueError("mobile DNS profile ID must be 1-128 letters, numbers, underscores, or hyphens")
+    return candidate
+
+
+def _mobile_dns_profile_host_label(profile_id: str) -> str:
+    label = re.sub(r"[^a-z0-9-]+", "-", str(profile_id or "").strip().lower())
+    label = re.sub(r"-+", "-", label).strip("-")
+    return label or "profile-id"
+
+
+def sanitize_mobile_dns_display_name(value: str | None = None) -> str:
+    name = re.sub(r"\s+", " ", str(value or "HostsFileGet Mobile DNS").strip())
+    if not name or _contains_control_chars(name):
+        raise ValueError("mobile DNS display name is empty or contains control characters")
+    return name[:MOBILE_DNS_DISPLAY_NAME_MAX_LENGTH]
+
+
+def sanitize_mobile_dns_hostname(value: str | None, *, required: bool = False) -> str:
+    candidate = str(value or "").strip().lower().rstrip(".")
+    if not candidate:
+        if required:
+            raise ValueError("mobile DNS hostname is required")
+        return ""
+    if _contains_control_chars(candidate):
+        raise ValueError("mobile DNS hostname contains control characters")
+    if "://" in candidate or "/" in candidate:
+        raise ValueError("mobile DNS hostname must be a DNS-over-TLS hostname, not a URL")
+    if not looks_like_domain(candidate, allow_single_label=False):
+        raise ValueError(f"invalid mobile DNS hostname: {value!r}")
+    return candidate
+
+
+def sanitize_mobile_dns_doh_url(value: str | None, *, required: bool = False) -> str:
+    candidate = str(value or "").strip()
+    if not candidate:
+        if required:
+            raise ValueError("mobile DNS-over-HTTPS URL is required")
+        return ""
+    if _contains_control_chars(candidate):
+        raise ValueError("mobile DNS-over-HTTPS URL contains control characters")
+    parsed = urllib.parse.urlparse(candidate)
+    if parsed.scheme.lower() != "https" or not parsed.netloc:
+        raise ValueError("mobile DNS-over-HTTPS URL must be an absolute https:// URL")
+    if parsed.username or parsed.password:
+        raise ValueError("mobile DNS-over-HTTPS URL must not contain credentials")
+    return urllib.parse.urlunparse(parsed._replace(scheme="https", fragment=""))
+
+
+def sanitize_mobile_dns_match_domains(values) -> list[str]:
+    domains: list[str] = []
+    seen: set[str] = set()
+    for value in values or []:
+        for raw in re.split(r"[\s,]+", str(value or "")):
+            candidate = raw.strip().lower().rstrip(".")
+            if not candidate:
+                continue
+            wildcard = candidate.startswith("*.")
+            domain = candidate[2:] if wildcard else candidate
+            if not looks_like_domain(domain, allow_single_label=False):
+                raise ValueError(f"invalid mobile DNS match domain: {raw!r}")
+            normalized = f"*.{domain}" if wildcard else domain
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            domains.append(normalized)
+    return domains
+
+
+def _mobile_dns_template_value(template: str | None, profile_id: str) -> str:
+    if not template:
+        return ""
+    profile_path = urllib.parse.quote(profile_id, safe="")
+    profile_query = urllib.parse.quote(profile_id, safe="")
+    profile_host_label = _mobile_dns_profile_host_label(profile_id)
+    return template.format(
+        profile_id=profile_id,
+        profile_path=profile_path,
+        profile_query=profile_query,
+        profile_host_label=profile_host_label,
+    )
+
+
+def build_mobile_dns_apple_mobileconfig(
+    *,
+    display_name: str,
+    protocol: str,
+    hostname: str = "",
+    doh_url: str = "",
+    match_domains: list[str] | tuple[str, ...] | None = None,
+) -> str:
+    protocol = str(protocol or "").upper()
+    if protocol not in {"HTTPS", "TLS"}:
+        raise ValueError("Apple DNS Settings protocol must be HTTPS or TLS")
+    dns_settings = {"DNSProtocol": protocol}
+    if protocol == "HTTPS":
+        dns_settings["ServerURL"] = sanitize_mobile_dns_doh_url(doh_url, required=True)
+    else:
+        dns_settings["ServerName"] = sanitize_mobile_dns_hostname(hostname, required=True)
+    domains = sanitize_mobile_dns_match_domains(match_domains)
+    if domains:
+        dns_settings["SupplementalMatchDomains"] = domains
+
+    seed = f"{display_name}|{protocol}|{dns_settings.get('ServerURL') or dns_settings.get('ServerName')}"
+    profile_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"hostsfileget-mobile-dns-profile|{seed}")).upper()
+    payload_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"hostsfileget-mobile-dns-payload|{seed}")).upper()
+    payload = {
+        "PayloadContent": [
+            {
+                "PayloadType": "com.apple.dnsSettings.managed",
+                "PayloadVersion": 1,
+                "PayloadIdentifier": f"com.hostsfileget.mobile-dns.settings.{payload_uuid}",
+                "PayloadUUID": payload_uuid,
+                "PayloadDisplayName": f"{display_name} DNS Settings",
+                "DNSSettings": dns_settings,
+            }
+        ],
+        "PayloadDisplayName": display_name,
+        "PayloadIdentifier": f"com.hostsfileget.mobile-dns.{profile_uuid}",
+        "PayloadRemovalDisallowed": False,
+        "PayloadType": "Configuration",
+        "PayloadUUID": profile_uuid,
+        "PayloadVersion": 1,
+    }
+    return plistlib.dumps(payload, fmt=plistlib.FMT_XML, sort_keys=False).decode("utf-8")
+
+
+def _mobile_dns_qr_payloads(
+    *,
+    target: dict,
+    hostname: str,
+    doh_url: str,
+    apple_setup_url: str,
+    display_name: str,
+) -> list[dict]:
+    payloads: list[dict] = []
+    if hostname:
+        payloads.append({
+            "id": "android-private-dns-hostname",
+            "label": "Android Private DNS provider hostname",
+            "payload": hostname,
+            "format": "plain-text",
+            "recommended_use": "Render as a QR code for manual entry or copy into Android Private DNS.",
+        })
+    if doh_url:
+        payloads.append({
+            "id": "dns-over-https-url",
+            "label": "DNS-over-HTTPS URL",
+            "payload": doh_url,
+            "format": "uri",
+            "recommended_use": "Render as a QR code for browser, MDM, or provider setup handoff when supported.",
+        })
+    if apple_setup_url:
+        payloads.append({
+            "id": "apple-provider-profile-url",
+            "label": f"{target.get('provider')} Apple profile generator",
+            "payload": apple_setup_url,
+            "format": "uri",
+            "recommended_use": "Render as a QR code for opening the provider's Apple profile setup page.",
+        })
+    if not payloads:
+        payloads.append({
+            "id": "manual-review-required",
+            "label": "Manual resolver review required",
+            "payload": display_name,
+            "format": "plain-text",
+            "recommended_use": "Supply a DoT hostname or DoH URL before producing a device setup QR payload.",
+        })
+    return payloads
+
+
+def format_mobile_dns_qr_payloads(payloads: list[dict]) -> str:
+    lines = [
+        "HostsFileGet Mobile DNS QR Payloads",
+        "Render these payloads with a trusted offline QR generator when QR enrollment is desired.",
+        "",
+    ]
+    for payload in payloads or []:
+        lines.extend([
+            f"[{payload.get('id')}] {payload.get('label')}",
+            f"Format: {payload.get('format')}",
+            f"Use: {payload.get('recommended_use')}",
+            str(payload.get("payload") or ""),
+            "",
+        ])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def build_mobile_dns_profile_export(
+    target_id: str,
+    *,
+    profile_id: str | None = None,
+    resolver_hostname: str | None = None,
+    doh_url: str | None = None,
+    display_name: str | None = None,
+    match_domains=None,
+    now=None,
+) -> dict:
+    target = find_mobile_dns_profile_target(target_id)
+    safe_display_name = sanitize_mobile_dns_display_name(display_name or f"HostsFileGet {target['provider']}")
+    safe_profile_id = ""
+    if "profile_id" in target.get("requires", ()) or profile_id:
+        safe_profile_id = sanitize_mobile_dns_profile_id(profile_id)
+    safe_match_domains = sanitize_mobile_dns_match_domains(match_domains)
+
+    hostname = sanitize_mobile_dns_hostname(resolver_hostname)
+    if not hostname and target.get("dot_hostname_template") and safe_profile_id:
+        hostname = sanitize_mobile_dns_hostname(_mobile_dns_template_value(target.get("dot_hostname_template"), safe_profile_id))
+
+    safe_doh_url = sanitize_mobile_dns_doh_url(doh_url)
+    if not safe_doh_url and target.get("doh_url_template") and safe_profile_id:
+        safe_doh_url = sanitize_mobile_dns_doh_url(_mobile_dns_template_value(target.get("doh_url_template"), safe_profile_id))
+
+    if "hostname" in target.get("requires", ()) and not hostname:
+        raise ValueError(f"{target['id']} requires --mobile-dns-hostname")
+    if "doh_url" in target.get("requires", ()) and not safe_doh_url:
+        raise ValueError(f"{target['id']} requires --mobile-dns-doh-url")
+
+    apple_setup_url = ""
+    if target.get("apple_setup_url_template") and safe_profile_id:
+        apple_setup_url = _mobile_dns_template_value(target.get("apple_setup_url_template"), safe_profile_id)
+
+    apple_protocol = "HTTPS" if safe_doh_url else "TLS"
+    apple_mobileconfig = ""
+    if (safe_doh_url or hostname) and target.get("apple"):
+        apple_mobileconfig = build_mobile_dns_apple_mobileconfig(
+            display_name=safe_display_name,
+            protocol=apple_protocol,
+            hostname=hostname,
+            doh_url=safe_doh_url,
+            match_domains=safe_match_domains,
+        )
+
+    created_at = now or datetime.datetime.now()
+    if isinstance(created_at, datetime.datetime):
+        created_at = created_at.isoformat(timespec="seconds")
+
+    warnings = list(MOBILE_DNS_WARNINGS)
+    if target["id"] == "controld" and not resolver_hostname:
+        warnings.append("Control D issues endpoint-specific DoT hostnames; supply --mobile-dns-hostname from the reviewed Endpoint screen for Android handoff.")
+    if safe_match_domains:
+        warnings.append("Apple SupplementalMatchDomains creates split DNS behavior; omit match domains when the resolver should handle all DNS queries.")
+    if not apple_mobileconfig:
+        warnings.append("No Apple mobileconfig was generated because neither a valid DoH URL nor a valid DoT hostname was available.")
+
+    qr_payloads = _mobile_dns_qr_payloads(
+        target=target,
+        hostname=hostname,
+        doh_url=safe_doh_url,
+        apple_setup_url=apple_setup_url,
+        display_name=safe_display_name,
+    )
+    references = sorted(set(MOBILE_DNS_SOURCE_IDS) | set(target.get("references", ())))
+    android_steps = []
+    if hostname and target.get("android"):
+        android_steps = [
+            "Open Android Settings and search for Private DNS.",
+            "Select Private DNS provider hostname.",
+            f"Paste this hostname: {hostname}",
+            "Save, then verify with the provider status page or activity log.",
+        ]
+    apple_steps = []
+    if apple_mobileconfig:
+        apple_steps = [
+            f"Review {MOBILE_DNS_PROFILE_MOBILECONFIG_NAME}.",
+            "Install the profile from Safari, Apple Configurator, or a managed-device workflow.",
+            "Open Settings or System Settings > Profiles and approve the downloaded DNS Settings profile.",
+            "Verify with the provider status page or activity log.",
+        ]
+    if apple_setup_url:
+        apple_steps.append(f"Provider setup page: {apple_setup_url}")
+
+    return {
+        "schema": MOBILE_DNS_PROFILE_EXPORT_SCHEMA,
+        "app_version": APP_VERSION,
+        "created_at": str(created_at),
+        "plan_only": True,
+        "target_id": target["id"],
+        "provider": target["provider"],
+        "label": target["label"],
+        "display_name": safe_display_name,
+        "profile_id": safe_profile_id,
+        "protocol": target.get("protocol"),
+        "android_supported": bool(target.get("android")),
+        "apple_supported": bool(target.get("apple")),
+        "android_private_dns_hostname": hostname,
+        "dns_over_https_url": safe_doh_url,
+        "apple_setup_url": apple_setup_url,
+        "apple_mobileconfig_filename": MOBILE_DNS_PROFILE_MOBILECONFIG_NAME if apple_mobileconfig else "",
+        "apple_mobileconfig": apple_mobileconfig,
+        "match_domains": safe_match_domains,
+        "qr_payloads": qr_payloads,
+        "qr_payloads_text": format_mobile_dns_qr_payloads(qr_payloads),
+        "setup_steps": {
+            "android": android_steps,
+            "apple": apple_steps,
+        },
+        "warnings": warnings,
+        "source_urls": list(target.get("source_urls", ())),
+        "references": references,
+    }
+
+
+def format_mobile_dns_profile_export(plan: dict) -> str:
+    lines = [
+        "Mobile DNS Profile Export",
+        f"Schema: {plan.get('schema')}",
+        f"Plan only: {'yes' if plan.get('plan_only') else 'no'}",
+        f"Target: {plan.get('target_id')} ({plan.get('provider')})",
+        f"Display name: {plan.get('display_name')}",
+        f"Profile ID: {plan.get('profile_id') or '-'}",
+        f"Android Private DNS hostname: {plan.get('android_private_dns_hostname') or '-'}",
+        f"DNS-over-HTTPS URL: {plan.get('dns_over_https_url') or '-'}",
+        f"Apple mobileconfig: {'yes' if plan.get('apple_mobileconfig') else 'no'}",
+        f"QR payloads: {len(plan.get('qr_payloads') or [])}",
+    ]
+    if plan.get("match_domains"):
+        lines.append(f"Apple match domains: {', '.join(plan.get('match_domains') or [])}")
+    if plan.get("apple_setup_url"):
+        lines.append(f"Provider Apple setup URL: {plan.get('apple_setup_url')}")
+    lines.extend(["", "Setup steps:"])
+    setup_steps = plan.get("setup_steps") or {}
+    for section in ("android", "apple"):
+        steps = setup_steps.get(section) or []
+        if not steps:
+            continue
+        lines.append(f"{section.title()}:")
+        for index, step in enumerate(steps, 1):
+            lines.append(f"{index}. {step}")
+    lines.extend(["", "Warnings:"])
+    for warning in plan.get("warnings") or []:
+        lines.append(f"- {warning}")
+    if plan.get("references"):
+        lines.extend(["", "Roadmap source IDs:", f"- {', '.join(plan.get('references') or [])}"])
+    return "\n".join(lines)
+
+
+def format_mobile_dns_profile_catalog() -> str:
+    lines = [
+        "Mobile DNS profile exports",
+        "",
+        "Export-only mobile DNS handoffs for roaming devices. HostsFileGet writes local review artifacts, Apple DNS Settings profiles, and QR-ready payload text; it does not change mobile devices.",
+        "",
+        "Supported targets:",
+    ]
+    for target in MOBILE_DNS_PROFILE_TARGETS:
+        lines.extend([
+            f"- {target['id']}: {target['label']}",
+            f"  Provider: {target['provider']}",
+            f"  Requires: {', '.join(target.get('requires') or ()) or 'none'}",
+            f"  Android: {'yes' if target.get('android') else 'no'}; Apple: {'yes' if target.get('apple') else 'no'}",
+            f"  {target['description']}",
+        ])
+    lines.extend(["", "Warnings:"])
+    for warning in MOBILE_DNS_WARNINGS:
+        lines.append(f"- {warning}")
+    lines.extend(["", "Roadmap source IDs:", f"- {', '.join(MOBILE_DNS_SOURCE_IDS)}"])
+    return "\n".join(lines)
+
+
+def build_mobile_dns_profile_export_readme(plan: dict) -> str:
+    lines = [
+        "# HostsFileGet Mobile DNS Profile Export",
+        "",
+        "This bundle is export-only. Review every artifact before installing it on a mobile device.",
+        "",
+        format_mobile_dns_profile_export(plan),
+        "",
+        "## Files",
+        "",
+        f"- `{MOBILE_DNS_PROFILE_EXPORT_JSON_NAME}`: machine-readable plan and provenance.",
+        f"- `{MOBILE_DNS_QR_PAYLOADS_NAME}`: QR-ready payloads for a trusted offline QR renderer.",
+    ]
+    if plan.get("apple_mobileconfig"):
+        lines.append(f"- `{MOBILE_DNS_PROFILE_MOBILECONFIG_NAME}`: unsigned Apple DNS Settings configuration profile.")
+    return "\n".join(lines) + "\n"
+
+
+def write_mobile_dns_profile_export_bundle(plan: dict, output_dir: str) -> dict:
+    target_dir = os.path.abspath(output_dir)
+    os.makedirs(target_dir, exist_ok=True)
+    paths = {
+        "plan_json": os.path.join(target_dir, MOBILE_DNS_PROFILE_EXPORT_JSON_NAME),
+        "qr_payloads": os.path.join(target_dir, MOBILE_DNS_QR_PAYLOADS_NAME),
+        "readme": os.path.join(target_dir, MOBILE_DNS_README_NAME),
+    }
+    write_text_file_atomic(paths["plan_json"], json.dumps(plan, indent=2))
+    write_text_file_atomic(paths["qr_payloads"], plan.get("qr_payloads_text") or format_mobile_dns_qr_payloads(plan.get("qr_payloads") or []))
+    write_text_file_atomic(paths["readme"], build_mobile_dns_profile_export_readme(plan))
+    if plan.get("apple_mobileconfig"):
+        mobileconfig_path = os.path.join(target_dir, MOBILE_DNS_PROFILE_MOBILECONFIG_NAME)
+        write_text_file_atomic(mobileconfig_path, plan["apple_mobileconfig"])
+        paths["apple_mobileconfig"] = mobileconfig_path
+    return paths
 
 
 def normalize_dns_rewrite_provider_id(provider_id: str) -> str:
@@ -19160,6 +19672,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="Start Tray Quick Switch...", command=self.start_profile_tray_quick_switch)
         tools_menu.add_command(label="DNS Interoperability Pack...", command=self.show_dns_integration_pack)
         tools_menu.add_command(label="Cloud DNS Adapters...", command=self.show_cloud_dns_adapters)
+        tools_menu.add_command(label="Mobile DNS Profile Export...", command=self.show_mobile_dns_profile_export)
         tools_menu.add_command(label="Source Adapter Plugins...", command=self.show_source_adapter_plugins)
         tools_menu.add_command(label="Source Bundle Selector...", command=self.show_source_bundle_selector)
         tools_menu.add_command(label="Filter Builder...", command=self.show_filter_builder)
@@ -20758,6 +21271,16 @@ class HostsFileEditor:
             tone="info",
             width=880,
             height=660,
+        )
+
+    def show_mobile_dns_profile_export(self):
+        self._show_text_report_dialog(
+            "Mobile DNS profile export",
+            "Export-only Android Private DNS, Apple DNS Settings, and QR-ready resolver handoff artifacts.",
+            format_mobile_dns_profile_catalog(),
+            tone="info",
+            width=920,
+            height=700,
         )
 
     def show_source_adapter_plugins(self):
@@ -25823,6 +26346,40 @@ def _cli_cloud_log_import(provider: str, input_path: str, output_path: str) -> i
     return 0
 
 
+def _cli_mobile_dns_profile_list() -> int:
+    _cli_print(format_mobile_dns_profile_catalog())
+    return 0
+
+
+def _cli_mobile_dns_profile_export(
+    target_id: str,
+    output_dir: str,
+    profile_id: str | None,
+    resolver_hostname: str | None,
+    doh_url: str | None,
+    display_name: str | None,
+    match_domains,
+) -> int:
+    try:
+        plan = build_mobile_dns_profile_export(
+            target_id,
+            profile_id=profile_id,
+            resolver_hostname=resolver_hostname,
+            doh_url=doh_url,
+            display_name=display_name,
+            match_domains=match_domains,
+        )
+        paths = write_mobile_dns_profile_export_bundle(plan, output_dir)
+    except (OSError, ValueError) as exc:
+        _cli_print(f"Mobile DNS profile export failed: {exc}")
+        return 2
+    _cli_print(format_mobile_dns_profile_export(plan))
+    _cli_print(f"Wrote mobile DNS profile export bundle to {os.path.abspath(output_dir)}")
+    for label, path in sorted(paths.items()):
+        _cli_print(f"- {label}: {path}")
+    return 0
+
+
 def _cli_dns_rewrite_provider_list() -> int:
     _cli_print(format_dns_rewrite_provider_catalog())
     return 0
@@ -26899,6 +27456,13 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--cloud-adapter-plan",
         "--cloud-profile-id",
         "--cloud-log-import",
+        "--mobile-dns-profile-list",
+        "--mobile-dns-profile-export",
+        "--mobile-dns-profile-id",
+        "--mobile-dns-hostname",
+        "--mobile-dns-doh-url",
+        "--mobile-dns-display-name",
+        "--mobile-dns-match-domain",
         "--dns-rewrite-provider-list",
         "--dns-rewrite-plan",
         "--dns-rewrite-profile-id",
@@ -27021,6 +27585,12 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--cloud-adapter-plan=",
         "--cloud-profile-id=",
         "--cloud-log-import=",
+        "--mobile-dns-profile-export=",
+        "--mobile-dns-profile-id=",
+        "--mobile-dns-hostname=",
+        "--mobile-dns-doh-url=",
+        "--mobile-dns-display-name=",
+        "--mobile-dns-match-domain=",
         "--dns-rewrite-plan=",
         "--dns-rewrite-profile-id=",
         "--dns-rewrite-zone=",
@@ -27213,6 +27783,18 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         metavar=("PROVIDER", "INPUT", "OUTPUT"),
         help="Extract blocked domains from a NextDNS or Control D CSV log export into OUTPUT.",
     )
+    parser.add_argument("--mobile-dns-profile-list", action="store_true", help="List export-only mobile DNS profile targets.")
+    parser.add_argument(
+        "--mobile-dns-profile-export",
+        nargs=2,
+        metavar=("TARGET", "OUTPUT_DIR"),
+        help="Write Android Private DNS, Apple DNS Settings, and QR-ready mobile DNS handoff artifacts into OUTPUT_DIR.",
+    )
+    parser.add_argument("--mobile-dns-profile-id", metavar="ID", help="Provider profile/resolver ID for --mobile-dns-profile-export.")
+    parser.add_argument("--mobile-dns-hostname", metavar="HOST", help="DNS-over-TLS hostname for Android Private DNS and Apple TLS profiles.")
+    parser.add_argument("--mobile-dns-doh-url", metavar="URL", help="DNS-over-HTTPS URL for Apple HTTPS profiles and QR payloads.")
+    parser.add_argument("--mobile-dns-display-name", metavar="TEXT", help="Display name for generated mobile DNS profile artifacts.")
+    parser.add_argument("--mobile-dns-match-domain", action="append", metavar="DOMAIN", help="Optional Apple SupplementalMatchDomains value. Repeat or comma-separate.")
     parser.add_argument("--dns-rewrite-provider-list", action="store_true", help="List plan-only advanced DNS rewrite providers.")
     parser.add_argument(
         "--dns-rewrite-plan",
@@ -27574,6 +28156,27 @@ def _handle_cli_args(argv: list[str]) -> int | None:
             args.cloud_log_import[0],
             args.cloud_log_import[1],
             args.cloud_log_import[2],
+        )
+    mobile_dns_options = [
+        args.mobile_dns_profile_id,
+        args.mobile_dns_hostname,
+        args.mobile_dns_doh_url,
+        args.mobile_dns_display_name,
+        args.mobile_dns_match_domain,
+    ]
+    if any(mobile_dns_options) and not args.mobile_dns_profile_export:
+        parser.error("--mobile-dns-* options require --mobile-dns-profile-export TARGET OUTPUT_DIR")
+    if args.mobile_dns_profile_list:
+        return _cli_mobile_dns_profile_list()
+    if args.mobile_dns_profile_export:
+        return _cli_mobile_dns_profile_export(
+            args.mobile_dns_profile_export[0],
+            args.mobile_dns_profile_export[1],
+            args.mobile_dns_profile_id,
+            args.mobile_dns_hostname,
+            args.mobile_dns_doh_url,
+            args.mobile_dns_display_name,
+            args.mobile_dns_match_domain,
         )
     dns_rewrite_options = [
         args.dns_rewrite_profile_id != "PROFILE_ID",

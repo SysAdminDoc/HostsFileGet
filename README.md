@@ -79,6 +79,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - optional `prompt_toolkit` TUI shell for keyboard-first status, profile, source-bundle, and clean-preview review
   - loopback-only local HTTP block page server and static preview export for reviewed blocked-site explanations
   - plan-only advanced DNS rewrite/CNAME/private-domain exports for Control D and Technitium DNS Server review
+  - export-only mobile DNS profile bundles for Android Private DNS, Apple DNS Settings `.mobileconfig`, and QR-ready resolver payload handoffs
   - RPZ, Unbound, Privoxy, gzip-compressed hosts, and bzip2-compressed hosts
 - Operational utilities:
   - DNS cache flush
@@ -369,6 +370,14 @@ python hosts_editor.py --cloud-adapter-plan controld .\cleaned-hosts.txt .\contr
 python hosts_editor.py --cloud-log-import controld .\activity-log.csv .\blocked-domains.txt
 ```
 
+Generate mobile DNS profile handoff bundles for roaming devices without changing device settings:
+
+```powershell
+python hosts_editor.py --mobile-dns-profile-list
+python hosts_editor.py --mobile-dns-profile-export nextdns .\mobile-dns --mobile-dns-profile-id abc123
+python hosts_editor.py --mobile-dns-profile-export generic-dot .\mobile-dns --mobile-dns-hostname dns.example.com --mobile-dns-display-name "Lab DNS"
+```
+
 Lint mixed adblock lists and write a hosts-safe quarantine copy:
 
 ```powershell
@@ -489,6 +498,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Portable bundle config: `docs/portable-config.md`
 - DNS interoperability pack: `docs/dns-integrations.md`
 - Cloud DNS adapters: `docs/cloud-dns-adapters.md`
+- Mobile DNS profile export: `docs/mobile-dns-profile-export.md`
 - Adblock syntax lint: `docs/adblock-lint.md`
 - Rule tier report: `docs/rule-tiers.md`
 - IDN and homograph report: `docs/idn-homograph.md`

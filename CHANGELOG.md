@@ -4,6 +4,10 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Mobile DNS profile exports**
+- Added `--mobile-dns-profile-list` and `--mobile-dns-profile-export` for export-only Android Private DNS, Apple DNS Settings, and QR-ready resolver handoff bundles.
+- Bundles include JSON review metadata, unsigned `.mobileconfig` output when possible, QR-ready payload text, setup steps, and warnings that HostsFileGet does not install mobile profiles, call provider APIs, or make hosts files roam.
+
 **Why-blocked summaries**
 - Added `--why-blocked-summary` and optional `--why-blocked-whitelist` for offline domain-block explanations.
 - The report combines local editor matches, whitelist coverage, source/provenance evidence when available, recommended triage actions, and a review-only LLM handoff prompt while making no provider calls.
