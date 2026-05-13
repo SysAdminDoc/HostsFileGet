@@ -4,6 +4,10 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Signed share patches**
+- Added signed allowlist/profile patch helpers and CLI commands to build, sign, verify, and apply small reviewable patches.
+- Patch apply requires a detached GPG signature, updates app config only, and never writes the Windows hosts file.
+
 **Encrypted profile sync**
 - Added guarded `--sync-git-export` and `--sync-git-import` commands that sync saved profiles through an explicit Git worktree while encrypting the payload with GPG.
 - Sync includes profiles and activation schedules only; it excludes local cache/history/provenance metadata and never writes the Windows hosts file.

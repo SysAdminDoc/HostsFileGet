@@ -87,6 +87,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - guarded time-bound profile activation commands that switch app config only
   - GUI profile quick switching, plus optional tray quick switching when `pystray` and Pillow are installed
   - encrypted opt-in profile sync through an explicit Git worktree and GPG passphrase
+  - signed allowlist/profile share patches that verify before config-only import
   - scheduled-update activity reports backed by bounded silent-run logs
   - managed portable bundle config export and config-location reporting
   - versioned English string catalog foundation for future localization
@@ -268,6 +269,15 @@ python hosts_editor.py --sync-git-export C:\path\to\sync-worktree
 python hosts_editor.py --sync-git-import C:\path\to\sync-worktree
 ```
 
+Build, sign, verify, and apply shareable allowlist/profile patches:
+
+```powershell
+python hosts_editor.py --patch-build-allowlist .\domains.txt .\allowlist.patch.json
+python hosts_editor.py --patch-build-profile work .\work.patch.json
+python hosts_editor.py --patch-sign .\work.patch.json .\work.patch.json.asc --patch-gpg-key test@example.com
+python hosts_editor.py --patch-apply .\work.patch.json .\work.patch.json.asc
+```
+
 Generate guarded cloud-DNS replay plans or extract blocked domains from cloud DNS CSV log exports:
 
 ```powershell
@@ -354,6 +364,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - CLI profile management: `docs/cli-profiles.md`
 - Profile quick switch: `docs/profile-quick-switch.md`
 - Encrypted profile sync: `docs/encrypted-sync.md`
+- Signed share patches: `docs/share-patches.md`
 - Optional Git history: `docs/git-history.md`
 - Scheduler activity report: `docs/scheduler-activity.md`
 - Portable bundle config: `docs/portable-config.md`

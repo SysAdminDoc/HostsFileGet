@@ -77,6 +77,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `docs/profile-quick-switch.md` | GUI and optional tray profile quick-switch behavior |
 | `docs/profile-activation-schedule.md` | Time-bound profile activation schedule behavior and config-only CLI |
 | `docs/encrypted-sync.md` | GPG-encrypted profile sync through explicit Git worktrees |
+| `docs/share-patches.md` | Detached-signature allowlist/profile patch sharing workflow |
 | `docs/git-history.md` | Optional local Git-backed hosts snapshot and restore behavior |
 | `docs/scheduler-activity.md` | Scheduled-update silent logging and activity report behavior |
 | `docs/portable-config.md` | Local-vs-portable config resolution and portable bundle export behavior |
@@ -138,6 +139,7 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - File IO helpers: `decode_text_bytes`, `read_text_file_lines`, `write_text_file_atomic`.
 - Optional Git history helpers: `write_git_history_snapshot`, `list_git_history_snapshots`, `read_git_history_snapshot`, `build_git_history_status_report`.
 - Encrypted profile sync helpers: `build_profile_sync_payload`, `sanitize_profile_sync_payload`, `encrypt_profile_sync_payload`, `decrypt_profile_sync_payload`, `write_profile_sync_git_export`, `read_profile_sync_git_import`, `format_profile_sync_report`.
+- Signed share patch helpers: `build_allowlist_share_patch`, `build_profile_share_patch`, `sanitize_share_patch_payload`, `apply_share_patch_payload_to_config`, `sign_share_patch_file`, `verify_share_patch_signature`, `format_share_patch_summary`.
 - Scheduler activity helpers: `build_scheduler_update_command`, `query_scheduled_task_status`, `append_cli_activity_event`, `build_scheduler_activity_report`, `format_scheduler_activity_report`.
 - Transactional hosts enable/disable helpers: `disable_hosts_file_transactionally`, `enable_hosts_file_transactionally`.
 - Download guards: `read_http_body_limited`, `decode_downloaded_lines`, `looks_like_html_document`.
@@ -221,6 +223,11 @@ The CLI functions live near the bottom of `hosts_editor.py` and intentionally sh
 - `_cli_profile_export`
 - `_cli_profile_sync_export`
 - `_cli_profile_sync_import`
+- `_cli_patch_build_allowlist`
+- `_cli_patch_build_profile`
+- `_cli_patch_sign`
+- `_cli_patch_verify`
+- `_cli_patch_apply`
 - `_cli_profile_schedule_list`
 - `_cli_profile_schedule_add`
 - `_cli_profile_schedule_apply`

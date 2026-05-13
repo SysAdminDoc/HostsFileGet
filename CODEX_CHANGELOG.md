@@ -107,6 +107,8 @@ This file is a handoff note for future agents, including Claude.
 - Updated `ROADMAP.md` to mark F053 complete. Next roadmap item: F054 encrypted opt-in sync via Gist or local Git remote.
 - Completed F054: added GPG-encrypted profile sync payload helpers, explicit Git worktree export/import CLI commands, local-only docs, and regression tests with fake GPG plus real Git when available.
 - Updated `ROADMAP.md` to mark F054 complete. Next roadmap item: F055 signed shareable allowlist/profile patches.
+- Completed F055: added signed allowlist/profile patch payloads, detached GPG signature verify/apply workflow, docs, and regression tests for config-only apply and fake-GPG sign/verify.
+- Updated `ROADMAP.md` to mark F055 complete. Next roadmap item: F044 restore-point or VSS-backed apply recovery spike.
 
 ## Scope
 
