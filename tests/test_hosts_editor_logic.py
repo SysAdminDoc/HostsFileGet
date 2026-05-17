@@ -14,6 +14,7 @@ from unittest import mock
 import datetime
 
 import hosts_editor
+from hostsfileget import config_profiles
 from hosts_editor import (
     AGH_BLOCK_REASONS,
     BLOCK_PAGE_SCHEMA,
@@ -2718,8 +2719,8 @@ profile:
         from pathlib import Path
 
         with tempfile.TemporaryDirectory() as exe_dir, tempfile.TemporaryDirectory() as app_dir:
-            with mock.patch.object(hosts_editor, "_EXE_DIR", exe_dir):
-                with mock.patch.object(hosts_editor, "get_app_config_dir", return_value=app_dir):
+            with mock.patch.object(config_profiles, "_EXE_DIR", exe_dir):
+                with mock.patch.object(config_profiles, "get_app_config_dir", return_value=app_dir):
                     local_report = build_config_location_report()
                     self.assertEqual(local_report["mode"], "local")
                     self.assertEqual(local_report["active_config_path"], os.path.join(app_dir, "hosts_editor_config.json"))

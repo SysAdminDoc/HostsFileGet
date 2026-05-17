@@ -195,3 +195,11 @@ Local runtime evidence recorded during R004:
 - `platform.platform()`: `Windows-11-10.0.26100-SP0`.
 
 CI was expanded to record runtime details for Python 3.12 and Python 3.14 on Windows.
+
+## R005 Config/Profile Extraction Follow-Up
+
+Local implementation evidence recorded during R005:
+
+- `hostsfileget/config_profiles.py` now owns config/profile service helpers that were previously inline in `hosts_editor.py`.
+- `hosts_editor.py` reduced to roughly 24,912 lines while preserving compatibility re-exports.
+- Focused validation covered direct `config_profiles` behavior, `hosts_editor` re-export identity, portable config path resolution, config migration, profile switching, declarative profile round trips, encrypted profile sync payload application, share patch application, and source-catalog compatibility.

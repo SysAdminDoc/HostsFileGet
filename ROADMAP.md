@@ -23,8 +23,8 @@ Local evidence is indexed in `.ai/research/2026-05-17/SOURCE_REGISTER.md` as `L*
 
 Key verified facts:
 
-- `hosts_editor.py` is still the main module at 27,480 lines and 1,155,343 bytes, with 10 top-level classes and 991 functions (`L1`, `L7`).
-- The new `hostsfileget/` package now has 10 modules, but CLI, GUI, config, source catalog, profile, reporting, and many command handlers remain in the monolith (`L1`, `L8`).
+- `hosts_editor.py` is still the main module, but R001-R005 reduced source catalog and config/profile ownership into package modules while preserving the legacy entry point (`L1`, `L7`, `L8`).
+- The new `hostsfileget/` package now has 11 focused modules plus `__init__.py`; CLI, GUI, reporting, and many command handlers remain in the monolith (`L1`, `L8`).
 - The curated source manifest contains 177 sources in 10 categories and 6 bundles (`L5`).
 - The 2026-05-17 source-health run reported 122 healthy, 21 warning, and 34 failed sources (`L6`).
 - Current live ecosystem baselines include PowerToys, SwitchHosts, HostsFileEditor, Gas Mask, StevenBlack hosts, HaGeZi, 1Hosts, hBlock, Pi-hole, AdGuard Home, blocky, and Technitium (`G1`-`G6`, `M1`-`M4`, `P1`, `P3`, `P5`, `P7`).
@@ -129,7 +129,9 @@ Why now:
 
 Python and PyInstaller compatibility is a release risk for a Windows desktop app. Current PyPI metadata says PyInstaller 6.20.0 supports `<3.15,>=3.8`, while prompt_toolkit 3.0.52 supports `>=3.8`; the project should state what it actually tests.
 
-### [ ] R005 - Config/Profile Service Extraction
+### [x] R005 - Config/Profile Service Extraction
+
+Status: completed 2026-05-17 in `refactor: extract config profile service`. `hostsfileget/config_profiles.py` now owns config migration, portable/local config path resolution, profile snapshots and switching, time-bound activation, declarative profile import/export, encrypted profile sync payloads, signed share patches, and config-owned sanitizers. `hosts_editor.py` keeps compatibility re-exports, and focused module tests cover migration, profile switching, portable mode, declarative round trips, and re-export identity.
 
 Evidence: `L1`, `L2`, `L8`, `G2`, `G3`, `C1`, `C2`, `C3`.
 

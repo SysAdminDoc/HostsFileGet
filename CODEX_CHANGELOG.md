@@ -11,6 +11,12 @@ This file is a handoff note for future agents, including Claude.
 
 ## 2026-05-17 Roadmap Continuation Notes
 
+- Completed R005: Config/Profile Service Extraction.
+- Added `hostsfileget/config_profiles.py` for config schema migration, portable/local config path resolution, profile snapshots and switching, time-bound activation, declarative import/export, encrypted profile sync, signed share patches, and config-owned sanitizers.
+- Kept `hosts_editor.py` compatibility re-exports for the config/profile API and reduced the monolith to roughly 24,912 lines.
+- Added `tests/test_config_profiles.py` for direct module coverage while preserving legacy profile/config coverage in `tests/test_hosts_editor_logic.py`.
+- Next roadmap item: R006 Source Health UX and Remediation Assistant.
+
 - Completed R004: Python Runtime Compatibility Matrix.
 - Added `docs/runtime-compatibility.md` with local Python 3.12.10 / Windows 11 evidence, support boundaries for Python 3.8-3.15, PyInstaller/prompt_toolkit metadata links, and release-vs-CI runtime policy.
 - Expanded `.github/workflows/ci.yml` to test Python 3.12 and 3.14 on Windows and print runtime details in each matrix job.

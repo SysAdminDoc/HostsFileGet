@@ -4,6 +4,11 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Modularization - config/profile service phase**
+- New `hostsfileget.config_profiles` (~2,389 lines): owns config schema migration, local/portable config path resolution, profile snapshots and switching, declarative profile import/export, time-bound profile activation, encrypted profile sync, signed share patches, and config-owned sanitizers.
+- `hosts_editor.py` now re-exports the config/profile surface instead of defining it inline, reducing the monolith to roughly 24,912 lines while keeping GUI, CLI, and legacy import behavior stable.
+- Added focused `tests/test_config_profiles.py` coverage for direct module behavior plus compatibility checks for the `hosts_editor` re-exports.
+
 **Runtime compatibility**
 - Added `docs/runtime-compatibility.md` with the supported/tested Python matrix for direct run, unit tests, PyInstaller release builds, optional TUI, and launcher bootstrap behavior.
 - Expanded CI to validate Windows on Python 3.12 and Python 3.14 while keeping release builds pinned to Python 3.12.
