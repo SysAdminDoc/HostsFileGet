@@ -4,6 +4,11 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Release identity and build-tool hygiene**
+- Updated release-facing README/docs examples to v2.27.0 and replaced the preview version badge with the current runtime version.
+- Added `scripts/check_release_identity.py` plus release workflow and unit-test coverage to catch stale `version-preview` text, stale release example URLs, missing release-checklist hardening items, unsafe PyInstaller pins, and missing `pip-audit` pins.
+- Expanded `docs/release.md` with a PyInstaller `GHSA-p2xp-xx3r-mffc` guard, explicit `pip-audit`, SHA-256, SBOM, and package-manager-manifest checklist items.
+
 **Modularization - source catalog phase**
 - New `hostsfileget.source_catalog` (~1,005 lines): owns curated-source manifest loading and validation, lifecycle metadata, source bundle expansion, source-health reports, baseline diffs, and source-health remediation formatting.
 - Added stable standard-library dataclass shapes for `SourceRecord` and `SourceHealthRecord` while preserving legacy tuple/dict outputs for GUI, CLI, tests, and external `hosts_editor` imports.

@@ -65,7 +65,7 @@ Extracted package modules observed:
 
 - `hosts_editor.py` remains too large and owns too many workflows, which raises regression risk during feature work.
 - `data/blocklist_sources.json` has lifecycle metadata from the 2026-05-17 source-health reset. The baseline found 122 healthy, 21 warning, and 34 failed sources; hard-gone sources are now retained as `retired` and removed from built-in bundles.
-- Release identity is uneven: runtime reports v2.27.0, but README release-facing text still contains preview-version language.
+- Release identity now has an explicit guard: `scripts/check_release_identity.py` checks README badge/version text, release-facing examples, PyInstaller advisory-safe pins, `pip-audit`, and release workflow gating.
 - The project has many plan-only integrations. Future work must continue distinguishing reviewed handoff artifacts from active external writers.
 - Python/PyInstaller compatibility should be stated explicitly as Python 3.14 and PyInstaller 6.x evolve.
 
@@ -102,6 +102,6 @@ At the start of future work:
 
 Start with the remaining `ROADMAP.md` P0 items:
 
-1. Release Identity and Version Hygiene.
+1. Python Runtime Compatibility Matrix.
 
-This is highest leverage because the source catalog reset and extraction are complete, and release identity is the remaining P0 gap before continuing into broader compatibility and hardening work.
+The P0 source catalog reset, source catalog extraction, and release identity hygiene are complete. R004 is the next highest-leverage item because runtime and PyInstaller compatibility need an explicit support matrix before deeper hardening work.

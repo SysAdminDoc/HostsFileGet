@@ -17,8 +17,8 @@ Templates use these tokens:
 
 ```powershell
 python scripts\render_package_manifests.py `
-  --version 2.20.0 `
-  --installer-url https://github.com/SysAdminDoc/HostsFileGet/releases/download/v2.20.0/HostsFileGet.exe `
+  --version 2.27.0 `
+  --installer-url https://github.com/SysAdminDoc/HostsFileGet/releases/download/v2.27.0/HostsFileGet.exe `
   --sha256 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA `
   --output-dir dist\package-manifests
 ```
@@ -39,7 +39,7 @@ Winget and Chocolatey manifests describe public package-manager submission metad
 
 ```powershell
 python hosts_editor.py --managed-package-list
-python hosts_editor.py --managed-package-export intune-win32 .\managed-hosts.txt .\managed-bundle --managed-installer-url https://github.com/SysAdminDoc/HostsFileGet/releases/download/v2.20.0/HostsFileGet.exe --managed-sha256 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+python hosts_editor.py --managed-package-export intune-win32 .\managed-hosts.txt .\managed-bundle --managed-installer-url https://github.com/SysAdminDoc/HostsFileGet/releases/download/v2.27.0/HostsFileGet.exe --managed-sha256 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 ```
 
 See `docs/managed-package-exports.md` for the Intune, Group Policy startup script, PDQ Deploy, and Configuration Manager export contract.
