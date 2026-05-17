@@ -84,3 +84,13 @@ R004 Python Runtime Compatibility Matrix was implemented after R003:
 - Expanded `.github/workflows/ci.yml` to validate Python 3.12 and 3.14 on Windows and print runtime details in each matrix job.
 - Updated source-health and release compile checks to include the extracted source-catalog and release-identity files.
 - Updated README, release docs, architecture notes, research log, `ROADMAP.md`, and `PROJECT_CONTEXT.md`; the next roadmap item is R005.
+
+## 2026-05-17 R005 Implementation Follow-Up
+
+R005 Config/Profile Service Extraction was implemented after R004:
+
+- Added `hostsfileget/config_profiles.py` for config schema migration, portable/local config path resolution, profile snapshots and switching, time-bound activation, declarative import/export, encrypted profile sync, signed share patches, and config-owned sanitizers.
+- Updated `hosts_editor.py` to re-export the config/profile API instead of defining those helpers inline.
+- Added `tests/test_config_profiles.py` for focused module coverage and kept existing profile/config behavior coverage in `tests/test_hosts_editor_logic.py`.
+- Updated CI/source-health compile checks to include the new module and tests.
+- Updated architecture notes, changelogs, `ROADMAP.md`, and `PROJECT_CONTEXT.md`; the next roadmap item is R006.

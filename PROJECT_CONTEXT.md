@@ -8,7 +8,7 @@ Current app version observed: `Hosts File Get v2.27.0`
 
 HostsFileGet is a Windows-first Python/Tkinter desktop workbench for importing, reviewing, cleaning, explaining, and safely writing the Windows hosts file. It is intentionally local-first: hosts writes are explicit and recoverable; network activity is tied to user-requested source imports, source-health checks, documentation, or reviewed diagnostics.
 
-The repository has recently been moving from a large single-file app toward a package. Extracted modules now cover constants, fetch/cache behavior, source catalog and source-health behavior, compression, atomic IO, parsing, theme helpers, adblock syntax classification, IDN/homograph helpers, and normalization. The central technical challenge remains reducing `hosts_editor.py` while preserving the mature GUI, CLI, safety model, and tests.
+The repository has recently been moving from a large single-file app toward a package. Extracted modules now cover constants, fetch/cache behavior, source catalog and source-health behavior, config/profile service behavior, compression, atomic IO, parsing, theme helpers, adblock syntax classification, IDN/homograph helpers, and normalization. The central technical challenge remains reducing `hosts_editor.py` while preserving the mature GUI, CLI, safety model, and tests.
 
 ## Canonical Product Boundary
 
@@ -28,7 +28,7 @@ HostsFileGet should not present itself as:
 
 Important root files:
 
-- `hosts_editor.py`: main GUI/CLI module, still roughly 27.1K lines after the 2026-05-17 source-catalog extraction.
+- `hosts_editor.py`: main GUI/CLI module, still roughly 24.9K lines after the 2026-05-17 source-catalog and config/profile extractions.
 - `hostsfileget/`: package modules extracted from the monolith.
 - `PythonLauncher.ps1`: WPF launcher/bootstrapper for Windows users.
 - `data/blocklist_sources.json`: curated source manifest, 177 sources across 10 categories and 6 bundles.
@@ -45,6 +45,7 @@ Extracted package modules observed:
 - `hostsfileget/constants.py`
 - `hostsfileget/fetch.py`
 - `hostsfileget/source_catalog.py`
+- `hostsfileget/config_profiles.py`
 - `hostsfileget/compression.py`
 - `hostsfileget/atomic_io.py`
 - `hostsfileget/parsing.py`
@@ -97,12 +98,13 @@ At the start of future work:
 3. Verify current app version with `python hosts_editor.py --version`.
 4. For source/catalog work, inspect `.ai/research/2026-05-17/source-health-report.json` and `data/blocklist_sources.json`.
 5. For release/runtime work, inspect `docs/runtime-compatibility.md`, `requirements-build.txt`, `requirements-security.txt`, `HostsFileGet.spec`, `.github/workflows/`, and the latest PyInstaller advisory status.
-6. Run focused tests before broad tests; this repository has a large monolithic import surface.
+6. For config/profile work, inspect `hostsfileget/config_profiles.py`, `docs/config-schema.md`, `docs/cli-profiles.md`, `docs/declarative-config.md`, `docs/profile-quick-switch.md`, and `docs/profile-activation-schedule.md`.
+7. Run focused tests before broad tests; this repository has a large monolithic import surface.
 
 ## Recommended Next Pass
 
-Start with the remaining `ROADMAP.md` P0 items:
+Start with the next `ROADMAP.md` P1 item:
 
-1. Config/Profile Service Extraction.
+1. Source Health UX and Remediation Assistant.
 
-The P0 source catalog reset, source catalog extraction, release identity hygiene, and runtime compatibility matrix are complete. R005 is next because profile/config behavior is a core workflow and still lives inside the monolith.
+The source catalog reset, source catalog extraction, release identity hygiene, runtime compatibility matrix, and config/profile service extraction are complete. R006 is next because the source-health data is now actionable but still lacks a routine maintenance UX.

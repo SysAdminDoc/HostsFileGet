@@ -61,16 +61,24 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 
 | Entry point | Purpose |
 | --- | --- |
-| `hosts_editor.py` | GUI application, CLI, pure parsing/normalization helpers, config, imports, exports, and save logic |
+| `hosts_editor.py` | GUI application, CLI, remaining pure helpers, imports, exports, save logic, and compatibility re-exports for package modules |
 | `PythonLauncher.ps1` | Elevated bootstrapper that finds or installs Python, refreshes cached editor code, and launches the app |
 | `HostsFileGet.spec` | PyInstaller build definition |
 | `.github/workflows/source-health.yml` | Scheduled/manual curated-source reachability report |
 | `tests/test_hosts_editor_logic.py` | Regression suite for pure logic, deterministic parser fuzzers, golden cleaned-output fixtures, legacy re-export compatibility, and selected GUI-adjacent helper paths |
 | `tests/test_source_catalog.py` | Focused source-catalog module tests for manifest validation, source records, bundles, health reports, and `hosts_editor` compatibility re-exports |
+| `tests/test_config_profiles.py` | Focused config/profile module tests for config migration, profile switching, declarative round trips, portable path resolution, and `hosts_editor` compatibility re-exports |
 | `tests/test_gui_smoke.py` | Tk smoke tests for patched main-window startup and basic modal construction; skips when Tk cannot create a root |
 | `tests/test_benchmarks.py` | Smoke coverage for the benchmark harness without enforcing hardware-dependent timing budgets |
 | `benchmarks/large_file_benchmark.py` | Deterministic large-file parser/cleaner benchmark with human and JSON output |
 | `scripts/check_release_identity.py` | Release-facing version, PyInstaller advisory pin, `pip-audit`, and checklist guard |
+
+## Package Modules
+
+| Module | Role |
+| --- | --- |
+| `hostsfileget/config_profiles.py` | Config schema migration, local-vs-portable config paths, profile snapshots and switching, activation schedules, declarative profile import/export, encrypted profile sync, signed share patches, and config-owned sanitizers |
+| `hostsfileget/source_catalog.py` | Curated-source manifest validation, lifecycle metadata, bundle expansion, source-health reports/diffs, and source record dataclasses |
 
 ## Repository Layout
 
@@ -148,7 +156,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 
 ## `hosts_editor.py` Structure
 
-The app is currently a single large module with four layers mixed in one file. Keep changes localized and favor adding pure helper functions with tests when possible.
+The app is currently a single large module with four layers mixed in one file, although source-catalog and config/profile service logic now live in package modules. Keep changes localized and favor adding pure helper functions with tests when possible.
 
 ### Constants And Environment
 
