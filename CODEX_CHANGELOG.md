@@ -11,6 +11,12 @@ This file is a handoff note for future agents, including Claude.
 
 ## 2026-05-17 Roadmap Continuation Notes
 
+- Completed R009: Integration Handoff Quality Pack.
+- Added `hostsfileget.handoff-contract.v1` metadata and "What this will not do" report/readme sections for DNS integration exports, cloud DNS adapter plans, NRPT policy exports, router/gateway bundles, mobile DNS profile bundles, and managed deployment package bundles.
+- Added `hostsfileget.dns-integration-export.v1` plus `OUTPUT.handoff.json` sidecar output for Pi-hole, AdGuard Home/DNS, Technitium, and blocky file-first exports.
+- Added `docs/integration-handoff-contract.md` and updated the integration docs to describe the shared boundary contract.
+- Next roadmap item: R010 False-Positive and Allowlist Workflow Refresh.
+
 - Completed R008: Keyboard and Documentation Consistency Pass.
 - Added `hostsfileget/shortcuts.py` as the canonical shortcut and command-entry registry.
 - Updated `hosts_editor.py` to bind global shortcuts and render the About dialog shortcut card from that registry.

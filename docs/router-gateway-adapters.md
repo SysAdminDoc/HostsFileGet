@@ -4,6 +4,8 @@ HostsFileGet router/gateway adapters are guarded bundle generators. They convert
 
 HostsFileGet does not execute `scp`, `ssh`, router APIs, service reloads, or credential prompts.
 
+Generated plans include the shared `hostsfileget.handoff-contract.v1` block described in `docs/integration-handoff-contract.md`.
+
 ## CLI
 
 List adapters:
@@ -20,7 +22,7 @@ python hosts_editor.py --router-push-plan openwrt-dnsmasq .\cleaned-hosts.txt .\
 
 The bundle contains:
 
-- `router-gateway-push-plan.json`: review metadata, warnings, commands, generated config text, source references, and artifact paths.
+- `router-gateway-push-plan.json`: review metadata, warnings, commands, generated config text, source references, artifact paths, and `handoff_contract`.
 - `hostsfileget-router-push.sh`: a review-only script that exits unless `HOSTSFILEGET_CONFIRM=apply` is set.
 - Adapter config file, such as `hostsfileget-openwrt-dnsmasq.conf` or `hostsfileget-unbound.conf`.
 
@@ -42,6 +44,7 @@ The bundle contains:
 - Authentication, SSH host-key trust, router console access, snapshots, and rollback remain operator responsibilities.
 - OpenWrt users must verify that the target image loads the selected dnsmasq include directory before applying the generated script.
 - Hosts data remains exact-domain data. Wildcard rules, per-client policy, upstream routing, response rewrites, and schedules belong in the downstream resolver.
+- The `handoff_contract.will_not` section records that HostsFileGet will not execute network commands, verify router trust/rollback outside the generated script, translate exact hosts rows into resolver-only policy semantics, or protect devices off the controlled network.
 
 ## Source References
 

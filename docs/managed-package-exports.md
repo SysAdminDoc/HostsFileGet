@@ -4,6 +4,8 @@ HostsFileGet managed package exports are guarded bundle generators for enterpris
 
 HostsFileGet does not upload packages, edit Group Policy, import PDQ packages, create Configuration Manager applications, call Microsoft Graph, store tenant credentials, or assign deployments.
 
+Generated plans and target field maps include the shared `hostsfileget.handoff-contract.v1` block described in `docs/integration-handoff-contract.md`.
+
 ## CLI
 
 List supported targets:
@@ -41,7 +43,7 @@ Optional inputs:
 
 Every target writes:
 
-- `managed-package-export-plan.json`: schema, target metadata, release URL/checksum, source references, generated commands, warnings, and artifact paths.
+- `managed-package-export-plan.json`: schema, target metadata, release URL/checksum, source references, generated commands, warnings, artifact paths, and `handoff_contract`.
 - `MANAGED_PACKAGE_EXPORT.md`: operator handoff notes for the specific bundle.
 - `Install-HostsFileGetManaged.ps1`: elevated installer wrapper. It verifies the staged executable SHA-256, copies it into the install directory, records uninstall metadata, and applies managed hosts only when `-ApplyManagedHosts` is passed.
 - `Detect-HostsFileGetManaged.ps1`: detection script that exits `0` only when the installed executable exists and matches the expected SHA-256.
@@ -50,10 +52,10 @@ Every target writes:
 
 Target-specific artifacts:
 
-- `intune-win32-app.json`: Intune Win32 app field map plus the `IntuneWinAppUtil.exe` content-prep command.
-- `gpo-startup-deployment.md`: Group Policy startup/removal script instructions for a UNC-staged bundle.
-- `pdq-package-fields.json`: PDQ Deploy custom package field map and PowerShell step commands.
-- `configmgr-application-fields.json`: Configuration Manager application/deployment-type field map.
+- `intune-win32-app.json`: Intune Win32 app field map plus the `IntuneWinAppUtil.exe` content-prep command and handoff contract.
+- `gpo-startup-deployment.md`: Group Policy startup/removal script instructions for a UNC-staged bundle and handoff boundary text.
+- `pdq-package-fields.json`: PDQ Deploy custom package field map, PowerShell step commands, and handoff contract.
+- `configmgr-application-fields.json`: Configuration Manager application/deployment-type field map and handoff contract.
 
 ## Safety Contract
 
@@ -64,6 +66,7 @@ Target-specific artifacts:
 - Managed hosts rollback is opt-in at uninstall time through `-RemoveManagedHosts`.
 - Operators should pilot detection, uninstall, and managed-hosts rollback before broad assignment.
 - Official broad deployment should use signed release artifacts. Unsigned local builds are suitable only for lab validation.
+- The `handoff_contract.will_not` section records that HostsFileGet will not upload packages, edit deployment systems, call Microsoft Graph, assign deployments, download the signed executable, or silently apply/remove managed hosts.
 
 ## Target Notes
 

@@ -440,6 +440,7 @@ WFP_BLOCKER_RULE_PREFIX = "HostsFileGet IP/CIDR Block"
 WFP_BLOCKER_TARGET_CHUNK_SIZE = 50
 WFP_BLOCKER_PREFIX_MAX_LENGTH = 64
 NRPT_POLICY_PLAN_SCHEMA = "hostsfileget.nrpt-policy-plan.v1"
+HANDOFF_CONTRACT_SCHEMA = "hostsfileget.handoff-contract.v1"
 NRPT_RULE_PREFIX = "HostsFileGet NRPT"
 NRPT_NAMESPACE_CHUNK_SIZE = 25
 NRPT_PREFIX_MAX_LENGTH = 64
@@ -549,6 +550,44 @@ MANAGED_PACKAGE_WARNINGS = (
     "Managed hosts lines are applied by the generated wrapper only when the operator passes -ApplyManagedHosts.",
     "Test detection, uninstall, and managed-hosts rollback on a small pilot group before assigning packages broadly.",
 )
+HANDOFF_SURFACE_WILL_NOT = {
+    "dns-integration": (
+        "Authenticate to Pi-hole, AdGuard Home, AdGuard DNS, Technitium, blocky, or any other DNS server.",
+        "Upload, subscribe, reload, deduplicate, prioritize, or remove downstream DNS lists.",
+        "Translate exact hosts rows into wildcard, regex, client-group, rewrite, CNAME, schedule, or policy rules.",
+        "Change allowlist priority, client scoping, or resolver behavior in the downstream DNS tool.",
+    ),
+    "cloud-dns": (
+        "Store API keys, provider tokens, profile credentials, or tenant secrets.",
+        "Call NextDNS, Control D, or any other cloud DNS API.",
+        "Convert exact hosts rows into provider-only wildcard, regex, redirect, rewrite, or device-policy semantics.",
+        "Assign profiles, endpoints, users, devices, or roaming clients in a provider dashboard.",
+    ),
+    "nrpt": (
+        "Run DnsClient PowerShell cmdlets, edit local NRPT policy, or modify Group Policy objects.",
+        "Verify resolver ownership, VPN compatibility, DirectAccess behavior, or split-horizon DNS policy.",
+        "Convert hosts-file entries into DNS records or provider-side enforcement.",
+        "Guarantee roaming-client behavior after generated commands are executed elsewhere.",
+    ),
+    "router-gateway": (
+        "Execute scp, ssh, router APIs, reload commands, or credential prompts.",
+        "Verify SSH host keys, router console access, snapshots, or gateway rollback outside the generated script.",
+        "Convert exact hosts rows into wildcard, per-client, upstream-routing, rewrite, schedule, or DHCP policy rules.",
+        "Apply protection to devices when they leave the network controlled by the gateway.",
+    ),
+    "mobile-dns": (
+        "Install profiles, call provider APIs, enroll devices, or change Android, iOS, iPadOS, or macOS settings.",
+        "Render QR bitmap images; generated QR payloads remain text for a trusted external renderer.",
+        "Make a Windows hosts file apply to mobile operating systems.",
+        "Prevent VPNs, browser Secure DNS, Private Relay, captive portals, MDM policy, or per-app networking from overriding DNS.",
+    ),
+    "managed-package": (
+        "Upload packages, edit Group Policy, import PDQ packages, create Configuration Manager applications, call Microsoft Graph, or assign deployments.",
+        "Download or attach the signed executable; operators must stage the artifact named in the plan.",
+        "Apply managed hosts entries unless the generated installer is run with -ApplyManagedHosts.",
+        "Remove managed hosts entries unless the generated uninstaller is run with -RemoveManagedHosts.",
+    ),
+}
 MANAGED_PACKAGE_TARGETS = (
     {
         "id": "intune-win32",
@@ -2646,6 +2685,66 @@ def _format_command_for_display(command) -> str:
     return str(command)
 
 
+def _unique_strings(values) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for value in values or []:
+        item = str(value or "").strip()
+        if not item:
+            continue
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
+
+
+def build_handoff_contract(
+    surface: str,
+    target: str,
+    *,
+    plan_schema: str,
+    warnings=None,
+    source_urls=None,
+    references=None,
+) -> dict:
+    will_not = HANDOFF_SURFACE_WILL_NOT.get(surface)
+    if will_not is None:
+        raise ValueError(f"Unknown handoff surface: {surface!r}")
+    return {
+        "schema": HANDOFF_CONTRACT_SCHEMA,
+        "surface": surface,
+        "target": str(target or ""),
+        "plan_schema": plan_schema,
+        "plan_only": True,
+        "writes_performed": "local-artifacts-only",
+        "will_not": list(will_not),
+        "warnings": _unique_strings(warnings),
+        "source_urls": _unique_strings(source_urls),
+        "references": _unique_strings(references),
+    }
+
+
+def format_handoff_contract(contract: dict | None) -> list[str]:
+    if not contract:
+        return []
+    lines = [
+        "",
+        "Handoff contract:",
+        f"- Schema: {contract.get('schema')}",
+        f"- Surface: {contract.get('surface')}",
+        f"- Target: {contract.get('target')}",
+        f"- Plan schema: {contract.get('plan_schema')}",
+        f"- Writes performed: {contract.get('writes_performed')}",
+        "",
+        "What this will not do:",
+    ]
+    for item in contract.get("will_not") or []:
+        lines.append(f"- {item}")
+    return lines
+
+
 def format_recovery_apply_plan(plan: dict) -> str:
     lines = [
         "Recovery Apply Plan",
@@ -3234,6 +3333,13 @@ def build_nrpt_policy_export_plan(
             "Export or document existing NRPT/GPO policy before running generated commands.",
         ],
         "warnings": warnings,
+        "handoff_contract": build_handoff_contract(
+            "nrpt",
+            "group-policy" if safe_gpo else "local-client",
+            plan_schema=NRPT_POLICY_PLAN_SCHEMA,
+            warnings=warnings,
+            references=["S1", "S2", "S16"],
+        ),
         "references": ["S1", "S2", "S16"],
     }
 
@@ -3273,6 +3379,7 @@ def format_nrpt_policy_export_plan(plan: dict) -> str:
     lines.extend(["", "Warnings:"])
     for warning in plan.get("warnings") or []:
         lines.append(f"- {warning}")
+    lines.extend(format_handoff_contract(plan.get("handoff_contract")))
     references = plan.get("references") or []
     if references:
         lines.extend(["", "Roadmap source IDs:", f"- {', '.join(references)}"])
@@ -3826,6 +3933,14 @@ def build_router_gateway_push_plan(
         "shell_script": shell_script,
         "commands": commands,
         "warnings": warnings,
+        "handoff_contract": build_handoff_contract(
+            "router-gateway",
+            adapter["id"],
+            plan_schema=ROUTER_GATEWAY_PLAN_SCHEMA,
+            warnings=warnings,
+            source_urls=adapter["source_urls"],
+            references=adapter["references"],
+        ),
         "source_urls": list(adapter["source_urls"]),
         "references": list(adapter["references"]),
     }
@@ -3869,6 +3984,11 @@ def format_router_gateway_adapter_catalog() -> str:
     lines.append("")
     lines.append("Warnings:")
     lines.extend(f"- {warning}" for warning in ROUTER_GATEWAY_PUSH_WARNINGS)
+    lines.extend([
+        "",
+        "What these adapters will not do:",
+    ])
+    lines.extend(f"- {item}" for item in HANDOFF_SURFACE_WILL_NOT["router-gateway"])
     return "\n".join(lines)
 
 
@@ -3901,6 +4021,7 @@ def format_router_gateway_push_plan(plan: dict) -> str:
     lines.extend(["", "Warnings:"])
     for warning in plan.get("warnings") or []:
         lines.append(f"- {warning}")
+    lines.extend(format_handoff_contract(plan.get("handoff_contract")))
     references = plan.get("references") or []
     if references:
         lines.extend(["", "Roadmap source IDs:", f"- {', '.join(references)}"])
@@ -4187,6 +4308,7 @@ def build_managed_package_target_export(plan: dict) -> str:
             "app_name": "HostsFileGet",
             "publisher": MANAGED_PACKAGE_DEFAULT_PUBLISHER,
             "version": release.get("version"),
+            "handoff_contract": plan.get("handoff_contract"),
             "content_prep": {
                 "tool": "IntuneWinAppUtil.exe",
                 "source_folder": ".",
@@ -4232,6 +4354,9 @@ def build_managed_package_target_export(plan: dict) -> str:
             "- Group Policy Software Installation is MSI-oriented; this bundle uses a computer startup script because HostsFileGet ships as a signed executable artifact.",
             "- Assign to a pilot OU first and confirm the managed hosts block can be removed with the uninstall script.",
             "- Keep the staged executable and generated scripts together in the same share folder.",
+            "",
+            "What this will not do:",
+            *(f"- {item}" for item in (plan.get("handoff_contract") or {}).get("will_not", [])),
         ]) + "\n"
     if target_id == "pdq-deploy":
         payload = {
@@ -4239,6 +4364,7 @@ def build_managed_package_target_export(plan: dict) -> str:
             "package_name": "HostsFileGet",
             "version": release.get("version"),
             "package_source": "custom",
+            "handoff_contract": plan.get("handoff_contract"),
             "steps": [
                 {
                     "name": "Install HostsFileGet managed bundle",
@@ -4267,6 +4393,7 @@ def build_managed_package_target_export(plan: dict) -> str:
     if target_id == "sccm-application":
         payload = {
             "schema": "hostsfileget.configmgr-application-fields.v1",
+            "handoff_contract": plan.get("handoff_contract"),
             "application": {
                 "name": "HostsFileGet",
                 "publisher": MANAGED_PACKAGE_DEFAULT_PUBLISHER,
@@ -4329,6 +4456,7 @@ def build_managed_package_readme(plan: dict) -> str:
     if warnings:
         lines.extend(["", "Warnings:"])
         lines.extend(f"- {warning}" for warning in warnings)
+    lines.extend(format_handoff_contract(plan.get("handoff_contract")))
     return "\n".join(lines) + "\n"
 
 
@@ -4409,6 +4537,14 @@ def build_managed_package_export_plan(
     }
     if not managed_entries:
         plan["warnings"].append("No managed hosts entries were exported; the wrapper will only install the app unless the block file is updated.")
+    plan["handoff_contract"] = build_handoff_contract(
+        "managed-package",
+        target["id"],
+        plan_schema=MANAGED_PACKAGE_PLAN_SCHEMA,
+        warnings=plan["warnings"],
+        source_urls=target["source_urls"],
+        references=target["references"],
+    )
     plan["install_script"] = build_managed_package_install_script(plan)
     plan["detect_script"] = build_managed_package_detect_script(plan)
     plan["uninstall_script"] = build_managed_package_uninstall_script(plan)
@@ -4464,6 +4600,11 @@ def format_managed_package_target_catalog() -> str:
     lines.append("")
     lines.append("Warnings:")
     lines.extend(f"- {warning}" for warning in MANAGED_PACKAGE_WARNINGS)
+    lines.extend([
+        "",
+        "What these exports will not do:",
+    ])
+    lines.extend(f"- {item}" for item in HANDOFF_SURFACE_WILL_NOT["managed-package"])
     return "\n".join(lines)
 
 
@@ -4499,6 +4640,7 @@ def format_managed_package_export_plan(plan: dict) -> str:
     lines.extend(["", "Warnings:"])
     for warning in plan.get("warnings") or []:
         lines.append(f"- {warning}")
+    lines.extend(format_handoff_contract(plan.get("handoff_contract")))
     references = plan.get("references") or []
     if references:
         lines.extend(["", "Roadmap source IDs:", f"- {', '.join(references)}"])
@@ -7338,6 +7480,8 @@ TEXT_EXPORT_FORMATS = {
     "privoxy",
 }
 BINARY_EXPORT_FORMATS = {"hosts-gzip", "hosts-bzip2"}
+DNS_INTEGRATION_EXPORT_SCHEMA = "hostsfileget.dns-integration-export.v1"
+DNS_INTEGRATION_HANDOFF_JSON_SUFFIX = ".handoff.json"
 DNS_INTEGRATION_PACK_WARNINGS = (
     "File-only export: HostsFileGet does not authenticate to or write into DNS servers.",
     "Hosts-file data is exact-domain data; wildcard, regex, client, rewrite, and policy rules stay in the downstream DNS tool.",
@@ -7417,6 +7561,7 @@ CLOUD_DNS_ADAPTER_WARNINGS = (
     "Review provider quotas and profile scope before replaying generated requests.",
     "Logs can expose browsing history; imported CSV files stay local to this machine.",
 )
+CLOUD_DNS_ADAPTER_PLAN_SCHEMA = "hostsfileget.cloud-dns-adapter-plan.v1"
 CLOUD_DNS_ADAPTERS = (
     {
         "id": "nextdns-denylist",
@@ -8566,20 +8711,38 @@ def find_dns_integration_pack(pack_id: str) -> dict[str, str]:
     raise ValueError(f"Unknown DNS integration pack: {pack_id!r}. Known packs: {known}")
 
 
-def build_dns_integration_export(lines: list[str], pack_id: str) -> dict:
+def build_dns_integration_export(lines: list[str], pack_id: str, *, now=None) -> dict:
     pack = find_dns_integration_pack(pack_id)
     records = build_export_domain_records(lines)
     content = export_lines_as_format(lines, pack["export_format"])
+    created_at = now or datetime.datetime.now()
+    if isinstance(created_at, datetime.datetime):
+        created_at = created_at.isoformat(timespec="seconds")
+    warnings = list(DNS_INTEGRATION_PACK_WARNINGS)
     return {
+        "schema": DNS_INTEGRATION_EXPORT_SCHEMA,
         "schema_version": 1,
+        "app_version": APP_VERSION,
+        "created_at": str(created_at),
+        "plan_only": True,
+        "bundle_only": False,
+        "execution": "not-run",
         "integration_id": pack["id"],
         "label": pack["label"],
         "export_format": pack["export_format"],
         "rule_shape": pack["rule_shape"],
         "domain_count": len(records),
         "line_count": len(content.splitlines()) if content else 0,
+        "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
         "content": content,
-        "warnings": list(DNS_INTEGRATION_PACK_WARNINGS),
+        "warnings": warnings,
+        "handoff_contract": build_handoff_contract(
+            "dns-integration",
+            pack["id"],
+            plan_schema=DNS_INTEGRATION_EXPORT_SCHEMA,
+            warnings=warnings,
+            source_urls=[pack["source_url"]],
+        ),
         "import_hint": pack["import_hint"],
         "import_supported": pack["import_supported"],
         "source_url": pack["source_url"],
@@ -8605,12 +8768,19 @@ def format_dns_integration_pack_report() -> str:
     lines.append("")
     lines.append("Warnings:")
     lines.extend(f"- {warning}" for warning in DNS_INTEGRATION_PACK_WARNINGS)
+    lines.extend([
+        "",
+        "What these exports will not do:",
+    ])
+    lines.extend(f"- {item}" for item in HANDOFF_SURFACE_WILL_NOT["dns-integration"])
     return "\n".join(lines)
 
 
 def format_dns_integration_export_summary(export_report: dict, output_path: str | None = None) -> str:
     lines = [
         "DNS Integration Export",
+        f"Schema: {export_report.get('schema')}",
+        f"Plan only: {'yes' if export_report.get('plan_only') else 'no'}",
         f"Preset: {export_report.get('integration_id')} - {export_report.get('label')}",
         f"Format: {export_report.get('export_format')} ({export_report.get('rule_shape')})",
         f"Domains: {int(export_report.get('domain_count') or 0):,}",
@@ -8626,6 +8796,7 @@ def format_dns_integration_export_summary(export_report: dict, output_path: str 
     ])
     for warning in export_report.get("warnings") or DNS_INTEGRATION_PACK_WARNINGS:
         lines.append(f"- {warning}")
+    lines.extend(format_handoff_contract(export_report.get("handoff_contract")))
     return "\n".join(lines)
 
 
@@ -8718,12 +8889,18 @@ def build_cloud_dns_adapter_plan(
     lines: list[str],
     adapter_id: str,
     profile_id: str = "PROFILE_ID",
+    *,
+    now=None,
 ) -> dict:
     adapter = find_cloud_dns_adapter(adapter_id)
     records = build_export_domain_records(lines)
     domains = [record["domain"] for record in records]
     profile = (profile_id or "PROFILE_ID").strip() or "PROFILE_ID"
     encoded_profile = urllib.parse.quote(profile, safe="")
+    created_at = now or datetime.datetime.now()
+    if isinstance(created_at, datetime.datetime):
+        created_at = created_at.isoformat(timespec="seconds")
+    warnings = list(CLOUD_DNS_ADAPTER_WARNINGS)
 
     requests: list[dict] = []
     if adapter["id"].startswith("nextdns-"):
@@ -8744,7 +8921,11 @@ def build_cloud_dns_adapter_plan(
         })
 
     return {
-        "schema": "hostsfileget.cloud-dns-adapter-plan.v1",
+        "schema": CLOUD_DNS_ADAPTER_PLAN_SCHEMA,
+        "app_version": APP_VERSION,
+        "created_at": str(created_at),
+        "plan_only": True,
+        "execution": "not-run",
         "adapter_id": adapter["id"],
         "provider": adapter["provider"],
         "operation": adapter["operation"],
@@ -8753,7 +8934,14 @@ def build_cloud_dns_adapter_plan(
         "request_count": len(requests),
         "request_shape": adapter["request_shape"],
         "auth": adapter["auth"],
-        "warnings": list(CLOUD_DNS_ADAPTER_WARNINGS),
+        "warnings": warnings,
+        "handoff_contract": build_handoff_contract(
+            "cloud-dns",
+            adapter["id"],
+            plan_schema=CLOUD_DNS_ADAPTER_PLAN_SCHEMA,
+            warnings=warnings,
+            source_urls=[adapter["source_url"]],
+        ),
         "source_url": adapter["source_url"],
         "domains": domains,
         "requests": requests,
@@ -8763,6 +8951,9 @@ def build_cloud_dns_adapter_plan(
 def format_cloud_dns_adapter_report(plan: dict) -> str:
     lines = [
         "Cloud DNS Adapter Plan",
+        f"Schema: {plan.get('schema')}",
+        f"Plan only: {'yes' if plan.get('plan_only') else 'no'}",
+        f"Execution: {plan.get('execution')}",
         f"Adapter: {plan.get('adapter_id')} ({plan.get('provider')})",
         f"Operation: {plan.get('operation')}",
         f"Profile: {plan.get('profile_id')}",
@@ -8774,6 +8965,7 @@ def format_cloud_dns_adapter_report(plan: dict) -> str:
     ]
     for warning in plan.get("warnings") or CLOUD_DNS_ADAPTER_WARNINGS:
         lines.append(f"- {warning}")
+    lines.extend(format_handoff_contract(plan.get("handoff_contract")))
     return "\n".join(lines)
 
 
@@ -8802,6 +8994,11 @@ def format_cloud_dns_adapter_catalog() -> str:
     ])
     for warning in CLOUD_DNS_ADAPTER_WARNINGS:
         lines.append(f"- {warning}")
+    lines.extend([
+        "",
+        "What these adapters will not do:",
+    ])
+    lines.extend(f"- {item}" for item in HANDOFF_SURFACE_WILL_NOT["cloud-dns"])
     return "\n".join(lines)
 
 
@@ -9087,6 +9284,14 @@ def build_mobile_dns_profile_export(
         display_name=safe_display_name,
     )
     references = sorted(set(MOBILE_DNS_SOURCE_IDS) | set(target.get("references", ())))
+    handoff_contract = build_handoff_contract(
+        "mobile-dns",
+        target["id"],
+        plan_schema=MOBILE_DNS_PROFILE_EXPORT_SCHEMA,
+        warnings=warnings,
+        source_urls=target.get("source_urls", ()),
+        references=references,
+    )
     android_steps = []
     if hostname and target.get("android"):
         android_steps = [
@@ -9132,6 +9337,7 @@ def build_mobile_dns_profile_export(
             "apple": apple_steps,
         },
         "warnings": warnings,
+        "handoff_contract": handoff_contract,
         "source_urls": list(target.get("source_urls", ())),
         "references": references,
     }
@@ -9166,6 +9372,7 @@ def format_mobile_dns_profile_export(plan: dict) -> str:
     lines.extend(["", "Warnings:"])
     for warning in plan.get("warnings") or []:
         lines.append(f"- {warning}")
+    lines.extend(format_handoff_contract(plan.get("handoff_contract")))
     if plan.get("references"):
         lines.extend(["", "Roadmap source IDs:", f"- {', '.join(plan.get('references') or [])}"])
     return "\n".join(lines)
@@ -9190,6 +9397,11 @@ def format_mobile_dns_profile_catalog() -> str:
     lines.extend(["", "Warnings:"])
     for warning in MOBILE_DNS_WARNINGS:
         lines.append(f"- {warning}")
+    lines.extend([
+        "",
+        "What these exports will not do:",
+    ])
+    lines.extend(f"- {item}" for item in HANDOFF_SURFACE_WILL_NOT["mobile-dns"])
     lines.extend(["", "Roadmap source IDs:", f"- {', '.join(MOBILE_DNS_SOURCE_IDS)}"])
     return "\n".join(lines)
 
@@ -23070,10 +23282,13 @@ def _cli_integration_export(pack_id: str, input_path: str, output_path: str) -> 
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
         write_text_file_atomic(output_path, report["content"])
+        handoff_json_path = output_path + DNS_INTEGRATION_HANDOFF_JSON_SUFFIX
+        write_text_file_atomic(handoff_json_path, json.dumps(report, indent=2))
     except (OSError, ValueError) as exc:
         _cli_print(f"DNS integration export failed: {exc}")
         return 2
     _cli_print(format_dns_integration_export_summary(report, output_path))
+    _cli_print(f"Wrote DNS integration handoff JSON to {handoff_json_path}")
     return 0
 
 

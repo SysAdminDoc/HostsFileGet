@@ -7,6 +7,8 @@ HostsFileGet supports guarded, local-only adapter workflows for NextDNS and Cont
 - Import commands read local CSV exports and write local domain lists.
 - The GUI exposes the adapter catalog and CSV log importers, not live provider mutation.
 
+Generated plans include the shared `hostsfileget.handoff-contract.v1` block described in `docs/integration-handoff-contract.md`.
+
 ## Supported Adapters
 
 | Adapter | Provider | Operation | Output |
@@ -48,7 +50,7 @@ python hosts_editor.py --cloud-log-import nextdns .\nextdns-log.csv .\blocked-do
 python hosts_editor.py --cloud-log-import controld .\activity-log.csv .\blocked-domains.txt
 ```
 
-The plan JSON includes the selected adapter, provider operation, warning text, source URL, deduplicated domains, and request skeletons with placeholder auth headers such as `<NEXTDNS_API_KEY>` and `<CONTROL_D_API_TOKEN>`.
+The plan JSON uses schema `hostsfileget.cloud-dns-adapter-plan.v1` and includes the selected adapter, provider operation, warning text, source URL, deduplicated domains, `plan_only: true`, `execution: not-run`, `handoff_contract`, and request skeletons with placeholder auth headers such as `<NEXTDNS_API_KEY>` and `<CONTROL_D_API_TOKEN>`.
 
 ## GUI Workflow
 
@@ -78,6 +80,7 @@ Control D:
 ## Limits
 
 - These adapters do not convert hosts semantics into provider-only wildcard or regex syntax. F032/F033 cover DNS-compatible rule linting and richer rule tiers.
+- The `handoff_contract.will_not` section states that HostsFileGet will not store API keys, call provider APIs, convert exact hosts rows into provider-only semantics, or assign profiles/endpoints/devices.
 - Replay plans are review artifacts. A separate script or operator must decide whether and how to execute them.
 - Provider quotas, profile limits, and API behavior can change. Re-check the linked provider docs before replaying a generated plan.
 
