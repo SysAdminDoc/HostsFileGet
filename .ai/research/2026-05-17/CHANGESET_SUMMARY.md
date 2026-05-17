@@ -75,3 +75,12 @@ R003 Release Identity and Version Hygiene was implemented after R002:
 - Wired the release identity check into `.github/workflows/release.yml` and `tests/test_package_manifests.py`.
 - Expanded `docs/release.md` with a PyInstaller `GHSA-p2xp-xx3r-mffc` guard and explicit `pip-audit`, SHA-256, SBOM, and package-manager-manifest checklist items.
 - Updated `ROADMAP.md` and `PROJECT_CONTEXT.md`; the next roadmap item is R004.
+
+## 2026-05-17 R004 Implementation Follow-Up
+
+R004 Python Runtime Compatibility Matrix was implemented after R003:
+
+- Added `docs/runtime-compatibility.md` with local Python 3.12.10 / Windows 11 evidence, direct-run/test/package/TUI/launcher compatibility rows, and PyInstaller/prompt_toolkit/Python.org source links.
+- Expanded `.github/workflows/ci.yml` to validate Python 3.12 and 3.14 on Windows and print runtime details in each matrix job.
+- Updated source-health and release compile checks to include the extracted source-catalog and release-identity files.
+- Updated README, release docs, architecture notes, research log, `ROADMAP.md`, and `PROJECT_CONTEXT.md`; the next roadmap item is R005.

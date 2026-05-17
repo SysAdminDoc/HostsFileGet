@@ -4,7 +4,7 @@ HostsFileGet release builds are Windows-only until the roadmap explicitly adds a
 
 ## Inputs
 
-- Python: pinned by workflow to Python 3.12.
+- Python: release workflow pinned to Python 3.12. The compatibility matrix is documented in `docs/runtime-compatibility.md`.
 - Build dependencies: `requirements-build.txt`.
 - Security tooling: `requirements-security.txt`.
 - PyInstaller spec: `HostsFileGet.spec`.
@@ -55,6 +55,8 @@ Expected output:
 ## GitHub Actions
 
 The release workflow is `.github/workflows/release.yml`.
+
+General CI validates Python 3.12 and 3.14 on Windows; see `docs/runtime-compatibility.md`. Release builds intentionally stay on Python 3.12 until a newer PyInstaller build baseline has a dedicated release smoke pass.
 
 Curated source reachability is tracked by `.github/workflows/source-health.yml`. That workflow uploads a report artifact and does not turn transient upstream outages into normal CI failures.
 

@@ -139,6 +139,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `docs/dns-rebinding.md` | Static DNS rebinding-sensitive hosts mapping report behavior and limits |
 | `docs/safesearch-restricted-mode.md` | SafeSearch and YouTube Restricted Mode template behavior and provider limits |
 | `docs/accessibility.md` | Contrast audit, font assumptions, and manual Windows accessibility release checks |
+| `docs/runtime-compatibility.md` | Python minor-version support, CI matrix, PyInstaller, optional TUI, and launcher compatibility |
 | `docs/i18n.md` | String catalog schema, fallback behavior, contribution CLI, and localization guardrails |
 | `CLAUDE.md` | Compact architecture and gotchas snapshot for agents |
 | `default.txt` | Sample/default hosts content |

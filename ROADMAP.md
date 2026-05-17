@@ -113,7 +113,9 @@ Acceptance:
 
 ## P1 - High-Value Work
 
-### [ ] R004 - Python Runtime Compatibility Matrix
+### [x] R004 - Python Runtime Compatibility Matrix
+
+Status: completed 2026-05-17 in `docs: add runtime compatibility matrix`. Added `docs/runtime-compatibility.md` with local Python 3.12.10/Windows 11 evidence, Python 3.8-3.15 support boundaries, PyInstaller/prompt_toolkit/Python.org source links, and maintenance rules. CI now validates Python 3.12 and 3.14 on Windows and records runtime details in workflow logs; release builds remain pinned to Python 3.12.
 
 Evidence: `L2`, `D1`, `D2`, `D5`, `D7`, `D8`.
 

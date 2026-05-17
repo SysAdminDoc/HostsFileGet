@@ -547,6 +547,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - i18n string catalog and contribution workflow: `docs/i18n.md`
 - Virtualized large-list dialogs: `docs/virtualized-lists.md`
 - Sourced implementation plan: `ROADMAP.md`
+- Runtime compatibility: `docs/runtime-compatibility.md`
 - Release build notes: `docs/release.md`
 - Package manager manifests: `docs/package-managers.md`
 - Codex handoff notes: `CODEX_CHANGELOG.md`

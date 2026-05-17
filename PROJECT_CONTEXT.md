@@ -35,6 +35,7 @@ Important root files:
 - `tests/`: unit, GUI smoke, package manifest, and benchmark smoke tests.
 - `benchmarks/large_file_benchmark.py`: large-file benchmark harness.
 - `docs/`: feature, integration, export, source, and operational documentation.
+- `docs/runtime-compatibility.md`: Python minor-version support matrix and CI/release runtime policy.
 - `ARCHITECTURE.md`, `CHANGELOG.md`, `CODEX_CHANGELOG.md`, `TROUBLESHOOTING.md`, `README.md`: durable project documentation.
 - `AGENTS.md`, `CLAUDE.md`: tool/session instructions. `AGENTS.md` points to `CLAUDE.md`.
 - `ROADMAP.md`: active prioritized plan after the 2026-05-17 research reset.
@@ -95,13 +96,13 @@ At the start of future work:
 2. Check `git status --short --branch` and recent commits.
 3. Verify current app version with `python hosts_editor.py --version`.
 4. For source/catalog work, inspect `.ai/research/2026-05-17/source-health-report.json` and `data/blocklist_sources.json`.
-5. For release work, inspect `requirements-build.txt`, `requirements-security.txt`, `HostsFileGet.spec`, `.github/workflows/`, and the latest PyInstaller advisory status.
+5. For release/runtime work, inspect `docs/runtime-compatibility.md`, `requirements-build.txt`, `requirements-security.txt`, `HostsFileGet.spec`, `.github/workflows/`, and the latest PyInstaller advisory status.
 6. Run focused tests before broad tests; this repository has a large monolithic import surface.
 
 ## Recommended Next Pass
 
 Start with the remaining `ROADMAP.md` P0 items:
 
-1. Python Runtime Compatibility Matrix.
+1. Config/Profile Service Extraction.
 
-The P0 source catalog reset, source catalog extraction, and release identity hygiene are complete. R004 is the next highest-leverage item because runtime and PyInstaller compatibility need an explicit support matrix before deeper hardening work.
+The P0 source catalog reset, source catalog extraction, release identity hygiene, and runtime compatibility matrix are complete. R005 is next because profile/config behavior is a core workflow and still lives inside the monolith.

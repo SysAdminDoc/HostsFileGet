@@ -11,6 +11,12 @@ This file is a handoff note for future agents, including Claude.
 
 ## 2026-05-17 Roadmap Continuation Notes
 
+- Completed R004: Python Runtime Compatibility Matrix.
+- Added `docs/runtime-compatibility.md` with local Python 3.12.10 / Windows 11 evidence, support boundaries for Python 3.8-3.15, PyInstaller/prompt_toolkit metadata links, and release-vs-CI runtime policy.
+- Expanded `.github/workflows/ci.yml` to test Python 3.12 and 3.14 on Windows and print runtime details in each matrix job.
+- Updated source-health compile checks, README/docs links, research log, architecture notes, `ROADMAP.md`, and `PROJECT_CONTEXT.md`.
+- Next roadmap item: R005 Config/Profile Service Extraction.
+
 - Completed R003: Release Identity and Version Hygiene from the 2026-05-17 roadmap.
 - Updated the README badge and release-facing docs/examples to v2.27.0.
 - Added `scripts/check_release_identity.py`, release workflow gating, and package-manifest unit coverage for stale preview/version text, PyInstaller advisory-safe pins, `pip-audit`, and release checklist hardening terms.
