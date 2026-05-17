@@ -764,6 +764,8 @@ MIGRATION_IMPORT_MAX_TOTAL_BYTES = 50 * 1024 * 1024
 MIGRATION_IMPORT_MAX_FILES = 2_000
 FALSE_POSITIVE_REPORT_MATCH_LIMIT = 30
 WHY_BLOCKED_SUMMARY_SCHEMA = "hostsfileget.why-blocked-summary.v1"
+FALSE_POSITIVE_UPSTREAM_REPORT_SCHEMA = "hostsfileget.false-positive-upstream-report.v1"
+TEMPORARY_ALLOWLIST_ENTRY_SCHEMA = "hostsfileget.temporary-allowlist-entry.v1"
 WHY_BLOCKED_SUMMARY_SOURCE_IDS = ("C4", "O17", "S54", "S55")
 WHY_BLOCKED_SUMMARY_EVIDENCE_LIMIT = 10
 WHY_BLOCKED_SUMMARY_PROVENANCE_LIMIT = 8
@@ -6545,12 +6547,83 @@ def _whitelist_covers_domain(domain: str, whitelist_set: set[str]) -> bool:
     return domain in whitelist_set or any(domain.endswith("." + item) for item in whitelist_set)
 
 
+def build_temporary_allowlist_entry(domain: str, *, source: str = "false-positive-triage", reason: str = "", now=None) -> dict:
+    normalized, error = normalize_false_positive_domain(domain)
+    if error:
+        raise ValueError(error)
+    created_at = now or datetime.datetime.now()
+    if isinstance(created_at, datetime.datetime):
+        created_at = created_at.isoformat(timespec="seconds")
+    return {
+        "schema": TEMPORARY_ALLOWLIST_ENTRY_SCHEMA,
+        "domain": normalized,
+        "created_at": str(created_at),
+        "expires": "next-import",
+        "source": " ".join(str(source or "false-positive-triage").split())[:80],
+        "reason": " ".join(str(reason or "Temporarily allow until the next import.").split())[:180],
+    }
+
+
+def temporary_allowlist_domains(entries) -> set[str]:
+    values = entries.values() if isinstance(entries, dict) else entries
+    domains: set[str] = set()
+    for entry in values or []:
+        candidate = entry.get("domain") if isinstance(entry, dict) else entry
+        normalized, error = normalize_false_positive_domain(str(candidate or ""))
+        if not error:
+            domains.add(normalized)
+    return domains
+
+
+def _false_positive_allowlist_history(domain: str, events) -> list[dict]:
+    history: list[dict] = []
+    for event in events or []:
+        if not isinstance(event, dict):
+            continue
+        kind = str(event.get("kind") or "")
+        if kind not in {"whitelist_add", "whitelist_remove", "temporary_allow"}:
+            continue
+        if not _why_blocked_event_matches(domain, event):
+            continue
+        history.append({
+            "ts": str(event.get("ts") or ""),
+            "kind": kind,
+            "domain": str(event.get("domain") or ""),
+            "source": str(event.get("source") or ""),
+            "user": str(event.get("user") or ""),
+        })
+        if len(history) >= WHY_BLOCKED_SUMMARY_PROVENANCE_LIMIT:
+            break
+    return history
+
+
+def _false_positive_why_likely_blocked(report: dict) -> list[str]:
+    factors: list[str] = []
+    if report.get("blocked_on_lines"):
+        factors.append("The current editor has block-style hosts entries that match the domain or one of its subdomains.")
+    if report.get("source_matches"):
+        factors.append("One or more previously fetched sources contain the domain, so a future import may reintroduce it.")
+    if report.get("allowlist_history"):
+        factors.append("Local provenance shows previous allowlist or temporary-allow activity for this domain.")
+    if report.get("on_whitelist"):
+        factors.append("The persistent allowlist already covers the domain; cleaned saves should remove matching block entries unless pinned.")
+    if report.get("on_temporary_allowlist"):
+        factors.append("The domain is temporarily allowed until the next import and participates in cleaned-save filtering for this session.")
+    if report.get("is_pinned"):
+        factors.append("The domain is pinned, so it can be preserved even when an allowlist would otherwise remove it.")
+    if not factors:
+        factors.append("No local block, source, allowlist, or provenance evidence currently explains this domain.")
+    return factors
+
+
 def build_false_positive_triage_report(
     domain: str,
     editor_lines: list[str],
     whitelist_set: set | None = None,
     pinned_domains: set | None = None,
     source_corpus: dict[str, object] | None = None,
+    temporary_allowlist=None,
+    allowlist_history=None,
 ) -> dict:
     """Build a deterministic false-positive report for one candidate domain."""
     normalized, error = normalize_false_positive_domain(domain)
@@ -6560,8 +6633,11 @@ def build_false_positive_triage_report(
         "error": error,
         "blocked_on_lines": [],
         "on_whitelist": False,
+        "on_temporary_allowlist": False,
         "is_pinned": False,
         "source_matches": [],
+        "allowlist_history": [],
+        "why_likely_blocked": [],
         "recommended_actions": [],
     }
     if error:
@@ -6580,6 +6656,10 @@ def build_false_positive_triage_report(
 
     whitelist = {str(item).strip().lower().lstrip(".") for item in (whitelist_set or set()) if str(item).strip()}
     pinned = {str(item).strip().lower().lstrip(".") for item in (pinned_domains or set()) if str(item).strip()}
+    temporary_domains = temporary_allowlist_domains(temporary_allowlist)
+    on_whitelist = _whitelist_covers_domain(normalized, whitelist)
+    on_temporary = _whitelist_covers_domain(normalized, temporary_domains)
+    history = _false_positive_allowlist_history(normalized, allowlist_history)
     source_matches = find_sources_containing_domain(normalized, source_corpus or {})
 
     actions = []
@@ -6589,7 +6669,7 @@ def build_false_positive_triage_report(
             "label": "Preview-remove matching editor lines",
             "reason": "The current editor contains blocking entries for this domain.",
         })
-    if _whitelist_covers_domain(normalized, whitelist):
+    if on_whitelist:
         actions.append({
             "id": "review_whitelist",
             "label": "Review whitelist coverage",
@@ -6600,6 +6680,18 @@ def build_false_positive_triage_report(
             "id": "add_to_whitelist",
             "label": "Add to whitelist",
             "reason": "A whitelist entry keeps cleaned saves from reintroducing this block.",
+        })
+    if on_temporary:
+        actions.append({
+            "id": "review_temporary_allow",
+            "label": "Review temporary allow",
+            "reason": "The domain is allowed for cleaned saves only until the next import clears temporary allowances.",
+        })
+    elif not on_whitelist:
+        actions.append({
+            "id": "allow_until_next_import",
+            "label": "Allow until next import",
+            "reason": "Use a session-scoped allowance when you need short-term recovery without committing a permanent whitelist entry.",
         })
     if normalized in pinned:
         actions.append({
@@ -6622,11 +6714,14 @@ def build_false_positive_triage_report(
 
     report.update({
         "blocked_on_lines": blocked_on_lines,
-        "on_whitelist": _whitelist_covers_domain(normalized, whitelist),
+        "on_whitelist": on_whitelist,
+        "on_temporary_allowlist": on_temporary,
         "is_pinned": normalized in pinned,
         "source_matches": source_matches,
+        "allowlist_history": history,
         "recommended_actions": actions,
     })
+    report["why_likely_blocked"] = _false_positive_why_likely_blocked(report)
     return report
 
 
@@ -6660,9 +6755,17 @@ def format_false_positive_triage_report(
     lines.extend([
         "",
         f"Whitelist: {'YES' if report.get('on_whitelist') else 'no'}",
+        f"Temporary allow until next import: {'YES' if report.get('on_temporary_allowlist') else 'no'}",
         f"Pinned: {'YES - preserved across cleaned saves' if report.get('is_pinned') else 'no'}",
         "",
     ])
+
+    factors = report.get("why_likely_blocked") or []
+    if factors:
+        lines.append("Why likely blocked:")
+        for factor in factors:
+            lines.append(f"  - {factor}")
+        lines.append("")
 
     if source_matches:
         lines.append(f"Found in {len(source_matches)} previously-fetched source(s):")
@@ -6678,6 +6781,15 @@ def format_false_positive_triage_report(
             f"({not_yet_fetched_count} source(s) not yet fetched this session - import them to include in this lookup.)",
         ])
 
+    history = report.get("allowlist_history") or []
+    if history:
+        lines.extend(["", "Allowlist history:"])
+        for event in history:
+            lines.append(
+                f"  - {event.get('ts') or 'unknown time'} {event.get('kind')}: "
+                f"{event.get('domain') or domain} source={event.get('source') or ''}"
+            )
+
     lines.extend(["", "Recommended actions:"])
     for action in report.get("recommended_actions", []):
         lines.append(f"  - {action['label']}: {action['reason']}")
@@ -6686,6 +6798,111 @@ def format_false_positive_triage_report(
         "Copy Report creates a concise note suitable for an upstream false-positive issue.",
     ])
     return "\n".join(lines)
+
+
+def _false_positive_line_previews(report: dict) -> list[dict]:
+    previews = []
+    for item in (report.get("blocked_on_lines") or [])[:FALSE_POSITIVE_REPORT_MATCH_LIMIT]:
+        previews.append({
+            "line_no": item.get("line_no"),
+            "matched_domain": item.get("matched_domain"),
+            "line_preview": _why_blocked_line_preview(item.get("line", "")),
+        })
+    return previews
+
+
+def build_false_positive_upstream_report(
+    report: dict,
+    *,
+    source_issue_urls: dict[str, str] | None = None,
+    now=None,
+) -> dict:
+    if not report or not report.get("valid"):
+        raise ValueError(str((report or {}).get("error") or "A valid false-positive report is required."))
+    created_at = now or datetime.datetime.now()
+    if isinstance(created_at, datetime.datetime):
+        created_at = created_at.isoformat(timespec="seconds")
+    issue_urls = {
+        str(name): str(url)
+        for name, url in (source_issue_urls or {}).items()
+        if str(name).strip() and str(url).strip()
+    }
+    payload = {
+        "schema": FALSE_POSITIVE_UPSTREAM_REPORT_SCHEMA,
+        "app_version": APP_VERSION,
+        "created_at": str(created_at),
+        "domain": report["domain"],
+        "plan_only": True,
+        "auto_filed": False,
+        "network_calls": False,
+        "source_matches": list(report.get("source_matches") or []),
+        "source_issue_urls": issue_urls,
+        "why_likely_blocked": list(report.get("why_likely_blocked") or []),
+        "local_context": {
+            "blocked_line_count": len(report.get("blocked_on_lines") or []),
+            "blocked_line_previews": _false_positive_line_previews(report),
+            "on_whitelist": bool(report.get("on_whitelist")),
+            "on_temporary_allowlist": bool(report.get("on_temporary_allowlist")),
+            "is_pinned": bool(report.get("is_pinned")),
+            "allowlist_history": list(report.get("allowlist_history") or []),
+        },
+        "recommended_actions": list(report.get("recommended_actions") or []),
+        "redaction_notes": [
+            "Review source names and line previews before sharing externally.",
+            "Do not attach the full hosts file, private DNS logs, API keys, or unrelated domains.",
+            "This report is a local artifact; HostsFileGet does not file upstream issues automatically.",
+        ],
+    }
+    payload["markdown"] = format_false_positive_upstream_report(payload)
+    return payload
+
+
+def format_false_positive_upstream_report(payload: dict) -> str:
+    domain = payload.get("domain") or ""
+    context = payload.get("local_context") or {}
+    lines = [
+        f"# False-positive review: {domain}",
+        "",
+        "HostsFileGet generated this local report for manual upstream review. It did not file an issue or contact any provider.",
+        "",
+        "## Why this may be blocked",
+    ]
+    for factor in payload.get("why_likely_blocked") or []:
+        lines.append(f"- {factor}")
+    if not payload.get("why_likely_blocked"):
+        lines.append("- No local explanation was available.")
+    lines.extend([
+        "",
+        "## Local evidence",
+        f"- Blocked editor lines: {int(context.get('blocked_line_count') or 0):,}",
+        f"- Persistent allowlist coverage: {'yes' if context.get('on_whitelist') else 'no'}",
+        f"- Temporary allow until next import: {'yes' if context.get('on_temporary_allowlist') else 'no'}",
+        f"- Pinned block: {'yes' if context.get('is_pinned') else 'no'}",
+    ])
+    previews = context.get("blocked_line_previews") or []
+    if previews:
+        lines.append("")
+        lines.append("Matched line previews:")
+        for item in previews:
+            lines.append(f"- line {item.get('line_no')}: `{item.get('line_preview')}`")
+    source_matches = payload.get("source_matches") or []
+    lines.extend(["", "## Source matches"])
+    if source_matches:
+        issue_urls = payload.get("source_issue_urls") or {}
+        for name in source_matches:
+            suffix = f" ({issue_urls[name]})" if name in issue_urls else ""
+            lines.append(f"- {name}{suffix}")
+    else:
+        lines.append("- None in previously fetched sources.")
+    history = context.get("allowlist_history") or []
+    if history:
+        lines.extend(["", "## Local allowlist history"])
+        for event in history:
+            lines.append(f"- {event.get('ts') or 'unknown time'} {event.get('kind')} source={event.get('source') or ''}")
+    lines.extend(["", "## Redaction notes"])
+    for note in payload.get("redaction_notes") or []:
+        lines.append(f"- {note}")
+    return "\n".join(lines) + "\n"
 
 
 def extract_whitelist_domains_from_text(text: str) -> set[str]:
@@ -6784,8 +7001,14 @@ def _build_why_blocked_llm_prompt(summary: dict) -> str:
         f"Confidence: {summary.get('confidence') or ''}",
         f"Blocked line count: {evidence.get('blocked_line_count', 0)}",
         f"Whitelist coverage: {'yes' if evidence.get('on_whitelist') else 'no'}",
+        f"Temporary allow until next import: {'yes' if evidence.get('on_temporary_allowlist') else 'no'}",
         f"Pinned block: {'yes' if evidence.get('is_pinned') else 'no'}",
     ]
+    factors = summary.get("why_likely_blocked") or []
+    if factors:
+        lines.extend(["", "Why-likely-blocked factors:"])
+        for factor in factors[:WHY_BLOCKED_SUMMARY_EVIDENCE_LIMIT]:
+            lines.append(f"- {factor}")
     blocked_lines = evidence.get("blocked_on_lines") or []
     if blocked_lines:
         lines.extend(["", "Matched editor entries:"])
@@ -6830,6 +7053,7 @@ def build_why_blocked_summary(
     source_corpus: dict[str, object] | None = None,
     source_issue_urls: dict[str, str] | None = None,
     provenance_events: list[dict] | tuple[dict, ...] | None = None,
+    temporary_allowlist=None,
     include_llm_prompt: bool = True,
 ) -> dict:
     """Build an offline explanation of why a domain appears blocked."""
@@ -6839,6 +7063,8 @@ def build_why_blocked_summary(
         whitelist_set=whitelist_set,
         pinned_domains=pinned_domains,
         source_corpus=source_corpus,
+        temporary_allowlist=temporary_allowlist,
+        allowlist_history=provenance_events,
     )
     if not triage.get("valid"):
         return {
@@ -6900,11 +7126,13 @@ def build_why_blocked_summary(
         "blocked_line_count": len(triage.get("blocked_on_lines") or []),
         "blocked_on_lines": blocked_on_lines,
         "on_whitelist": bool(triage.get("on_whitelist")),
+        "on_temporary_allowlist": bool(triage.get("on_temporary_allowlist")),
         "is_pinned": bool(triage.get("is_pinned")),
         "source_matches": source_matches,
         "source_issue_urls": issue_urls,
         "provenance_event_count": len(provenance),
         "provenance_events": provenance,
+        "allowlist_history": list(triage.get("allowlist_history") or []),
     }
     controls = [
         "Summary generation is deterministic and local; no LLM or provider API is called.",
@@ -6924,6 +7152,7 @@ def build_why_blocked_summary(
         "primary_reason": primary_reason,
         "confidence": confidence,
         "evidence": evidence,
+        "why_likely_blocked": list(triage.get("why_likely_blocked") or []),
         "recommended_actions": list(triage.get("recommended_actions") or []),
         "controls": controls,
         "warnings": list(WHY_BLOCKED_SUMMARY_WARNINGS),
@@ -6962,15 +7191,22 @@ def format_why_blocked_summary(summary: dict) -> str:
         f"Confidence: {summary.get('confidence')}",
         f"Why: {summary.get('primary_reason')}",
         "",
+        "Why likely blocked:",
+    ]
+    for factor in summary.get("why_likely_blocked") or []:
+        lines.append(f"- {factor}")
+    lines.extend([
+        "",
         "Evidence:",
         f"- Blocked editor lines: {int(evidence.get('blocked_line_count') or 0):,}",
-    ]
+    ])
     for item in evidence.get("blocked_on_lines") or []:
         lines.append(
             f"  line {item.get('line_no')}: {item.get('line_preview')} ({item.get('matched_domain')})"
         )
     lines.extend([
         f"- Whitelist coverage: {'yes' if evidence.get('on_whitelist') else 'no'}",
+        f"- Temporary allow until next import: {'yes' if evidence.get('on_temporary_allowlist') else 'no'}",
         f"- Pinned block: {'yes' if evidence.get('is_pinned') else 'no'}",
     ])
     source_matches = evidence.get("source_matches") or []
@@ -12852,7 +13088,7 @@ def classify_source_freshness(iso_timestamp: str, now: float | None = None) -> s
 
 PROVENANCE_FILENAME = "hosts_editor_provenance.jsonl"
 PROVENANCE_MAX_BYTES = 2 * 1024 * 1024  # soft cap; rotates when exceeded
-PROVENANCE_EVENT_KINDS = frozenset({"pin", "unpin", "whitelist_add", "whitelist_remove"})
+PROVENANCE_EVENT_KINDS = frozenset({"pin", "unpin", "whitelist_add", "whitelist_remove", "temporary_allow"})
 PROVENANCE_LOG_READ_LIMIT = 5000
 PROVENANCE_LOG_DISPLAY_LIMIT = 200
 PROVENANCE_EXPORT_SCHEMA = "hostsfileget.provenance-export.v1"
@@ -14814,6 +15050,7 @@ class HostsFileEditor:
         self._last_saved_whitelist_text = ""
         self._cached_whitelist_text = None
         self._cached_whitelist_set = frozenset()
+        self._cached_temporary_allowlist_key = ()
         self.config_path = get_primary_config_path(self.CONFIG_FILENAME)
         self.last_open_dir = os.path.expanduser("~")
         self.source_adapter_plugin_catalog = load_source_adapter_plugin_catalog()
@@ -14843,6 +15080,7 @@ class HostsFileEditor:
         # Save as "keep no matter what", separate from the whitelist which
         # strips entries. Used for the Starred smart view.
         self.pinned_domains: set[str] = set()
+        self.temporary_allowlist: dict[str, dict] = {}
         # Profile schema groundwork. The current UI remains a single active
         # editor; saves mirror that editor into the active profile payload.
         self.profile_schema_version = PROFILE_SCHEMA_VERSION
@@ -17084,12 +17322,18 @@ class HostsFileEditor:
         if not hasattr(self, "whitelist_summary_label"):
             return
 
-        count = len(self._get_whitelist_set())
+        try:
+            count = len(extract_whitelist_domains_from_text(self.whitelist_text_area.get('1.0', tk.END)))
+        except tk.TclError:
+            count = len(self._get_whitelist_set())
+        temporary_count = len(self._temporary_allowlist_domains()) if hasattr(self, "temporary_allowlist") else 0
         dirty_suffix = " Unsaved edits." if self._has_unsaved_whitelist_changes() else " Saved."
         if count == 1:
             text = "1 allowlist entry." + dirty_suffix
         else:
             text = f"{count:,} allowlist entries." + dirty_suffix
+        if temporary_count:
+            text += f" {temporary_count:,} temporary until next import."
         self.whitelist_summary_label.config(text=text)
 
     def _on_manual_modified(self, event=None):
@@ -17501,9 +17745,10 @@ class HostsFileEditor:
         triage = build_false_positive_triage_report(
             domain,
             self.get_lines(),
-            self._get_whitelist_set(),
+            extract_whitelist_domains_from_text(self.whitelist_text_area.get('1.0', tk.END)),
             self.pinned_domains,
             self._source_corpus_cache,
+            temporary_allowlist=self.temporary_allowlist,
         )
         issue_urls = self._source_issue_urls_for_matches(triage.get("source_matches") or [])
         base_dir = os.path.dirname(self.config_path) or get_app_config_dir()
@@ -17512,11 +17757,12 @@ class HostsFileEditor:
         summary = build_why_blocked_summary(
             domain,
             self.get_lines(),
-            self._get_whitelist_set(),
+            extract_whitelist_domains_from_text(self.whitelist_text_area.get('1.0', tk.END)),
             self.pinned_domains,
             self._source_corpus_cache,
             source_issue_urls=issue_urls,
             provenance_events=events,
+            temporary_allowlist=self.temporary_allowlist,
         )
         self._show_text_report_dialog(
             "Why blocked summary",
@@ -18456,6 +18702,7 @@ class HostsFileEditor:
             "report": None,
             "not_yet_fetched_count": 0,
             "source_issue_urls": {},
+            "provenance_events": [],
         }
         action_buttons = {}
 
@@ -18476,23 +18723,31 @@ class HostsFileEditor:
             valid = bool(report.get("valid"))
             issue_urls = triage_state.get("source_issue_urls") or {}
             set_button_state("allow", valid and not report.get("on_whitelist"))
+            set_button_state("temporary_allow", valid and not report.get("on_whitelist") and not report.get("on_temporary_allowlist"))
             set_button_state("remove", valid and bool(report.get("blocked_on_lines")))
             set_button_state("pin", valid and not report.get("is_pinned"))
             set_button_state("unpin", valid and bool(report.get("is_pinned")))
             set_button_state("copy", valid)
+            set_button_state("export", valid)
             set_button_state("open_issue", valid and bool(issue_urls))
 
         def run_check(_event=None):
+            base_dir = os.path.dirname(self.config_path) or get_app_config_dir()
+            provenance_path = os.path.join(base_dir, PROVENANCE_FILENAME)
+            events = read_provenance_events(provenance_path, limit=500)
             report = build_false_positive_triage_report(
                 query_var.get(),
                 self.get_lines(),
-                self._get_whitelist_set(),
+                extract_whitelist_domains_from_text(self.whitelist_text_area.get('1.0', tk.END)),
                 self.pinned_domains,
                 self._source_corpus_cache,
+                temporary_allowlist=self.temporary_allowlist,
+                allowlist_history=events,
             )
             triage_state["report"] = report
             triage_state["not_yet_fetched_count"] = 0
             triage_state["source_issue_urls"] = {}
+            triage_state["provenance_events"] = events
             if not report.get("valid"):
                 write_output(format_false_positive_triage_report(report))
                 update_action_states()
@@ -18523,6 +18778,13 @@ class HostsFileEditor:
             if not report.get("valid"):
                 return
             if self._add_domain_to_whitelist(report["domain"], source="false-positive-triage"):
+                run_check()
+
+        def allow_until_import_action():
+            report = triage_state.get("report") or {}
+            if not report.get("valid"):
+                return
+            if self._add_temporary_allow(report["domain"], source="false-positive-triage"):
                 run_check()
 
         def remove_matching_lines_action():
@@ -18612,6 +18874,34 @@ class HostsFileEditor:
             except tk.TclError as exc:
                 self.update_status(f"Could not copy report: {exc}", is_error=True)
 
+        def export_report_action():
+            report = triage_state.get("report") or {}
+            if not report.get("valid"):
+                return
+            safe_domain = re.sub(r"[^A-Za-z0-9._-]+", "-", report["domain"]).strip("-") or "domain"
+            path = filedialog.asksaveasfilename(
+                title="Export false-positive report",
+                initialdir=self.last_open_dir if os.path.isdir(self.last_open_dir) else os.path.expanduser("~"),
+                initialfile=f"false-positive-{safe_domain}.json",
+                defaultextension=".json",
+                filetypes=(("JSON report", "*.json"), ("Markdown report", "*.md"), ("All files", "*.*")),
+            )
+            if not path:
+                return
+            self.last_open_dir = os.path.dirname(path)
+            try:
+                payload = build_false_positive_upstream_report(
+                    report,
+                    source_issue_urls=triage_state.get("source_issue_urls") or {},
+                )
+                if path.lower().endswith(".md"):
+                    write_text_file_atomic(path, payload["markdown"])
+                else:
+                    write_text_file_atomic(path, json.dumps(payload, indent=2))
+                self.update_status(f"Exported false-positive report for '{report['domain']}'.")
+            except (OSError, ValueError) as exc:
+                self.update_status(f"Could not export false-positive report: {exc}", is_error=True)
+
         def open_first_issue_path():
             issue_urls = triage_state.get("source_issue_urls") or {}
             if not issue_urls:
@@ -18628,6 +18918,13 @@ class HostsFileEditor:
             style="Action.TButton",
         )
         action_buttons["allow"].pack(side="left", padx=(0, 8))
+        action_buttons["temporary_allow"] = ttk.Button(
+            btn_row,
+            text="Allow Until Import",
+            command=allow_until_import_action,
+            style="Secondary.TButton",
+        )
+        action_buttons["temporary_allow"].pack(side="left", padx=(0, 8))
         action_buttons["remove"] = ttk.Button(
             btn_row,
             text="Remove Lines...",
@@ -18657,6 +18954,13 @@ class HostsFileEditor:
             style="Secondary.TButton",
         )
         action_buttons["copy"].pack(side="right", padx=(0, 8))
+        action_buttons["export"] = ttk.Button(
+            btn_row,
+            text="Export Report...",
+            command=export_report_action,
+            style="Secondary.TButton",
+        )
+        action_buttons["export"].pack(side="right", padx=(0, 8))
         action_buttons["open_issue"] = ttk.Button(
             btn_row,
             text="Open Report Path",
@@ -20224,6 +20528,41 @@ class HostsFileEditor:
             self.update_status(f"Added '{normalized}' to whitelist, but config save failed.", is_error=True)
         return True
 
+    def _temporary_allowlist_domains(self) -> set[str]:
+        return temporary_allowlist_domains(getattr(self, "temporary_allowlist", {}))
+
+    def _add_temporary_allow(self, domain: str, source: str = "false-positive-triage") -> bool:
+        try:
+            entry = build_temporary_allowlist_entry(domain, source=source)
+        except ValueError as exc:
+            self.update_status(str(exc), is_error=True)
+            return False
+        normalized = entry["domain"]
+        if normalized in getattr(self, "temporary_allowlist", {}):
+            self.update_status(f"'{normalized}' is already temporarily allowed until next import.")
+            return False
+        self.temporary_allowlist[normalized] = entry
+        self._cached_whitelist_text = None
+        self._cached_temporary_allowlist_key = ()
+        self._trigger_ui_update()
+        self._log_provenance_event({
+            "kind": "temporary_allow",
+            "domain": normalized,
+            "source": source,
+        })
+        self.update_status(f"Temporarily allowing '{normalized}' until the next import.")
+        return True
+
+    def _clear_temporary_allowlist_for_import(self) -> int:
+        count = len(getattr(self, "temporary_allowlist", {}))
+        if not count:
+            return 0
+        self.temporary_allowlist.clear()
+        self._cached_whitelist_text = None
+        self._cached_temporary_allowlist_key = ()
+        self._trigger_ui_update()
+        return count
+
     def _ctx_whitelist_domain(self):
         _, _, domain = self._ctx_line_info()
         if not domain:
@@ -21242,6 +21581,7 @@ class HostsFileEditor:
         if self.is_importing:
              self.update_status("An import is already in progress.", is_error=True)
              return
+        cleared_temporary = self._clear_temporary_allowlist_for_import()
 
         while True:
             try:
@@ -21264,7 +21604,8 @@ class HostsFileEditor:
         self.progress_bar['maximum'] = len(sources)
         
         mode = self.import_mode.get()
-        self.update_status(f"Preparing {len(sources)} source(s) for import in {mode} mode.")
+        cleared_suffix = f" Cleared {cleared_temporary} temporary allow entr{'y' if cleared_temporary == 1 else 'ies'}." if cleared_temporary else ""
+        self.update_status(f"Preparing {len(sources)} source(s) for import in {mode} mode.{cleared_suffix}")
         self.current_import_thread = threading.Thread(target=self._import_worker_thread, args=(sources, mode), daemon=True)
         self.current_import_thread.start()
 
@@ -22331,7 +22672,11 @@ class HostsFileEditor:
             
     def _get_whitelist_set(self):
         whitelist_content = self.whitelist_text_area.get('1.0', tk.END)
-        if whitelist_content == self._cached_whitelist_text:
+        temporary_key = tuple(sorted(self._temporary_allowlist_domains()))
+        if (
+            whitelist_content == self._cached_whitelist_text
+            and temporary_key == getattr(self, "_cached_temporary_allowlist_key", ())
+        ):
             return self._cached_whitelist_set
 
         whitelist = set()
@@ -22348,8 +22693,10 @@ class HostsFileEditor:
             domain, _ = _extract_domain_from_token(stripped, allow_single_label=True)
             if domain:
                 whitelist.add(domain.lstrip('.'))
+        whitelist.update(temporary_key)
 
         self._cached_whitelist_text = whitelist_content
+        self._cached_temporary_allowlist_key = temporary_key
         self._cached_whitelist_set = whitelist
         return whitelist
 

@@ -107,6 +107,6 @@ At the start of future work:
 
 Start with the next unchecked `ROADMAP.md` item:
 
-1. R010 - False-Positive and Allowlist Workflow Refresh.
+1. R011 - CLI Contract Snapshot Tests.
 
-The source catalog reset, source catalog extraction, release identity hygiene, runtime compatibility matrix, config/profile service extraction, source-health remediation assistant, release trust hardening, keyboard/documentation consistency pass, and integration handoff quality pack are complete. R010 is next because the repo already has provenance, source metadata, allowlist, and why-blocked foundations; the remaining value is tying them into a safer temporary-allow and upstream-report workflow.
+The source catalog reset, source catalog extraction, release identity hygiene, runtime compatibility matrix, config/profile service extraction, source-health remediation assistant, release trust hardening, keyboard/documentation consistency pass, integration handoff quality pack, and false-positive/allowlist workflow refresh are complete. R011 is next because the CLI surface is broad and now needs stable contract snapshots for high-risk commands.

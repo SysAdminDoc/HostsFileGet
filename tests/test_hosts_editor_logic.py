@@ -25,7 +25,9 @@ from hosts_editor import (
     DNS_INTEGRATION_EXPORT_SCHEMA,
     DNS_INTEGRATION_HANDOFF_JSON_SUFFIX,
     DNS_REWRITE_PLAN_SCHEMA,
+    FALSE_POSITIVE_UPSTREAM_REPORT_SCHEMA,
     HANDOFF_CONTRACT_SCHEMA,
+    TEMPORARY_ALLOWLIST_ENTRY_SCHEMA,
     CT_WATCHDOG_PLAN_SCHEMA,
     CTI_ENRICHMENT_PLAN_SCHEMA,
     MOBILE_DNS_PROFILE_EXPORT_SCHEMA,
@@ -58,6 +60,7 @@ from hosts_editor import (
     build_accessibility_audit_report,
     build_adblock_syntax_report,
     build_false_positive_triage_report,
+    build_false_positive_upstream_report,
     build_filter_builder_report,
     build_idn_homograph_report,
     build_i18n_catalog_report,
@@ -169,6 +172,7 @@ from hosts_editor import (
     build_cti_enrichment_plan,
     build_tls_certificate_preview_plan,
     build_why_blocked_summary,
+    build_temporary_allowlist_entry,
     build_portable_bundle_readme,
     build_scheduler_activity_report,
     build_scheduler_update_command,
@@ -198,6 +202,7 @@ from hosts_editor import (
     format_entry_provenance_report,
     format_provenance_log_report,
     format_false_positive_triage_report,
+    format_false_positive_upstream_report,
     format_accessibility_audit_report,
     format_adblock_syntax_report,
     format_block_page_server_report,
@@ -339,6 +344,7 @@ from hosts_editor import (
     strip_lines_by_category,
     summarize_clean_changes,
     summarize_source_health_results,
+    temporary_allowlist_domains,
     translate_message,
     set_active_profile_in_config,
     update_active_profile_snapshot,
@@ -1683,17 +1689,25 @@ class HostsEditorLogicTests(unittest.TestCase):
             source_corpus={
                 "one": {"name": "Example Source", "text": "0.0.0.0 ads.example\n"},
             },
+            temporary_allowlist={"ads.example": build_temporary_allowlist_entry("ads.example", now=datetime.datetime(2026, 5, 17, 9, 0, 0))},
+            allowlist_history=[
+                {"ts": "2026-05-17T09:00:00", "kind": "temporary_allow", "domain": "ads.example", "source": "test"},
+            ],
         )
 
         self.assertTrue(report["valid"])
         self.assertEqual(report["domain"], "ads.example")
         self.assertTrue(report["on_whitelist"])
+        self.assertTrue(report["on_temporary_allowlist"])
         self.assertTrue(report["is_pinned"])
         self.assertEqual(len(report["blocked_on_lines"]), 2)
         self.assertEqual(report["source_matches"], ["Example Source"])
+        self.assertEqual(len(report["allowlist_history"]), 1)
+        self.assertTrue(any("temporarily allowed" in item for item in report["why_likely_blocked"]))
         action_ids = {action["id"] for action in report["recommended_actions"]}
         self.assertIn("remove_matching_lines", action_ids)
         self.assertIn("unpin_domain", action_ids)
+        self.assertIn("review_temporary_allow", action_ids)
         formatted = format_false_positive_triage_report(
             report,
             not_yet_fetched_count=2,
@@ -1701,7 +1715,51 @@ class HostsEditorLogicTests(unittest.TestCase):
         )
         self.assertIn("BLOCKED in current editor", formatted)
         self.assertIn("Whitelist: YES", formatted)
+        self.assertIn("Temporary allow until next import: YES", formatted)
+        self.assertIn("Allowlist history", formatted)
         self.assertIn("report: https://github.com/owner/repo/issues", formatted)
+
+    def test_false_positive_upstream_report_is_exportable_without_auto_filing(self):
+        report = build_false_positive_triage_report(
+            "ads.example",
+            ["0.0.0.0 ads.example"],
+            source_corpus={"one": {"name": "Example Source", "text": "0.0.0.0 ads.example\n"}},
+        )
+        payload = build_false_positive_upstream_report(
+            report,
+            source_issue_urls={"Example Source": "https://github.com/owner/repo/issues"},
+            now=datetime.datetime(2026, 5, 17, 10, 0, 0),
+        )
+        rendered = format_false_positive_upstream_report(payload)
+
+        self.assertEqual(payload["schema"], FALSE_POSITIVE_UPSTREAM_REPORT_SCHEMA)
+        self.assertTrue(payload["plan_only"])
+        self.assertFalse(payload["auto_filed"])
+        self.assertFalse(payload["network_calls"])
+        self.assertIn("Example Source", payload["markdown"])
+        self.assertIn("https://github.com/owner/repo/issues", rendered)
+        self.assertIn("did not file an issue", rendered)
+
+    def test_temporary_allowlist_entry_is_cleaned_save_input_until_import(self):
+        entry = build_temporary_allowlist_entry(
+            "Ads.Example",
+            source="unit-test",
+            now=datetime.datetime(2026, 5, 17, 11, 0, 0),
+        )
+        domains = temporary_allowlist_domains({entry["domain"]: entry})
+        cleaned, stats = _get_canonical_cleaned_output_and_stats(
+            ["0.0.0.0 ads.example", "0.0.0.0 tracker.example"],
+            domains,
+            pinned_domains=set(),
+        )
+
+        self.assertEqual(entry["schema"], TEMPORARY_ALLOWLIST_ENTRY_SCHEMA)
+        self.assertEqual(entry["domain"], "ads.example")
+        self.assertEqual(entry["expires"], "next-import")
+        self.assertEqual(domains, {"ads.example"})
+        self.assertNotIn("0.0.0.0 ads.example", cleaned)
+        self.assertIn("0.0.0.0 tracker.example", cleaned)
+        self.assertEqual(stats["removed_whitelist"], 1)
 
     def test_false_positive_triage_rejects_single_label_domains(self):
         domain, error = normalize_false_positive_domain("localhost")
@@ -1725,8 +1783,10 @@ class HostsEditorLogicTests(unittest.TestCase):
             source_issue_urls={"Example Source": "https://github.com/owner/repo/issues"},
             provenance_events=[
                 {"ts": "2026-05-12T10:00:00", "kind": "pin", "domain": "ads.example", "source": "test"},
+                {"ts": "2026-05-12T10:00:30", "kind": "temporary_allow", "domain": "ads.example", "source": "test"},
                 {"ts": "2026-05-12T10:01:00", "kind": "unpin", "domain": "other.example", "source": "test"},
             ],
+            temporary_allowlist={"ads.example": build_temporary_allowlist_entry("ads.example", now=datetime.datetime(2026, 5, 12, 10, 0, 30))},
         )
         rendered = format_why_blocked_summary(report)
 
@@ -1739,12 +1799,15 @@ class HostsEditorLogicTests(unittest.TestCase):
         self.assertEqual(report["confidence"], "direct-hosts-entry")
         self.assertEqual(report["evidence"]["blocked_line_count"], 2)
         self.assertTrue(report["evidence"]["on_whitelist"])
+        self.assertTrue(report["evidence"]["on_temporary_allowlist"])
         self.assertTrue(report["evidence"]["is_pinned"])
         self.assertEqual(report["evidence"]["source_matches"], ["Example Source"])
         self.assertEqual(report["evidence"]["source_issue_urls"]["Example Source"], "https://github.com/owner/repo/issues")
-        self.assertEqual(len(report["evidence"]["provenance_events"]), 1)
+        self.assertEqual(len(report["evidence"]["provenance_events"]), 2)
+        self.assertTrue(report["why_likely_blocked"])
         prompt = report["llm_handoff"]["prompt_text"]
         self.assertIn("ads.example", prompt)
+        self.assertIn("Temporary allow until next import: yes", prompt)
         self.assertIn("Use only the evidence below", prompt)
         self.assertNotIn("192.168.1.10 ads.example", prompt)
         self.assertIn("Why Blocked Summary", rendered)

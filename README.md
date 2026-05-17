@@ -66,7 +66,7 @@ It is designed for people who work with large blocklists, external feed imports,
   - offline why-blocked summaries with review-only LLM handoff prompts and no provider calls
   - DNS rebinding protection checks for external-looking domains mapped to private, local, loopback, link-local, ULA, or CGNAT ranges
   - SafeSearch and restricted-mode template plans that separate hosts-reviewable search mappings from DNS CNAME handoffs
-  - false-positive triage for whitelist, pin, source-match, and upstream report decisions
+  - false-positive triage for whitelist, temporary allow-until-import, pin, source-match, and upstream report decisions
   - entry provenance view for import-section ownership, source matches, and local audit events
   - provenance log filters and CSV/JSONL export for local audit review
 - Export adapters:

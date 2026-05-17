@@ -134,3 +134,12 @@ R009 Integration Handoff Quality Pack was implemented after R008:
 - Added explicit "What this will not do" contract sections to generated reports, catalogs, managed package readmes, and target field maps where the parent artifact crosses hosts-file semantics into DNS/provider/mobile/router/managed-deployment tooling.
 - Added `docs/integration-handoff-contract.md` and updated DNS/cloud/mobile/router/NRPT/managed docs plus README.
 - Updated `ROADMAP.md`, `CHANGELOG.md`, `CODEX_CHANGELOG.md`, and `PROJECT_CONTEXT.md`; the next roadmap item is R010.
+
+## 2026-05-17 R010 Implementation Follow-Up
+
+R010 False-Positive and Allowlist Workflow Refresh was implemented after R009:
+
+- Added deterministic `why_likely_blocked` factors to false-positive triage and why-blocked summaries, combining editor matches, source matches, provenance, allowlist history, temporary allow state, and pins.
+- Added local upstream false-positive exports with schema `hostsfileget.false-positive-upstream-report.v1`, embedded Markdown, redaction notes, and explicit `auto_filed: false`.
+- Added session-scoped temporary allow entries with schema `hostsfileget.temporary-allowlist-entry.v1`; temporary domains participate in cleaned-save filtering and clear automatically when the next source import starts.
+- Updated `docs/false-positive-triage.md`, `docs/why-blocked-summaries.md`, changelogs, `ROADMAP.md`, and `PROJECT_CONTEXT.md`; the next roadmap item is R011.

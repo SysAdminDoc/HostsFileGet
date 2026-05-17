@@ -57,6 +57,10 @@ The modularization arc is active and coherent. The next likely layer is source c
 
 After the R009 continuation pass, integration artifacts that cross the Windows hosts-file boundary carry shared `hostsfileget.handoff-contract.v1` metadata. Covered surfaces are DNS integration exports, cloud DNS adapter plans, NRPT policy exports, router/gateway bundles, mobile DNS profile bundles, and managed package exports. DNS interoperability exports also write an `OUTPUT.handoff.json` sidecar using schema `hostsfileget.dns-integration-export.v1`.
 
+## R010 Post-State Note
+
+After the R010 continuation pass, false-positive triage and why-blocked summaries include `why_likely_blocked` factors. The Check Domain workflow can add a session-scoped temporary allow until next import, and it can export manual upstream report artifacts with schema `hostsfileget.false-positive-upstream-report.v1`.
+
 ## Source Manifest
 
 `data/blocklist_sources.json` contains:
