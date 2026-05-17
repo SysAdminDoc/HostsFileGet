@@ -203,3 +203,12 @@ Local implementation evidence recorded during R005:
 - `hostsfileget/config_profiles.py` now owns config/profile service helpers that were previously inline in `hosts_editor.py`.
 - `hosts_editor.py` reduced to roughly 24,912 lines while preserving compatibility re-exports.
 - Focused validation covered direct `config_profiles` behavior, `hosts_editor` re-export identity, portable config path resolution, config migration, profile switching, declarative profile round trips, encrypted profile sync payload application, share patch application, and source-catalog compatibility.
+
+## R006 Source Health UX Follow-Up
+
+Local implementation evidence recorded during R006:
+
+- `hostsfileget/source_catalog.py` now builds and formats grouped source-health remediation reports.
+- `hosts_editor.py` exposes **Tools > Source Health Remediation...** for running bounded curated-source checks, copying replacement-search terms, opening upstream issue URLs where the source URL maps to GitHub/GitLab, exporting JSON, and pre-excluding failed URLs from the next batch-import review.
+- `BulkSelectionDialog` starts remediation-excluded URLs unselected and keeps bulk select-all from reselecting them automatically.
+- Focused validation covered remediation grouping for current `diagnostic_class` rows and legacy diagnostic text fallback rows.

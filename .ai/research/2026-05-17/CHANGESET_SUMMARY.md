@@ -94,3 +94,13 @@ R005 Config/Profile Service Extraction was implemented after R004:
 - Added `tests/test_config_profiles.py` for focused module coverage and kept existing profile/config behavior coverage in `tests/test_hosts_editor_logic.py`.
 - Updated CI/source-health compile checks to include the new module and tests.
 - Updated architecture notes, changelogs, `ROADMAP.md`, and `PROJECT_CONTEXT.md`; the next roadmap item is R006.
+
+## 2026-05-17 R006 Implementation Follow-Up
+
+R006 Source Health UX and Remediation Assistant was implemented after R005:
+
+- Added grouped source-health remediation report helpers to `hostsfileget/source_catalog.py`.
+- Added **Tools > Source Health Remediation...** in `hosts_editor.py` for bounded checks, grouped output, replacement-search copy, upstream issue URL opening, JSON export, and reviewed failed-source exclusion.
+- Updated the batch source picker so remediation-excluded failed URLs start unselected and bulk select-all keeps them excluded.
+- Added focused source-catalog tests for grouped remediation reports, including fallback handling for legacy diagnostics without `diagnostic_class`.
+- Updated source-health docs, changelogs, `ROADMAP.md`, and `PROJECT_CONTEXT.md`; the next roadmap item is R007.

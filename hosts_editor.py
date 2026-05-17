@@ -179,6 +179,7 @@ from hostsfileget.source_catalog import (
     SourceRecord,
     _coerce_source_manifest_schema_version,
     build_source_health_diff,
+    build_source_health_remediation_report,
     build_source_health_report,
     build_source_manifest_index,
     check_source_health_record,
@@ -188,6 +189,7 @@ from hostsfileget.source_catalog import (
     format_source_bundle_catalog,
     format_source_bundle_report,
     format_source_health_diff,
+    format_source_health_remediation_report,
     format_source_lifecycle_details,
     format_source_lifecycle_label,
     iter_curated_source_records,
@@ -1372,6 +1374,11 @@ class BulkSelectionDialog(tk.Toplevel):
         self.filter_var.trace_add("write", lambda *_args: self._rebuild_source_rows())
         self._all_sources: list[tuple[str, str, str, str, dict]] = []
         self._disabled_source_keys: set[tuple[str, str]] = set()
+        self._source_health_excluded_keys: set[tuple[str, str]] = set()
+        health_excluded_urls = {
+            normalize_custom_source_url(url) or str(url).strip()
+            for url in getattr(editor, "_source_health_excluded_urls", set())
+        }
         self._selection_state: dict[tuple[str, str], bool] = {}
         for category, sources in blocklist_sources.items():
             for source in sources:
@@ -1379,8 +1386,12 @@ class BulkSelectionDialog(tk.Toplevel):
                 metadata = source_entry_metadata(source)
                 self._all_sources.append((category, name, url, tooltip, metadata))
                 key = (name, url)
+                normalized_url = normalize_custom_source_url(url) or str(url).strip()
                 if source_lifecycle_state(source) == "retired":
                     self._disabled_source_keys.add(key)
+                    self._selection_state[key] = False
+                elif normalized_url in health_excluded_urls:
+                    self._source_health_excluded_keys.add(key)
                     self._selection_state[key] = False
                 else:
                     self._selection_state[key] = True
@@ -1388,7 +1399,13 @@ class BulkSelectionDialog(tk.Toplevel):
             name = src["name"]
             url = src["url"]
             self._all_sources.append(("Custom Sources", name, url, "Custom source", {"lifecycle": "active"}))
-            self._selection_state[(name, url)] = True
+            key = (name, url)
+            normalized_url = normalize_custom_source_url(url) or str(url).strip()
+            if normalized_url in health_excluded_urls:
+                self._source_health_excluded_keys.add(key)
+                self._selection_state[key] = False
+            else:
+                self._selection_state[key] = True
         self._visible_source_keys: list[tuple[str, str]] = []
 
         header_frame = ttk.Frame(self, padding=(18, 18, 18, 0))
@@ -1573,6 +1590,15 @@ class BulkSelectionDialog(tk.Toplevel):
                 wraplength=600,
                 justify="left",
             ).pack(anchor="w", pady=(5, 0))
+        if key in self._source_health_excluded_keys:
+            ttk.Label(
+                frame,
+                text="Excluded by the latest source-health remediation review.",
+                style="SectionBody.TLabel",
+                foreground=PALETTE["yellow"],
+                wraplength=600,
+                justify="left",
+            ).pack(anchor="w", pady=(5, 0))
         ttk.Label(
             frame,
             text=tooltip,
@@ -1605,18 +1631,19 @@ class BulkSelectionDialog(tk.Toplevel):
         selected_count = sum(1 for selected in self._selection_state.values() if selected)
         visible_selected = sum(1 for key in self._visible_source_keys if self._selection_state.get(key))
         if shown == total:
-            self.selection_summary_label.config(text=f"{selected_count} of {total} source(s) selected.")
+            text = f"{selected_count} of {total} source(s) selected."
         else:
-            self.selection_summary_label.config(
-                text=f"{selected_count} of {total} selected overall. {visible_selected} of {shown} currently shown."
-            )
+            text = f"{selected_count} of {total} selected overall. {visible_selected} of {shown} currently shown."
+        if self._source_health_excluded_keys:
+            text += f" {len(self._source_health_excluded_keys)} failed source(s) excluded from the latest health report."
+        self.selection_summary_label.config(text=text)
 
     def select_all(self):
         targets = self._visible_source_keys if self._visible_source_keys else (
             [] if self.filter_var.get().strip() else list(self._selection_state.keys())
         )
         for key in targets:
-            if key not in self._disabled_source_keys:
+            if key not in self._disabled_source_keys and key not in self._source_health_excluded_keys:
                 self._selection_state[key] = True
         self._clear_feedback()
         self._rebuild_source_rows()
@@ -14590,6 +14617,8 @@ class HostsFileEditor:
         self.source_metrics_history: dict[str, list[dict]] = {}
         self.filter_query_history: list[str] = []
         self.watch_expressions: list[dict] = []
+        self._latest_source_health_report: dict | None = None
+        self._source_health_excluded_urls: set[str] = set()
         self.source_cache_dir = get_source_cache_dir()
         self._source_metadata_dirty = False
         self._preferred_block_sink = "0.0.0.0"
@@ -16112,6 +16141,7 @@ class HostsFileEditor:
         tools_menu.add_command(label="Filter Builder...", command=self.show_filter_builder)
         tools_menu.add_command(label="Watch Expressions...", command=self.show_watch_expressions)
         tools_menu.add_command(label="Sources Report...", command=self.show_sources_report)
+        tools_menu.add_command(label="Source Health Remediation...", command=self.show_source_health_remediation)
         tools_menu.add_command(label="Source Freshness & Growth...", command=self.show_source_metrics_report)
         tools_menu.add_command(label="Goto Anything...", command=self.show_goto_anything)
         tools_menu.add_command(label="Find and Replace...", command=self.show_find_replace_dialog)
@@ -19198,6 +19228,231 @@ class HostsFileEditor:
         btn_row = ttk.Frame(dialog)
         btn_row.pack(fill="x", padx=20, pady=(0, 20))
         ttk.Button(btn_row, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right")
+        dialog.grab_set()
+
+    def show_source_health_remediation(self):
+        dialog = tk.Toplevel(self.root)
+        self._configure_modal_window(
+            dialog,
+            title="Source Health Remediation",
+            size="1040x760",
+            min_size=(820, 620),
+        )
+
+        intro, _ = self._create_sidebar_card(
+            dialog,
+            "Source health remediation",
+            "Run a bounded curated-source health check, group failures by likely cause, and prepare reviewed maintenance actions.",
+            accent=PALETTE["yellow"],
+        )
+        ttk.Label(
+            intro,
+            text=(
+                "This checks curated sources only. It does not import feeds, edit the manifest, "
+                "or write the hosts file."
+            ),
+            style="SectionBody.TLabel",
+            wraplength=900,
+            justify="left",
+        ).pack(anchor="w")
+
+        body = scrolledtext.ScrolledText(dialog, wrap=tk.WORD)
+        self._style_code_surface(body, font_spec=self.mono_small_font)
+        body.pack(expand=True, fill="both", padx=20, pady=(0, 12))
+
+        state = {
+            "health_report": getattr(self, "_latest_source_health_report", None),
+            "remediation_report": None,
+            "running": False,
+        }
+
+        def dialog_alive() -> bool:
+            try:
+                return bool(dialog.winfo_exists())
+            except tk.TclError:
+                return False
+
+        def write_output(text: str):
+            if not dialog_alive():
+                return
+            body.configure(state="normal")
+            body.delete("1.0", tk.END)
+            body.insert(tk.END, text)
+            body.configure(state="disabled")
+
+        def current_remediation_report() -> dict | None:
+            health_report = state.get("health_report")
+            if not isinstance(health_report, dict):
+                return None
+            remediation_report = build_source_health_remediation_report(health_report)
+            state["remediation_report"] = remediation_report
+            return remediation_report
+
+        def render_report():
+            remediation_report = current_remediation_report()
+            if not remediation_report:
+                write_output(
+                    "No source-health report is loaded yet.\n\n"
+                    "Click Run Health Check to fetch bounded samples and group remediation items."
+                )
+                return
+            write_output(format_source_health_remediation_report(remediation_report))
+            failed_count = len(remediation_report.get("failed_urls") or [])
+            exclude_btn.configure(state="normal" if failed_count else "disabled")
+            copy_btn.configure(state="normal" if remediation_report.get("search_terms") else "disabled")
+            open_issues_btn.configure(state="normal" if issue_urls_from_report() else "disabled")
+            export_btn.configure(state="normal")
+
+        def set_running(running: bool):
+            if not dialog_alive():
+                return
+            state["running"] = running
+            run_btn.configure(state="disabled" if running else "normal")
+            progress_label.configure(
+                text=(
+                    "Checking curated sources with bounded samples..."
+                    if running else
+                    "Ready."
+                )
+            )
+
+        def finish_health_check(report: dict | None = None, error: Exception | None = None):
+            if not dialog_alive():
+                return
+            set_running(False)
+            if error is not None:
+                write_output(f"Source health check failed:\n\n{error}")
+                self.update_status(f"Source health remediation failed: {error}", is_error=True)
+                return
+            state["health_report"] = report
+            self._latest_source_health_report = report
+            render_report()
+            summary = report.get("summary", {}) if isinstance(report, dict) else {}
+            self.update_status(
+                "Source health remediation ready: "
+                f"{summary.get('warning', 0)} warning, "
+                f"{summary.get('failed', 0)} failed, "
+                f"{summary.get('retired', 0)} retired."
+            )
+
+        def run_health_check():
+            if state.get("running"):
+                return
+            set_running(True)
+            write_output("Running source health check...\n\nNo files are being changed.")
+
+            def worker():
+                try:
+                    report = build_source_health_report(
+                        self.BLOCKLIST_SOURCES,
+                        timeout=SOURCE_HEALTH_TIMEOUT_SECONDS,
+                        max_workers=SOURCE_HEALTH_DEFAULT_WORKERS,
+                    )
+                    self._safe_after(0, lambda: finish_health_check(report=report))
+                except Exception as exc:
+                    self._safe_after(0, lambda exc=exc: finish_health_check(error=exc))
+
+            thread = threading.Thread(target=worker, name="source-health-remediation", daemon=True)
+            thread.start()
+
+        def copy_search_terms():
+            remediation_report = current_remediation_report()
+            terms = remediation_report.get("search_terms") if remediation_report else []
+            if not terms:
+                self.update_status("No source-health replacement search terms to copy.", is_error=True)
+                return
+            text = "\n".join(terms)
+            try:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(text)
+                self.update_status(f"Copied {len(terms)} source-health search term(s).")
+            except tk.TclError as exc:
+                self.update_status(f"Could not copy source-health search terms: {exc}", is_error=True)
+
+        def issue_urls_from_report() -> list[str]:
+            remediation_report = current_remediation_report()
+            urls: list[str] = []
+            seen: set[str] = set()
+            for group in (remediation_report or {}).get("groups", []):
+                for source in group.get("sources", []):
+                    issue_url = source_trust_report_url(source.get("url", ""))
+                    if issue_url and issue_url not in seen:
+                        seen.add(issue_url)
+                        urls.append(issue_url)
+            return urls
+
+        def open_issue_urls():
+            urls = issue_urls_from_report()
+            if not urls:
+                self.update_status("No known upstream issue URLs were found in the source-health report.", is_error=True)
+                return
+            for url in urls[:12]:
+                webbrowser.open(url)
+            self.update_status(f"Opened {min(len(urls), 12)} upstream issue URL(s).")
+
+        def export_report():
+            health_report = state.get("health_report")
+            if not isinstance(health_report, dict):
+                self.update_status("Run a source-health check before exporting.", is_error=True)
+                return
+            remediation_report = current_remediation_report()
+            path = filedialog.asksaveasfilename(
+                parent=dialog,
+                title="Export Source Health Remediation",
+                defaultextension=".json",
+                filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+            )
+            if not path:
+                return
+            payload = {
+                "health_report": health_report,
+                "remediation_report": remediation_report,
+            }
+            try:
+                write_text_file_atomic(path, json.dumps(payload, indent=2))
+            except OSError as exc:
+                self.update_status(f"Could not export source-health remediation: {exc}", is_error=True)
+                return
+            self.update_status(f"Exported source-health remediation report to {path}.")
+
+        def exclude_failed_sources():
+            remediation_report = current_remediation_report()
+            failed_urls = set((remediation_report or {}).get("failed_urls") or [])
+            if not failed_urls:
+                self.update_status("No failed source URLs are available to exclude.", is_error=True)
+                return
+            normalized = {
+                normalize_custom_source_url(url) or str(url).strip()
+                for url in failed_urls
+                if str(url).strip()
+            }
+            self._source_health_excluded_urls = normalized
+            self.update_status(
+                f"Excluded {len(normalized)} failed source(s) from the next batch import dialog."
+            )
+
+        btn_row = ttk.Frame(dialog)
+        btn_row.pack(fill="x", padx=20, pady=(0, 20))
+        progress_label = ttk.Label(btn_row, text="Ready.", foreground=PALETTE["subtext"])
+        progress_label.pack(side="left")
+        run_btn = ttk.Button(btn_row, text="Run Health Check", command=run_health_check, style="Action.TButton")
+        run_btn.pack(side="right", padx=(8, 0))
+        ttk.Button(btn_row, text="Close", command=dialog.destroy, style="Secondary.TButton").pack(side="right", padx=(8, 0))
+        export_btn = ttk.Button(btn_row, text="Export JSON", command=export_report, style="Secondary.TButton")
+        export_btn.pack(side="right", padx=(8, 0))
+        exclude_btn = ttk.Button(btn_row, text="Exclude Failed Next Import", command=exclude_failed_sources, style="Secondary.TButton")
+        exclude_btn.pack(side="right", padx=(8, 0))
+        open_issues_btn = ttk.Button(btn_row, text="Open Issue URLs", command=open_issue_urls, style="Secondary.TButton")
+        open_issues_btn.pack(side="right", padx=(8, 0))
+        copy_btn = ttk.Button(btn_row, text="Copy Search Terms", command=copy_search_terms, style="Secondary.TButton")
+        copy_btn.pack(side="right", padx=(8, 0))
+
+        export_btn.configure(state="disabled")
+        exclude_btn.configure(state="disabled")
+        open_issues_btn.configure(state="disabled")
+        copy_btn.configure(state="disabled")
+        render_report()
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
         dialog.grab_set()
 
     def show_source_metrics_report(self):

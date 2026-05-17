@@ -28,7 +28,7 @@ HostsFileGet should not present itself as:
 
 Important root files:
 
-- `hosts_editor.py`: main GUI/CLI module, still roughly 24.9K lines after the 2026-05-17 source-catalog and config/profile extractions.
+- `hosts_editor.py`: main GUI/CLI module, still roughly 25.2K lines after the 2026-05-17 source-catalog, config/profile, and source-health UX work.
 - `hostsfileget/`: package modules extracted from the monolith.
 - `PythonLauncher.ps1`: WPF launcher/bootstrapper for Windows users.
 - `data/blocklist_sources.json`: curated source manifest, 177 sources across 10 categories and 6 bundles.
@@ -66,7 +66,7 @@ Extracted package modules observed:
 ## Current Risks
 
 - `hosts_editor.py` remains too large and owns too many workflows, which raises regression risk during feature work.
-- `data/blocklist_sources.json` has lifecycle metadata from the 2026-05-17 source-health reset. The baseline found 122 healthy, 21 warning, and 34 failed sources; hard-gone sources are now retained as `retired` and removed from built-in bundles.
+- `data/blocklist_sources.json` has lifecycle metadata from the 2026-05-17 source-health reset. The baseline found 122 healthy, 21 warning, and 34 failed sources; hard-gone sources are now retained as `retired` and removed from built-in bundles. The GUI source-health remediation assistant now groups these issues and lets users pre-exclude failed sources from the next batch-import review.
 - Release identity now has an explicit guard: `scripts/check_release_identity.py` checks README badge/version text, release-facing examples, PyInstaller advisory-safe pins, `pip-audit`, and release workflow gating.
 - The project has many plan-only integrations. Future work must continue distinguishing reviewed handoff artifacts from active external writers.
 - Python/PyInstaller compatibility should be stated explicitly as Python 3.14 and PyInstaller 6.x evolve.
@@ -105,6 +105,6 @@ At the start of future work:
 
 Start with the next `ROADMAP.md` P1 item:
 
-1. Source Health UX and Remediation Assistant.
+1. Release Trust Hardening.
 
-The source catalog reset, source catalog extraction, release identity hygiene, runtime compatibility matrix, and config/profile service extraction are complete. R006 is next because the source-health data is now actionable but still lacks a routine maintenance UX.
+The source catalog reset, source catalog extraction, release identity hygiene, runtime compatibility matrix, config/profile service extraction, and source-health remediation assistant are complete. R007 is next because release provenance and repeatable local artifact verification are the highest remaining safety lever for a Windows app that edits a protected system file.
