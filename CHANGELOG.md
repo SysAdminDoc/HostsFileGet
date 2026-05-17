@@ -4,6 +4,11 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**False-positive and temporary allow workflow**
+- Added deterministic `why_likely_blocked` factors to false-positive triage and why-blocked summaries using editor matches, fetched-source matches, local provenance, allowlist history, temporary allow state, and pins.
+- Added schema `hostsfileget.false-positive-upstream-report.v1` for local JSON/Markdown false-positive report exports that are suitable for manual upstream review and never auto-file issues.
+- Added session-scoped temporary allow entries with schema `hostsfileget.temporary-allowlist-entry.v1`; they participate in cleaned-save filtering and are cleared when the next source import starts.
+
 **Integration handoff contracts**
 - Added `hostsfileget.handoff-contract.v1` metadata to DNS integration exports, cloud DNS adapter plans, NRPT policy exports, router/gateway bundles, mobile DNS profile bundles, and managed package export bundles.
 - DNS interoperability exports now keep writing the requested provider list file and also write `OUTPUT.handoff.json` using schema `hostsfileget.dns-integration-export.v1`.

@@ -43,5 +43,5 @@ Recommended order:
 
 ## Implementation Notes
 
-- R001-R009 have been implemented as of the 2026-05-17 autonomous continuation passes.
-- R010 is the next unchecked roadmap item and should build on existing provenance, allowlist, and why-blocked foundations.
+- R001-R010 have been implemented as of the 2026-05-17 autonomous continuation passes.
+- R011 is the next unchecked roadmap item and should focus on stable CLI contract snapshots for high-risk commands.

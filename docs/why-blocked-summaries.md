@@ -10,10 +10,12 @@ The feature is intentionally local and deterministic. It does not call an LLM AP
 
 - matching block-style hosts entries in the input file
 - whitelist coverage from an optional whitelist file
+- temporary allow-until-next-import state when called from the GUI
 - pinned status when called from the GUI
 - previously fetched source matches when called from the GUI
 - upstream report URLs when source metadata is available
 - local provenance events when called from the GUI
+- why-likely-blocked factors that combine local lines, source metadata, allowlist history, temporary allows, and pins
 - the same recommended actions used by false-positive triage
 
 The JSON schema is:
@@ -65,6 +67,8 @@ This boundary exists because LLM provider logs or application state may retain p
 - `evidence.blocked_on_lines`: bounded line previews from the local input
 - `evidence.source_matches`: fetched source names, when available
 - `evidence.provenance_events`: bounded local audit events, when available
+- `evidence.on_temporary_allowlist`: whether the GUI has a temporary allow entry active for the domain
+- `why_likely_blocked`: deterministic local explanation factors
 - `llm_handoff`: prompt text plus redaction notes
 
 ## Related Tools

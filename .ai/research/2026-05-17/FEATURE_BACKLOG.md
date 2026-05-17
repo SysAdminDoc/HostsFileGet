@@ -44,6 +44,8 @@ This is the raw harvested idea pool before final prioritization. Source IDs map 
 | B021 | Add profile comparison/diff view | `G3`, `C1`, `C3` | Common profile-management need. |
 | B022 | Add docs-first "what hosts can and cannot do" landing section | `S6`-`S11`, `C8` | Reduces unsupported expectations. |
 
+R010 implementation note: B019-B020 are now covered by session-scoped temporary allow entries, cleaned-save participation until next import, `why_likely_blocked` factors, and schema-versioned upstream false-positive report exports.
+
 ## Integrations And Handoff Artifacts
 
 | ID | Idea | Evidence | Notes |

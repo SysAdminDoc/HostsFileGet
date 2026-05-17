@@ -216,7 +216,7 @@ Why later:
 
 The repo already contains plan-only integrations. The higher leverage first step is source health and modularization.
 
-### [ ] R010 - False-Positive and Allowlist Workflow Refresh
+### [x] R010 - False-Positive and Allowlist Workflow Refresh
 
 Evidence: `L2`, `L4`, `G6`, `M1`, `M2`, `C4`, `X2`, `X3`.
 
@@ -225,6 +225,12 @@ Deliverables:
 - Add "why likely blocked" explanations that combine local provenance, source metadata, and user allowlist history.
 - Add exportable false-positive reports for upstream maintainers without auto-filing issues.
 - Add a safer "temporarily allow until next import" state.
+
+Completed 2026-05-17:
+
+- Added deterministic `why_likely_blocked` factors to false-positive triage and why-blocked summaries, including source matches, local provenance, allowlist history, temporary allow state, and pins.
+- Added schema `hostsfileget.false-positive-upstream-report.v1` for JSON/Markdown upstream false-positive report exports; the GUI writes local files only and does not auto-file issues.
+- Added session-scoped temporary allow entries (`hostsfileget.temporary-allowlist-entry.v1`) that participate in cleaned-save filtering and are cleared when the next import starts.
 
 Why later:
 
@@ -259,7 +265,7 @@ These are intentionally not active roadmap items unless a future product decisio
 
 A future implementation pass should finish with:
 
-- False-positive and allowlist workflow refresh.
+- CLI contract snapshot tests.
 - `ROADMAP.md` checkboxes updated only after verification.
 - Real verification commands recorded in the change summary or commit message.
 
