@@ -1,0 +1,29 @@
+{
+  "retrieved_at": "2026-05-17T18:05:15.588154+00:00",
+  "rows": [
+    {
+      "package": "pyinstaller",
+      "json_url": "https://pypi.org/pypi/pyinstaller/json",
+      "version": "6.20.0",
+      "summary": "PyInstaller bundles a Python application and all its dependencies into a single package.",
+      "requires_python": "<3.15,>=3.8",
+      "project_url": "https://pypi.org/project/pyinstaller/"
+    },
+    {
+      "package": "pip-audit",
+      "json_url": "https://pypi.org/pypi/pip-audit/json",
+      "version": "2.10.0",
+      "summary": "A tool for scanning Python environments for known vulnerabilities",
+      "requires_python": ">=3.10",
+      "project_url": "https://pypi.org/project/pip-audit/"
+    },
+    {
+      "package": "prompt_toolkit",
+      "json_url": "https://pypi.org/pypi/prompt_toolkit/json",
+      "version": "3.0.52",
+      "summary": "Library for building powerful interactive command lines in Python",
+      "requires_python": ">=3.8",
+      "project_url": "https://pypi.org/project/prompt-toolkit/"
+    }
+  ]
+}
