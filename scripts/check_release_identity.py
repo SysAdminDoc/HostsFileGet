@@ -30,7 +30,14 @@ RELEASE_CHECKLIST_TERMS = (
     "SHA-256",
     "SBOM",
     "package manager",
+    "build_release_artifacts.py",
+    "verify_release_artifact.py",
     "GHSA-p2xp-xx3r-mffc",
+)
+RELEASE_WORKFLOW_REQUIRED_SCRIPTS = (
+    "scripts\\check_release_identity.py",
+    "scripts\\build_release_artifacts.py",
+    "scripts\\verify_release_artifact.py",
 )
 MIN_SAFE_PYINSTALLER = (6, 0, 0)
 
@@ -105,8 +112,10 @@ def check_release_identity(repo_root: Path) -> list[str]:
         errors.append("requirements-security.txt must pin pip-audit with ==X.Y.Z.")
 
     workflow = _read(repo_root, ".github/workflows/release.yml")
-    if "scripts\\check_release_identity.py" not in workflow and "scripts/check_release_identity.py" not in workflow:
-        errors.append(".github/workflows/release.yml must run scripts/check_release_identity.py.")
+    for script in RELEASE_WORKFLOW_REQUIRED_SCRIPTS:
+        slash_script = script.replace("\\", "/")
+        if script not in workflow and slash_script not in workflow:
+            errors.append(f".github/workflows/release.yml must run {script}.")
 
     return errors
 

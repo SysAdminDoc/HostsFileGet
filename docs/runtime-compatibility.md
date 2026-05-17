@@ -15,7 +15,7 @@ Windows-11-10.0.26100-SP0
 The local validation command was:
 
 ```powershell
-python -m py_compile hosts_editor.py hostsfileget\source_catalog.py tests\test_source_catalog.py tests\test_hosts_editor_logic.py tests\test_gui_smoke.py tests\test_benchmarks.py tests\test_package_manifests.py benchmarks\large_file_benchmark.py scripts\render_package_manifests.py scripts\check_release_identity.py
+python -m py_compile hosts_editor.py hostsfileget\source_catalog.py hostsfileget\config_profiles.py tests\test_source_catalog.py tests\test_config_profiles.py tests\test_hosts_editor_logic.py tests\test_gui_smoke.py tests\test_benchmarks.py tests\test_package_manifests.py benchmarks\large_file_benchmark.py scripts\render_package_manifests.py scripts\build_release_artifacts.py scripts\verify_release_artifact.py scripts\check_release_identity.py
 python -m unittest discover -s tests -v
 python scripts\check_release_identity.py
 python -m pip_audit -r requirements-build.txt --strict
