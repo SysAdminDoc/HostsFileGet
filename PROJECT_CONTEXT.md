@@ -8,7 +8,7 @@ Current app version observed: `Hosts File Get v2.27.0`
 
 HostsFileGet is a Windows-first Python/Tkinter desktop workbench for importing, reviewing, cleaning, explaining, and safely writing the Windows hosts file. It is intentionally local-first: hosts writes are explicit and recoverable; network activity is tied to user-requested source imports, source-health checks, documentation, or reviewed diagnostics.
 
-The repository has recently been moving from a large single-file app toward a package. Extracted modules now cover constants, fetch/cache behavior, compression, atomic IO, parsing, theme helpers, adblock syntax classification, IDN/homograph helpers, and normalization. The central technical challenge remains reducing `hosts_editor.py` while preserving the mature GUI, CLI, safety model, and tests.
+The repository has recently been moving from a large single-file app toward a package. Extracted modules now cover constants, fetch/cache behavior, source catalog and source-health behavior, compression, atomic IO, parsing, theme helpers, adblock syntax classification, IDN/homograph helpers, and normalization. The central technical challenge remains reducing `hosts_editor.py` while preserving the mature GUI, CLI, safety model, and tests.
 
 ## Canonical Product Boundary
 
@@ -28,7 +28,7 @@ HostsFileGet should not present itself as:
 
 Important root files:
 
-- `hosts_editor.py`: main GUI/CLI module, still roughly 27.5K lines at the 2026-05-17 audit.
+- `hosts_editor.py`: main GUI/CLI module, still roughly 27.1K lines after the 2026-05-17 source-catalog extraction.
 - `hostsfileget/`: package modules extracted from the monolith.
 - `PythonLauncher.ps1`: WPF launcher/bootstrapper for Windows users.
 - `data/blocklist_sources.json`: curated source manifest, 177 sources across 10 categories and 6 bundles.
@@ -43,6 +43,7 @@ Extracted package modules observed:
 
 - `hostsfileget/constants.py`
 - `hostsfileget/fetch.py`
+- `hostsfileget/source_catalog.py`
 - `hostsfileget/compression.py`
 - `hostsfileget/atomic_io.py`
 - `hostsfileget/parsing.py`
@@ -101,7 +102,6 @@ At the start of future work:
 
 Start with the remaining `ROADMAP.md` P0 items:
 
-1. Source Catalog and Manifest Layer extraction.
-2. Release Identity and Version Hygiene.
+1. Release Identity and Version Hygiene.
 
-These are highest leverage because they reduce live feed risk, continue the active modularization arc, and improve release trust without changing the app's product contract.
+This is highest leverage because the source catalog reset and extraction are complete, and release identity is the remaining P0 gap before continuing into broader compatibility and hardening work.

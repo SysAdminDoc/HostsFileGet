@@ -11,6 +11,12 @@ This file is a handoff note for future agents, including Claude.
 
 ## 2026-05-17 Roadmap Continuation Notes
 
+- Completed R002: Source Catalog and Manifest Layer extraction from the 2026-05-17 roadmap.
+- Added `hostsfileget/source_catalog.py` for curated source manifest validation, lifecycle metadata, bundle resolution, source-health checks, source-health diffs, and stable `SourceRecord` / `SourceHealthRecord` dataclass shapes.
+- Kept `hosts_editor.py` compatibility re-exports for the source-catalog API and reduced the monolith to 27,082 lines.
+- Added `tests/test_source_catalog.py` for direct module coverage while preserving legacy `tests/test_hosts_editor_logic.py` re-export coverage.
+- Next roadmap item: R003 Release Identity and Version Hygiene.
+
 - Completed R001: Source Catalog Health Reset from the 2026-05-17 roadmap.
 - Added source lifecycle metadata support while preserving existing 3-tuple source entries so current GUI/CLI call sites continue to unpack sources normally.
 - Updated `data/blocklist_sources.json` from the saved source-health baseline: HTTP 404/410 entries are now `retired`, other unhealthy entries are `warning`, and replacement metadata is recorded where a safer in-catalog substitute was selected.

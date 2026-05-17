@@ -4,6 +4,8 @@ HostsFileGet can check the reachability of every curated source in `data/blockli
 
 The checker is intentionally observational. By default, source failures do not produce a non-zero exit code because public blocklist mirrors can rate-limit, redirect, or go offline temporarily.
 
+Implementation lives in `hostsfileget.source_catalog` (`SourceHealthRecord`, `check_source_health_record`, `build_source_health_report`, `build_source_health_diff`) and is re-exported by `hosts_editor.py` for legacy imports.
+
 ## Local Command
 
 ```powershell

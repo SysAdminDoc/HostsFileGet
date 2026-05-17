@@ -44,6 +44,13 @@ Phase 6 extractions (v2.27.0):
       :func:`normalize_custom_source_url`, :func:`sanitize_custom_sources`),
       ETag/Last-Modified-aware cache (read/write/prune) keyed by SHA-256 of
       the normalised URL, the retry loop, and the source-fetch primitives.
+
+Phase 7 extraction:
+    - :mod:`hostsfileget.source_catalog` — curated source manifest validation,
+      lifecycle metadata, source bundle expansion, source-health checks and
+      diffs, plus the stable ``SourceRecord`` / ``SourceHealthRecord`` data
+      shapes. ``hosts_editor.py`` re-exports the module surface for
+      compatibility.
 """
 
 __all__ = [
@@ -56,4 +63,5 @@ __all__ = [
     "normalize",
     "constants",
     "fetch",
+    "source_catalog",
 ]

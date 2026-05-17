@@ -55,3 +55,13 @@ R001 Source Catalog Health Reset was implemented after the research commit:
 - Added source-health diagnostic classes, remediation text, and JSON baseline diff support through `--source-health-baseline`.
 - Added `docs/source-health-baseline-2026-05-17.md`.
 - Updated `ROADMAP.md` and `PROJECT_CONTEXT.md` so the next P0 item is R002.
+
+## 2026-05-17 R002 Implementation Follow-Up
+
+R002 Source Catalog and Manifest Layer extraction was implemented after R001:
+
+- Added `hostsfileget/source_catalog.py` for curated-source manifest validation, lifecycle metadata, bundle expansion, source-health checks, source-health diffs, and report shaping.
+- Added stable `SourceRecord` and `SourceHealthRecord` dataclasses while preserving legacy tuple/dict outputs.
+- Updated `hosts_editor.py` to re-export the source-catalog API instead of defining that logic inline.
+- Added `tests/test_source_catalog.py` for focused source-catalog module coverage and compatibility checks.
+- Updated architecture, source manifest/health docs, changelogs, project context, and `ROADMAP.md`; the next P0 item is R003.
