@@ -43,3 +43,15 @@ Verification completed before commit:
 ## Continuation
 
 No continuation file was created because the research and planning artifact set is complete. The next implementation pass should start with `ROADMAP.md` P0 item R001.
+
+## 2026-05-17 R001 Implementation Follow-Up
+
+R001 Source Catalog Health Reset was implemented after the research commit:
+
+- Added lifecycle metadata support for curated sources: `active`, `warning`, `deprecated`, and `retired`.
+- Marked 2026-05-17 warning/failed baseline sources in `data/blocklist_sources.json`.
+- Retired HTTP 404/410 sources from one-click import and built-in bundles while retaining them for audit/history.
+- Replaced hard-failing built-in bundle entries: OISD Full -> MVPS Hosts, 1Hosts Pro -> 1Hosts Xtra, RPiList Gambling -> Sinfonietta Gambling.
+- Added source-health diagnostic classes, remediation text, and JSON baseline diff support through `--source-health-baseline`.
+- Added `docs/source-health-baseline-2026-05-17.md`.
+- Updated `ROADMAP.md` and `PROJECT_CONTEXT.md` so the next P0 item is R002.

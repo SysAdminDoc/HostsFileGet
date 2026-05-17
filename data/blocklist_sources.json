@@ -9,7 +9,7 @@
       "source_names": [
         "HaGezi Light",
         "StevenBlack Unified",
-        "OISD Full"
+        "MVPS Hosts"
       ]
     },
     {
@@ -31,7 +31,7 @@
       "risk": "high",
       "source_names": [
         "HaGeZi Pro Plus",
-        "1Hosts Pro",
+        "1Hosts Xtra",
         "Frogeye Multi Party",
         "NoTrack Tracking"
       ]
@@ -58,7 +58,7 @@
         "BlocklistProject Porn",
         "BlocklistProject Gambling",
         "Sinfonietta Social",
-        "RPiList Gambling"
+        "Sinfonietta Gambling"
       ]
     },
     {
@@ -117,7 +117,13 @@
         {
           "name": "1Hosts Pro",
           "url": "https://raw.githubusercontent.com/badmojr/1Hosts/master/Pro/hosts.txt",
-          "description": "badmojr balanced ads/tracking/metrics."
+          "description": "badmojr balanced ads/tracking/metrics.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17",
+          "replacement_source": "1Hosts Xtra",
+          "replacement_url": "https://raw.githubusercontent.com/badmojr/1Hosts/master/Xtra/hosts.txt"
         },
         {
           "name": "1Hosts Xtra",
@@ -127,7 +133,11 @@
         {
           "name": "hBlock Aggregate",
           "url": "https://hblock.molinero.dev/hosts",
-          "description": "Auto-aggregated 50+ upstream sources, daily rebuild."
+          "description": "Auto-aggregated 50+ upstream sources, daily rebuild.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Source is reachable, but the sample exceeded the cap: Response exceeded 256 KB size cap (feed too large or server is streaming non-hosts content). in the 2026-05-17 source-health baseline.",
+          "notes": "Reachable but larger than the bounded health sample; review before recurring imports.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "Ultimate Hosts Blacklist",
@@ -152,12 +162,24 @@
         {
           "name": "OISD Full",
           "url": "https://hosts.oisd.nl/",
-          "description": "Huge, false-positive free blocklist."
+          "description": "Huge, false-positive free blocklist.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 410. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17",
+          "replacement_source": "MVPS Hosts",
+          "replacement_url": "https://winhelp2002.mvps.org/hosts.txt"
         },
         {
           "name": "OISD DBL",
           "url": "https://dbl.oisd.nl/",
-          "description": "OISD Domain Blocklist."
+          "description": "OISD Domain Blocklist.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 410. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17",
+          "replacement_source": "StevenBlack Unified",
+          "replacement_url": "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
         },
         {
           "name": "MVPS Hosts",
@@ -167,17 +189,31 @@
         {
           "name": "SomeoneWhoCares Zero",
           "url": "https://someonewhocares.org/hosts/zero/hosts",
-          "description": "Classic zero-based hosts file."
+          "description": "Classic zero-based hosts file.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Source is reachable, but the sample exceeded the cap: Response exceeded 256 KB size cap (feed too large or server is streaming non-hosts content). in the 2026-05-17 source-health baseline.",
+          "notes": "Reachable but larger than the bounded health sample; review before recurring imports.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "SomeoneWhoCares 127",
           "url": "https://someonewhocares.org/hosts/hosts",
-          "description": "Classic 127.0.0.1 hosts file."
+          "description": "Classic 127.0.0.1 hosts file.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Source is reachable, but the sample exceeded the cap: Response exceeded 256 KB size cap (feed too large or server is streaming non-hosts content). in the 2026-05-17 source-health baseline.",
+          "notes": "Reachable but larger than the bounded health sample; review before recurring imports.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "HOSTShield Combined",
           "url": "https://github.com/SysAdminDoc/HOSTShield/releases/download/v.1/CombinedAll.txt",
-          "description": "Massive combined list."
+          "description": "Massive combined list.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17",
+          "replacement_source": "HaGezi Multi",
+          "replacement_url": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/multi.txt"
         },
         {
           "name": "The Great Wall",
@@ -217,22 +253,38 @@
         {
           "name": "EasyList Hosts",
           "url": "https://v.firebog.net/hosts/Easylist.txt",
-          "description": "AdBlock EasyList converted to hosts."
+          "description": "AdBlock EasyList converted to hosts.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Source is reachable, but the sample exceeded the cap: Response exceeded 256 KB size cap (feed too large or server is streaming non-hosts content). in the 2026-05-17 source-health baseline.",
+          "notes": "Reachable but larger than the bounded health sample; review before recurring imports.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "EasyPrivacy Hosts",
           "url": "https://v.firebog.net/hosts/Easyprivacy.txt",
-          "description": "AdBlock EasyPrivacy converted to hosts."
+          "description": "AdBlock EasyPrivacy converted to hosts.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Source is reachable, but the sample exceeded the cap: Response exceeded 256 KB size cap (feed too large or server is streaming non-hosts content). in the 2026-05-17 source-health baseline.",
+          "notes": "Reachable but larger than the bounded health sample; review before recurring imports.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "EasyList Privacy Orig",
           "url": "https://easylist.to/easylist/easyprivacy.txt",
-          "description": "Original EasyPrivacy."
+          "description": "Original EasyPrivacy.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Source is reachable, but the sample exceeded the cap: Response exceeded 256 KB size cap (feed too large or server is streaming non-hosts content). in the 2026-05-17 source-health baseline.",
+          "notes": "Reachable but larger than the bounded health sample; review before recurring imports.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "EasyList NoElemHide",
           "url": "https://easylist-downloads.adblockplus.org/easylist_noelemhide.txt",
-          "description": "EasyList without element hiding."
+          "description": "EasyList without element hiding.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Source is reachable, but the sample did not contain host-like entries. in the 2026-05-17 source-health baseline.",
+          "notes": "Reachable but not hosts-like in the sampled text; run syntax lint or keep as a provider handoff source.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "Prigent Ads",
@@ -267,7 +319,11 @@
         {
           "name": "AdGuard DNS",
           "url": "https://v.firebog.net/hosts/AdguardDNS.txt",
-          "description": "AdGuard DNS filter."
+          "description": "AdGuard DNS filter.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Source is reachable, but the sample exceeded the cap: Response exceeded 256 KB size cap (feed too large or server is streaming non-hosts content). in the 2026-05-17 source-health baseline.",
+          "notes": "Reachable but larger than the bounded health sample; review before recurring imports.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "Admiral Anti-Adblock",
@@ -277,7 +333,11 @@
         {
           "name": "YouTube Ads Blacklist",
           "url": "https://raw.githubusercontent.com/anudeepND/youtubeadsblacklist/master/domainlist.txt",
-          "description": "Attempts to block YT ads."
+          "description": "Attempts to block YT ads.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "JDlingyu Ad Wars",
@@ -297,12 +357,24 @@
         {
           "name": "HOSTShield Ads",
           "url": "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/AdsTrackingAnalytics.txt",
-          "description": "HOSTShield Ads & Tracking."
+          "description": "HOSTShield Ads & Tracking.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17",
+          "replacement_source": "EasyList Hosts",
+          "replacement_url": "https://v.firebog.net/hosts/Easylist.txt"
         },
         {
           "name": "Adobe Hosts",
           "url": "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/AdobeHosts.txt",
-          "description": "Blocks Adobe verification."
+          "description": "Blocks Adobe verification.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17",
+          "replacement_source": "AdGuard DNS",
+          "replacement_url": "https://v.firebog.net/hosts/AdguardDNS.txt"
         },
         {
           "name": "ShadowWhisperer Ads",
@@ -352,7 +424,11 @@
         {
           "name": "MobileAdTrackers (jawz101)",
           "url": "https://raw.githubusercontent.com/jawz101/MobileAdTrackers/master/hosts",
-          "description": "Mobile SDK trackers from Exodus Privacy reports."
+          "description": "Mobile SDK trackers from Exodus Privacy reports.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "DandelionSprout URL Shorteners",
@@ -422,7 +498,11 @@
         {
           "name": "NoTrack Tracking",
           "url": "https://gitlab.com/quidsup/notrack-blocklists/raw/master/notrack-blocklist.txt",
-          "description": "NoTrack tracking list."
+          "description": "NoTrack tracking list.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Source is reachable, but the sample did not contain host-like entries. in the 2026-05-17 source-health baseline.",
+          "notes": "Reachable but not hosts-like in the sampled text; run syntax lint or keep as a provider handoff source.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "Perflyst Android",
@@ -457,12 +537,20 @@
         {
           "name": "MalwareDomains",
           "url": "https://mirror1.malwaredomains.com/files/justdomains",
-          "description": "Known malware domains."
+          "description": "Known malware domains.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "NoTrack Malware",
           "url": "https://gitlab.com/quidsup/notrack-blocklists/raw/master/notrack-malware.txt",
-          "description": "NoTrack malware list."
+          "description": "NoTrack malware list.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Source is reachable, but the sample did not contain host-like entries. in the 2026-05-17 source-health baseline.",
+          "notes": "Reachable but not hosts-like in the sampled text; run syntax lint or keep as a provider handoff source.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "Spam404",
@@ -477,27 +565,47 @@
         {
           "name": "Prigent Malware",
           "url": "https://v.firebog.net/hosts/Prigent-Malware.txt",
-          "description": "Malware list."
+          "description": "Malware list.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Source is reachable, but the sample exceeded the cap: Response exceeded 256 KB size cap (feed too large or server is streaming non-hosts content). in the 2026-05-17 source-health baseline.",
+          "notes": "Reachable but larger than the bounded health sample; review before recurring imports.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "Prigent Crypto",
           "url": "https://v.firebog.net/hosts/Prigent-Crypto.txt",
-          "description": "Crypto mining domains."
+          "description": "Crypto mining domains.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Source is reachable, but the sample exceeded the cap: Response exceeded 256 KB size cap (feed too large or server is streaming non-hosts content). in the 2026-05-17 source-health baseline.",
+          "notes": "Reachable but larger than the bounded health sample; review before recurring imports.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "RPiList Malware",
           "url": "https://v.firebog.net/hosts/RPiList-Malware.txt",
-          "description": "Raspberry Pi list malware."
+          "description": "Raspberry Pi list malware.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Source is reachable, but the sample exceeded the cap: Response exceeded 256 KB size cap (feed too large or server is streaming non-hosts content). in the 2026-05-17 source-health baseline.",
+          "notes": "Reachable but larger than the bounded health sample; review before recurring imports.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "RPiList Phishing",
           "url": "https://v.firebog.net/hosts/RPiList-Phishing.txt",
-          "description": "Raspberry Pi list phishing."
+          "description": "Raspberry Pi list phishing.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Source is reachable, but the sample exceeded the cap: Response exceeded 256 KB size cap (feed too large or server is streaming non-hosts content). in the 2026-05-17 source-health baseline.",
+          "notes": "Reachable but larger than the bounded health sample; review before recurring imports.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "Phishing Army",
           "url": "https://phishing.army/download/phishing_army_blocklist.txt",
-          "description": "Phishing Army."
+          "description": "Phishing Army.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Source is reachable, but the sample exceeded the cap: Response exceeded 256 KB size cap (feed too large or server is streaming non-hosts content). in the 2026-05-17 source-health baseline.",
+          "notes": "Reachable but larger than the bounded health sample; review before recurring imports.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "URLHaus Malware",
@@ -512,7 +620,11 @@
         {
           "name": "Malware Filter Phishing",
           "url": "https://malware-filter.gitlab.io/malware-filter/phishing-filter-hosts.txt",
-          "description": "Phishing filter."
+          "description": "Phishing filter.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Source is reachable, but the sample exceeded the cap: Response exceeded 256 KB size cap (feed too large or server is streaming non-hosts content). in the 2026-05-17 source-health baseline.",
+          "notes": "Reachable but larger than the bounded health sample; review before recurring imports.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "Scam Domains Wildcard",
@@ -527,22 +639,38 @@
         {
           "name": "PhishTank Data (CSV)",
           "url": "https://data.phishtank.com/data/online-valid.csv.bz2",
-          "description": "Official PhishTank CSV (Requires Processing)."
+          "description": "Official PhishTank CSV (Requires Processing).",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Source is reachable, but the sample did not contain host-like entries. in the 2026-05-17 source-health baseline.",
+          "notes": "Reachable but not hosts-like in the sampled text; run syntax lint or keep as a provider handoff source.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "DigitalSide Threat Intel",
           "url": "https://osint.digitalside.it/Threat-Intel/lists/latestdomains.txt",
-          "description": "OSINT threat intelligence."
+          "description": "OSINT threat intelligence.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Network error: timed out in the 2026-05-17 source-health baseline.",
+          "notes": "Failed the baseline check but may be transient or access/range related; keep guarded before scheduled use.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "VXVault",
           "url": "http://vxvault.net/URL_List.php",
-          "description": "VX Vault URL List."
+          "description": "VX Vault URL List.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Network timeout. in the 2026-05-17 source-health baseline.",
+          "notes": "Failed the baseline check but may be transient or access/range related; keep guarded before scheduled use.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "CyberCrime Tracker",
           "url": "https://cybercrime-tracker.net/all.php",
-          "description": "CyberCrime Tracker."
+          "description": "CyberCrime Tracker.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Source is reachable, but the sample exceeded the cap: Response exceeded 256 KB size cap (feed too large or server is streaming non-hosts content). in the 2026-05-17 source-health baseline.",
+          "notes": "Reachable but larger than the bounded health sample; review before recurring imports.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "BBCan177 Feed",
@@ -602,7 +730,11 @@
         {
           "name": "Botvrij IOC",
           "url": "https://www.botvrij.eu/data/ioclist.domain.raw",
-          "description": "Botvrij IoCs."
+          "description": "Botvrij IoCs.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "HTTP 416. in the 2026-05-17 source-health baseline.",
+          "notes": "Failed the baseline check but may be transient or access/range related; keep guarded before scheduled use.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "JoeWein Domains",
@@ -617,7 +749,11 @@
         {
           "name": "Toxic Domains",
           "url": "https://www.stopforumspam.com/downloads/toxic_domains_whole.txt",
-          "description": "StopForumSpam toxic."
+          "description": "StopForumSpam toxic.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Source is reachable, but the sample exceeded the cap: Response exceeded 256 KB size cap (feed too large or server is streaming non-hosts content). in the 2026-05-17 source-health baseline.",
+          "notes": "Reachable but larger than the bounded health sample; review before recurring imports.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "ShadowWhisperer Malware",
@@ -642,7 +778,11 @@
         {
           "name": "Phishing Army Extended",
           "url": "https://phishing.army/download/phishing_army_blocklist_extended.txt",
-          "description": "Extended Phishing Army feed (adds recent hits)."
+          "description": "Extended Phishing Army feed (adds recent hits).",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Source is reachable, but the sample exceeded the cap: Response exceeded 256 KB size cap (feed too large or server is streaming non-hosts content). in the 2026-05-17 source-health baseline.",
+          "notes": "Reachable but larger than the bounded health sample; review before recurring imports.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "Durable Napkin Scam",
@@ -657,22 +797,38 @@
         {
           "name": "Inversion DNS Blocklist",
           "url": "https://raw.githubusercontent.com/elliotwutingfeng/inversion-dnsblocklist/main/inversion-dnsblocklist-pihole.txt",
-          "description": "Crowd-sourced active-phish domain feed."
+          "description": "Crowd-sourced active-phish domain feed.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "Curbengh Phishing Filter",
           "url": "https://raw.githubusercontent.com/curbengh/phishing-filter/master/phishing-filter-hosts.txt",
-          "description": "Aggregated phishing feed (OpenPhish, PhishTank, etc)."
+          "description": "Aggregated phishing feed (OpenPhish, PhishTank, etc).",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "CoinBlockerLists",
           "url": "https://raw.githubusercontent.com/ZeroDot1/CoinBlockerLists/master/hosts",
-          "description": "ZeroDot1 comprehensive cryptominer hosts."
+          "description": "ZeroDot1 comprehensive cryptominer hosts.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "CoinBlockerLists Browser",
           "url": "https://raw.githubusercontent.com/ZeroDot1/CoinBlockerLists/master/hosts_browser",
-          "description": "In-browser-mining subset from CoinBlockerLists."
+          "description": "In-browser-mining subset from CoinBlockerLists.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "BlocklistProject Fraud",
@@ -687,12 +843,24 @@
         {
           "name": "NRD 14-day (xRuffKez)",
           "url": "https://raw.githubusercontent.com/xRuffKez/NRD/main/lists/14-day/domains-only/nrd-14day.txt",
-          "description": "Newly-Registered Domains (last 14 days) - phishing defense, low FPs."
+          "description": "Newly-Registered Domains (last 14 days) - phishing defense, low FPs.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17",
+          "replacement_source": "HaGeZi NRD 14-day",
+          "replacement_url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/domains/nrd14.txt"
         },
         {
           "name": "NRD 30-day (xRuffKez)",
           "url": "https://raw.githubusercontent.com/xRuffKez/NRD/main/lists/30-day/domains-only/nrd-30day.txt",
-          "description": "Newly-Registered Domains (last 30 days) - broader NRD net."
+          "description": "Newly-Registered Domains (last 30 days) - broader NRD net.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17",
+          "replacement_source": "HaGeZi NRD 14-day",
+          "replacement_url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/domains/nrd14.txt"
         }
       ]
     },
@@ -712,17 +880,29 @@
         {
           "name": "MajkiIT Polish Adservers",
           "url": "https://raw.githubusercontent.com/MajkiIT/polish-ads-filter/master/hosts-based-list/adservers.txt",
-          "description": "Polish ad-server hosts list."
+          "description": "Polish ad-server hosts list.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "Cats-Team AdRules (CN)",
           "url": "https://raw.githubusercontent.com/Cats-Team/AdRules/main/adrules_domainset.txt",
-          "description": "Chinese-language ads / tracker aggregate."
+          "description": "Chinese-language ads / tracker aggregate.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "Source is reachable, but the sample did not contain host-like entries. in the 2026-05-17 source-health baseline.",
+          "notes": "Reachable but not hosts-like in the sampled text; run syntax lint or keep as a provider handoff source.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "Schakal (Russian)",
           "url": "https://schakal.ru/hosts/hosts_adblock.txt",
-          "description": "Russian ad / tracker block list."
+          "description": "Russian ad / tracker block list.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "FadeMind Spam",
@@ -757,7 +937,11 @@
         {
           "name": "Public Stun",
           "url": "http://enumer.org/public-stun.txt",
-          "description": "Public STUN servers."
+          "description": "Public STUN servers.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "HTTP 403. in the 2026-05-17 source-health baseline.",
+          "notes": "Failed the baseline check but may be transient or access/range related; keep guarded before scheduled use.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "Fritzbox List",
@@ -822,12 +1006,24 @@
         {
           "name": "RPiList Gambling",
           "url": "https://raw.githubusercontent.com/RPiList/specials/master/Blocklisten/Gambling.txt",
-          "description": "German-maintained gambling blocklist, EU coverage."
+          "description": "German-maintained gambling blocklist, EU coverage.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17",
+          "replacement_source": "Sinfonietta Gambling",
+          "replacement_url": "https://raw.githubusercontent.com/Sinfonietta/hostfiles/master/gambling-hosts"
         },
         {
           "name": "RPiList Fake Science",
           "url": "https://raw.githubusercontent.com/RPiList/specials/master/Blocklisten/Fake-Science.txt",
-          "description": "Predatory journals / junk-science publishers."
+          "description": "Predatory journals / junk-science publishers.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17",
+          "replacement_source": "BlocklistProject Fraud",
+          "replacement_url": "https://blocklistproject.github.io/Lists/fraud.txt"
         }
       ]
     },
@@ -892,7 +1088,11 @@
         {
           "name": "HaGeZi NRD 14-day",
           "url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/domains/nrd14.txt",
-          "description": "High-churn newly registered domain feed. Higher breakage risk; avoid unattended scheduling without review."
+          "description": "High-churn newly registered domain feed. Higher breakage risk; avoid unattended scheduling without review.",
+          "lifecycle": "warning",
+          "lifecycle_reason": "HTTP 403. in the 2026-05-17 source-health baseline.",
+          "notes": "Failed the baseline check but may be transient or access/range related; keep guarded before scheduled use.",
+          "lifecycle_checked_at": "2026-05-17"
         }
       ]
     },
@@ -962,52 +1162,110 @@
         {
           "name": "HOSTShield Apple",
           "url": "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/Apple.txt",
-          "description": "HOSTShield Apple."
+          "description": "HOSTShield Apple.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17",
+          "replacement_source": "Apple Native",
+          "replacement_url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.apple.txt"
         },
         {
           "name": "HOSTShield Brave",
           "url": "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/Brave.txt",
-          "description": "HOSTShield Brave."
+          "description": "HOSTShield Brave.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17",
+          "replacement_source": "AdGuard DNS",
+          "replacement_url": "https://v.firebog.net/hosts/AdguardDNS.txt"
         },
         {
           "name": "HOSTShield Microsoft",
           "url": "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/Microsoft.txt",
-          "description": "HOSTShield Microsoft."
+          "description": "HOSTShield Microsoft.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17",
+          "replacement_source": "Windows Office Native",
+          "replacement_url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.winoffice.txt"
         },
         {
           "name": "HOSTShield TikTok",
           "url": "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/Tiktok.txt",
-          "description": "HOSTShield TikTok."
+          "description": "HOSTShield TikTok.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17",
+          "replacement_source": "TikTok Native",
+          "replacement_url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.tiktok.txt"
         },
         {
           "name": "HOSTShield Twitter",
           "url": "https://raw.githubusercontent.com/SysAdminDoc/HOSTShield/refs/heads/main/Twitter.txt",
-          "description": "HOSTShield Twitter."
+          "description": "HOSTShield Twitter.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17",
+          "replacement_source": "AdGuard DNS",
+          "replacement_url": "https://v.firebog.net/hosts/AdguardDNS.txt"
         },
         {
           "name": "Perflyst Vivo Telemetry",
           "url": "https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/Vivotelemetry.txt",
-          "description": "Vivo / BBK Android phone telemetry."
+          "description": "Vivo / BBK Android phone telemetry.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17",
+          "replacement_source": "Vivo Native",
+          "replacement_url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.vivo.txt"
         },
         {
           "name": "Perflyst Samsung Smart",
           "url": "https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/SamsungSmart.txt",
-          "description": "Samsung Smart TV / Tizen telemetry & ads."
+          "description": "Samsung Smart TV / Tizen telemetry & ads.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17",
+          "replacement_source": "Samsung Native",
+          "replacement_url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.samsung.txt"
         },
         {
           "name": "llacb47 Smart TV",
           "url": "https://raw.githubusercontent.com/llacb47/mischosts/main/smart-tv",
-          "description": "Generic smart-TV telemetry (Sony/Philips/Panasonic/Vizio)."
+          "description": "Generic smart-TV telemetry (Sony/Philips/Panasonic/Vizio).",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17"
         },
         {
           "name": "llacb47 LG WebOS",
           "url": "https://raw.githubusercontent.com/llacb47/mischosts/main/lgwebos-hosts",
-          "description": "LG WebOS smart-TV telemetry supplement."
+          "description": "LG WebOS smart-TV telemetry supplement.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17",
+          "replacement_source": "LG WebOS Native",
+          "replacement_url": "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/native.lgwebos.txt"
         },
         {
           "name": "llacb47 Disney",
           "url": "https://raw.githubusercontent.com/llacb47/mischosts/main/disney-hosts",
-          "description": "Disney+ / ESPN / Hulu tracker + ad infrastructure."
+          "description": "Disney+ / ESPN / Hulu tracker + ad infrastructure.",
+          "lifecycle": "retired",
+          "lifecycle_reason": "HTTP 404. in the 2026-05-17 source-health baseline.",
+          "notes": "Retained for audit/history; disabled from built-in bundles and one-click import until a maintainer verifies a direct replacement.",
+          "lifecycle_checked_at": "2026-05-17",
+          "replacement_source": "AdGuard DNS",
+          "replacement_url": "https://v.firebog.net/hosts/AdguardDNS.txt"
         }
       ]
     }

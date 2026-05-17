@@ -4,6 +4,13 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Source catalog health reset**
+- Added curated-source lifecycle metadata (`active`, `warning`, `deprecated`, `retired`) and preserved it on existing 3-tuple source entries for compatibility.
+- Marked the 2026-05-17 source-health baseline in `data/blocklist_sources.json`; HTTP 404/410 sources are retained as retired entries and warning/failure sources now carry lifecycle reasons and notes.
+- Removed hard-failing retired sources from built-in bundles by replacing OISD Full with MVPS Hosts, 1Hosts Pro with 1Hosts Xtra, and RPiList Gambling with Sinfonietta Gambling.
+- Source-health reports now include diagnostic classes and remediation text, skip retired sources as disabled, and support `--source-health-baseline` diff output against a prior JSON report.
+- Added `docs/source-health-baseline-2026-05-17.md` plus manifest/bundle/source-health documentation for lifecycle handling.
+
 **Modularization — v2.27.0 (Phase 6)**
 - New `hostsfileget.constants` (~25 lines): centralises `APP_NAME`, `APP_SLUG`, `APP_VERSION`, `CONFIG_FILENAME`. Lets other submodules build deterministic User-Agent headers without circularly importing `hosts_editor`.
 - New `hostsfileget.fetch` (~535 lines): the full network ingress surface — `_HttpsOnlyRedirectHandler` + `safe_urlopen`, URL validators (`_parse_valid_http_source_url`, `normalize_custom_source_url`, `sanitize_custom_sources`, `_contains_control_chars`), response inspectors (`_response_status_code`, `_response_header`), ETag/Last-Modified cache (`source_cache_key`, `get_source_cache_body_path`, `write_source_cache_body`, `read_source_cache_body`, `sanitize_source_cache_metadata`, `build_source_request_headers`, `build_source_cache_metadata`, `prune_orphan_source_cache_files`), and the fetch loop (`fetch_source_with_cache`, `fetch_source_with_retries`, `resolve_import_fetch_worker_count`).

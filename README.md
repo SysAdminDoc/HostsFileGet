@@ -202,6 +202,7 @@ Run a non-admin curated source health report with:
 
 ```powershell
 python hosts_editor.py --source-health --source-health-output source-health-report.json
+python hosts_editor.py --source-health --source-health-baseline .ai\research\2026-05-17\source-health-report.json --source-health-output source-health-report.json
 ```
 
 Plan, apply, or export a declarative profile file without writing the system hosts file:

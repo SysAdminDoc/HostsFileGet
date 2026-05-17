@@ -7,6 +7,17 @@ This file is a handoff note for future agents, including Claude.
 - 2026-04-15
 - 2026-05-12
 - 2026-05-13
+- 2026-05-17
+
+## 2026-05-17 Roadmap Continuation Notes
+
+- Completed R001: Source Catalog Health Reset from the 2026-05-17 roadmap.
+- Added source lifecycle metadata support while preserving existing 3-tuple source entries so current GUI/CLI call sites continue to unpack sources normally.
+- Updated `data/blocklist_sources.json` from the saved source-health baseline: HTTP 404/410 entries are now `retired`, other unhealthy entries are `warning`, and replacement metadata is recorded where a safer in-catalog substitute was selected.
+- Updated built-in bundles so they do not reference retired hard-failing sources.
+- Added source-health diagnostic classes, remediation text, and `--source-health-baseline` diff support.
+- Added `docs/source-health-baseline-2026-05-17.md`, updated source health/manifest/bundle docs, and marked R001 complete in `ROADMAP.md`.
+- Next roadmap item: R002 Source Catalog and Manifest Layer extraction.
 
 ## 2026-05-12 Roadmap Execution Notes
 

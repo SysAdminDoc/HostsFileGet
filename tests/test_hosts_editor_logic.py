@@ -81,6 +81,7 @@ from hosts_editor import (
     build_rule_tier_report,
     build_source_domain_index,
     build_source_adapter_plugin_sources,
+    build_source_health_diff,
     build_source_health_report,
     build_source_manifest_index,
     build_source_overlap_report,
@@ -92,6 +93,7 @@ from hosts_editor import (
     categorize_entries_by_domain_hint,
     check_source_health_record,
     check_source_health_records,
+    classify_source_health_diagnostic,
     classify_adblock_rule_line,
     classify_idn_domain,
     classify_rule_tier_line,
@@ -245,6 +247,7 @@ from hosts_editor import (
     format_profile_tray_availability_report,
     format_portable_bundle_export_summary,
     format_scheduler_activity_report,
+    format_source_health_diff,
     format_source_trust_badges,
     format_watch_expression_report,
     format_source_bundle_catalog,
@@ -326,6 +329,7 @@ from hosts_editor import (
     sanitize_pinned_domains,
     scan_suspicious_redirects,
     source_trust_report_url,
+    source_entry_metadata,
     source_bundle_to_import_sources,
     strip_lines_by_category,
     summarize_clean_changes,
@@ -738,16 +742,26 @@ class HostsEditorLogicTests(unittest.TestCase):
                             "name": "Example Hosts",
                             "url": "https://example.com/hosts.txt",
                             "description": "Small test source.",
+                            "lifecycle": "warning",
+                            "lifecycle_reason": "Health sample exceeded the cap.",
+                            "lifecycle_checked_at": "2026-05-17",
+                            "replacement_source": "Replacement Hosts",
+                            "replacement_url": "https://example.com/replacement.txt",
+                            "notes": "Review before recurring imports.",
                         }
                     ],
                 }
             ],
         }
 
+        sanitized = sanitize_source_manifest(manifest)
         self.assertEqual(
-            sanitize_source_manifest(manifest),
+            sanitized,
             {"Ads": [("Example Hosts", "https://example.com/hosts.txt", "Small test source.")]},
         )
+        metadata = source_entry_metadata(sanitized["Ads"][0])
+        self.assertEqual(metadata["lifecycle"], "warning")
+        self.assertEqual(metadata["replacement_source"], "Replacement Hosts")
 
     def test_sanitize_source_manifest_rejects_unsafe_or_ambiguous_entries(self):
         valid_source = {
@@ -789,6 +803,18 @@ class HostsEditorLogicTests(unittest.TestCase):
                             {"name": "Duplicate URL", "url": "https://example.com/hosts.txt/", "description": ""},
                         ],
                     }
+                ],
+            },
+            {
+                "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+                "categories": [
+                    {"name": "Ads", "sources": [{**valid_source, "lifecycle": "unknown"}]},
+                ],
+            },
+            {
+                "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+                "categories": [
+                    {"name": "Ads", "sources": [{**valid_source, "replacement_url": "file:///tmp/list"}]},
                 ],
             },
         ]
@@ -1172,6 +1198,36 @@ class HostsEditorLogicTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             sanitize_source_bundle_catalog(duplicate_manifest)
 
+    def test_source_bundle_catalog_rejects_retired_sources(self):
+        manifest = {
+            "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+            "categories": [
+                {
+                    "name": "Ads",
+                    "sources": [
+                        {
+                            "name": "Retired Hosts",
+                            "url": "https://example.com/retired.txt",
+                            "description": "Dead source retained for history.",
+                            "lifecycle": "retired",
+                            "lifecycle_reason": "HTTP 404 in baseline.",
+                        }
+                    ],
+                }
+            ],
+            "bundles": [
+                {
+                    "id": "starter",
+                    "name": "Starter",
+                    "risk": "low",
+                    "source_names": ["Retired Hosts"],
+                }
+            ],
+        }
+
+        with self.assertRaises(ValueError):
+            sanitize_source_bundle_catalog(manifest)
+
     def test_source_bundle_formatters_show_catalog_and_detail(self):
         catalog = [
             {
@@ -1186,6 +1242,11 @@ class HostsEditorLogicTests(unittest.TestCase):
                         "url": "https://example.com/hosts.txt",
                         "description": "Small test source.",
                         "category": "Ads",
+                        "lifecycle": "warning",
+                        "metadata": {
+                            "lifecycle": "warning",
+                            "lifecycle_reason": "Health sample needs review.",
+                        },
                     }
                 ],
             }
@@ -1195,7 +1256,8 @@ class HostsEditorLogicTests(unittest.TestCase):
         self.assertIn("risk: low", format_source_bundle_catalog(catalog))
         detail = format_source_bundle_report(catalog[0])
         self.assertIn("Source Bundle: Starter", detail)
-        self.assertIn("Example Hosts [Ads]", detail)
+        self.assertIn("Example Hosts [Ads] (warning)", detail)
+        self.assertIn("Lifecycle: warning", detail)
 
     def test_project_source_bundle_manifest_loads_and_indexes_sources(self):
         bundles = load_source_bundle_catalog(blocklist_sources=HostsFileEditor.BLOCKLIST_SOURCES)
@@ -1210,6 +1272,14 @@ class HostsEditorLogicTests(unittest.TestCase):
         self.assertTrue(
             all(source["name"] in index for source in starter["sources"])
         )
+        retired = {
+            name
+            for name, record in index.items()
+            if record.get("lifecycle") == "retired"
+        }
+        self.assertTrue(retired)
+        for bundle in bundles:
+            self.assertFalse(retired.intersection({source["name"] for source in bundle["sources"]}))
 
     def test_sanitize_i18n_catalog_accepts_versioned_messages(self):
         catalog = {
@@ -1364,6 +1434,8 @@ class HostsEditorLogicTests(unittest.TestCase):
         self.assertEqual(result["http_status"], 200)
         self.assertEqual(result["bytes_read"], len(b"0.0.0.0 tracker.example\n"))
         self.assertIn("host-like", result["diagnostic"])
+        self.assertEqual(result["diagnostic_class"], "ok")
+        self.assertIn("No action", result["remediation"])
 
     def test_check_source_health_record_flags_html_and_empty_samples(self):
         class FakeResponse:
@@ -1398,6 +1470,8 @@ class HostsEditorLogicTests(unittest.TestCase):
         self.assertIn("HTML", html["diagnostic"])
         self.assertEqual(empty["status"], "warning")
         self.assertIn("empty", empty["diagnostic"])
+        self.assertEqual(html["diagnostic_class"], "html-response")
+        self.assertEqual(empty["diagnostic_class"], "empty-sample")
 
     def test_check_source_health_record_treats_oversized_sample_as_warning(self):
         class FakeResponse:
@@ -1423,6 +1497,26 @@ class HostsEditorLogicTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "warning")
         self.assertIn("1 KB", result["diagnostic"])
+        self.assertEqual(result["diagnostic_class"], "sample-cap")
+
+    def test_check_source_health_record_skips_retired_sources(self):
+        def opener(_request, timeout=None):
+            raise AssertionError("retired sources should not be fetched")
+
+        result = check_source_health_record(
+            {
+                "category": "Ads",
+                "name": "Dead",
+                "url": "https://example.com/dead.txt",
+                "lifecycle": "retired",
+                "lifecycle_reason": "HTTP 404 in baseline.",
+            },
+            opener=opener,
+        )
+
+        self.assertEqual(result["status"], "retired")
+        self.assertEqual(result["diagnostic_class"], "retired")
+        self.assertIn("disabled", result["remediation"])
 
     def test_check_source_health_records_preserves_order_and_summarizes(self):
         payloads = {
@@ -1461,7 +1555,7 @@ class HostsEditorLogicTests(unittest.TestCase):
         self.assertEqual([result["status"] for result in results], ["healthy", "warning"])
         self.assertEqual(
             summarize_source_health_results(results),
-            {"total": 2, "healthy": 1, "warning": 1, "failed": 0},
+            {"total": 2, "healthy": 1, "warning": 1, "failed": 0, "retired": 0},
         )
 
     def test_build_source_health_report_shape(self):
@@ -1487,8 +1581,35 @@ class HostsEditorLogicTests(unittest.TestCase):
         )
 
         self.assertEqual(report["schema_version"], SOURCE_HEALTH_REPORT_SCHEMA_VERSION)
-        self.assertEqual(report["summary"], {"total": 1, "healthy": 1, "warning": 0, "failed": 0})
+        self.assertEqual(report["summary"], {"total": 1, "healthy": 1, "warning": 0, "failed": 0, "retired": 0})
         self.assertEqual(report["sources"][0]["category"], "Ads")
+
+    def test_source_health_diagnostic_classification_and_diff(self):
+        diagnostic_class, remediation = classify_source_health_diagnostic("failed", "HTTP 404.", 404)
+        self.assertEqual(diagnostic_class, "http-gone")
+        self.assertIn("Retire", remediation)
+
+        baseline = {
+            "checked_at": "2026-05-17T00:00:00Z",
+            "sources": [
+                {"name": "One", "url": "https://one.example/list.txt", "status": "failed", "diagnostic": "HTTP 404."},
+                {"name": "Two", "url": "https://two.example/list.txt", "status": "healthy", "diagnostic": "ok"},
+            ],
+        }
+        current = {
+            "checked_at": "2026-05-18T00:00:00Z",
+            "sources": [
+                {"name": "One", "url": "https://one.example/list.txt", "status": "retired", "diagnostic": "Retired."},
+                {"name": "Two", "url": "https://two.example/list.txt", "status": "warning", "diagnostic": "Needs review."},
+            ],
+        }
+
+        diff = build_source_health_diff(current, baseline)
+        self.assertEqual(diff["summary"]["improved"], 1)
+        self.assertEqual(diff["summary"]["regressed"], 1)
+        formatted = format_source_health_diff(diff)
+        self.assertIn("One", formatted)
+        self.assertIn("regressed", formatted)
 
     def test_source_trust_badges_explain_github_https_sources(self):
         badges = build_source_trust_badges(
