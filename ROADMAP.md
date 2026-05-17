@@ -145,7 +145,9 @@ Why now:
 
 SwitchHosts, Gas Mask, Control D, and NextDNS all reinforce that profile management is a core mental model. HostsFileGet already has profile features, but they remain scattered.
 
-### [ ] R006 - Source Health UX and Remediation Assistant
+### [x] R006 - Source Health UX and Remediation Assistant
+
+Status: completed 2026-05-17 in `feat: add source health remediation assistant`. `hostsfileget.source_catalog` now builds grouped remediation reports for source-health output, the GUI exposes **Tools > Source Health Remediation...** with run/copy/open/export/exclude actions, and the batch source picker honors reviewed failed-source exclusions on the next import dialog.
 
 Evidence: `L6`, `M1`, `M2`, `M3`, `M4`, `M5`, `C8`.
 
@@ -247,10 +249,7 @@ These are intentionally not active roadmap items unless a future product decisio
 
 A future implementation pass should finish with:
 
-- Updated source catalog lifecycle metadata and tests.
-- `hostsfileget/source_catalog.py` extracted with compatibility wrappers.
-- Source-health baseline documentation committed.
-- Runtime/release version hygiene corrected.
+- Release trust hardening for reproducible artifacts, checksums, security audit, and local EXE verification.
 - `ROADMAP.md` checkboxes updated only after verification.
 - Real verification commands recorded in the change summary or commit message.
 

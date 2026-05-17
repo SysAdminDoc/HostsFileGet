@@ -4,6 +4,11 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Source health remediation UX**
+- Added `build_source_health_remediation_report(...)` and `format_source_health_remediation_report(...)` in `hostsfileget.source_catalog` to group unhealthy source-health results by HTTP error, download cap warning, non-host syntax, moved domain-list URL, unsafe URL, timeout, retired, or manual-review causes.
+- Added **Tools > Source Health Remediation...** with bounded source-health execution, grouped remediation output, replacement-search copying, upstream issue-page opening where repository URLs are known, JSON export, and a reviewed "exclude failed from next batch import" action.
+- Batch import now pre-clears failed URLs excluded by the remediation assistant and keeps bulk select-all from silently reselecting those reviewed failures.
+
 **Modularization - config/profile service phase**
 - New `hostsfileget.config_profiles` (~2,389 lines): owns config schema migration, local/portable config path resolution, profile snapshots and switching, declarative profile import/export, time-bound profile activation, encrypted profile sync, signed share patches, and config-owned sanitizers.
 - `hosts_editor.py` now re-exports the config/profile surface instead of defining it inline, reducing the monolith to roughly 24,912 lines while keeping GUI, CLI, and legacy import behavior stable.

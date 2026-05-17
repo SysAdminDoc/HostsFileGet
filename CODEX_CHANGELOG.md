@@ -11,6 +11,12 @@ This file is a handoff note for future agents, including Claude.
 
 ## 2026-05-17 Roadmap Continuation Notes
 
+- Completed R006: Source Health UX and Remediation Assistant.
+- Added grouped source-health remediation report helpers in `hostsfileget/source_catalog.py` with compatibility re-exports through `hosts_editor.py`.
+- Added **Tools > Source Health Remediation...** for bounded health checks, grouped output, search-term copy, upstream issue URL opening, JSON export, and reviewed failed-source exclusion for the next batch import.
+- Updated batch source selection so remediation-excluded failed URLs start unselected and bulk select-all leaves them out unless the user manually reselects a source.
+- Next roadmap item: R007 Release Trust Hardening.
+
 - Completed R005: Config/Profile Service Extraction.
 - Added `hostsfileget/config_profiles.py` for config schema migration, portable/local config path resolution, profile snapshots and switching, time-bound activation, declarative import/export, encrypted profile sync, signed share patches, and config-owned sanitizers.
 - Kept `hosts_editor.py` compatibility re-exports for the config/profile API and reduced the monolith to roughly 24,912 lines.

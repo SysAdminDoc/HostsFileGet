@@ -18,6 +18,7 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from .compression import (
@@ -49,6 +50,61 @@ SOURCE_HEALTH_SAMPLE_BYTES = 256 * 1024
 SOURCE_HEALTH_TIMEOUT_SECONDS = 15
 SOURCE_HEALTH_DEFAULT_WORKERS = 8
 SOURCE_HEALTH_SUMMARY_STATUSES = ("healthy", "warning", "failed", "retired")
+SOURCE_HEALTH_REMEDIATION_GROUPS = {
+    "http-error": {
+        "title": "HTTP Error",
+        "description": "The upstream server returned an HTTP error or access/range response.",
+        "action": "Review upstream status, rate limits, and direct raw-list URLs before importing.",
+    },
+    "download-cap": {
+        "title": "Download Cap Warning",
+        "description": "The source is reachable but exceeded the bounded source-health sample.",
+        "action": "Keep guarded and review manually before adding it to recurring imports.",
+    },
+    "non-host-syntax": {
+        "title": "Non-Host Syntax",
+        "description": "The sample did not look like hosts/domain-list content.",
+        "action": "Run syntax lint or replace the source with a hosts-compatible feed.",
+    },
+    "domain-list-moved": {
+        "title": "Domain List Moved",
+        "description": "The URL appears to return an HTML/landing page instead of a raw list.",
+        "action": "Search for the provider's current raw hosts or domain-list URL.",
+    },
+    "unsafe-scheme": {
+        "title": "Unsafe Or Invalid URL",
+        "description": "The source URL is invalid or not a direct HTTP(S) feed URL.",
+        "action": "Fix the manifest URL or retire the source until a safe replacement exists.",
+    },
+    "timeout": {
+        "title": "Timeout",
+        "description": "The source did not respond within the bounded health-check timeout.",
+        "action": "Retry later and avoid unattended imports until reachability is stable.",
+    },
+    "retired": {
+        "title": "Retired",
+        "description": "The curated manifest already marks the source as retired.",
+        "action": "Use the documented replacement or reactivate only after a URL audit.",
+    },
+    "other": {
+        "title": "Manual Review",
+        "description": "The source needs manual review before routine use.",
+        "action": "Inspect the diagnostic and keep the source out of default bundles until resolved.",
+    },
+}
+SOURCE_HEALTH_DIAGNOSTIC_GROUPS = {
+    "http-gone": "http-error",
+    "http-access": "http-error",
+    "http-error": "http-error",
+    "sample-cap": "download-cap",
+    "non-host-like": "non-host-syntax",
+    "empty-sample": "non-host-syntax",
+    "html-response": "domain-list-moved",
+    "invalid-url": "unsafe-scheme",
+    "timeout": "timeout",
+    "network-error": "timeout",
+    "retired": "retired",
+}
 
 
 def _default_bundle_dir() -> str:
@@ -811,6 +867,150 @@ def summarize_source_health_results(results: list[dict]) -> dict:
     return summary
 
 
+def source_health_remediation_group_id(source: dict) -> str:
+    diagnostic_class = str(source.get("diagnostic_class", "")).strip().lower()
+    if diagnostic_class in SOURCE_HEALTH_DIAGNOSTIC_GROUPS:
+        return SOURCE_HEALTH_DIAGNOSTIC_GROUPS[diagnostic_class]
+    diagnostic = str(source.get("diagnostic", "")).lower()
+    if diagnostic.startswith("http ") or " http " in diagnostic:
+        return "http-error"
+    if "exceeded the cap" in diagnostic:
+        return "download-cap"
+    if "html" in diagnostic:
+        return "domain-list-moved"
+    if "invalid source url" in diagnostic or "invalid url" in diagnostic:
+        return "unsafe-scheme"
+    if "did not contain host-like" in diagnostic or "empty sample" in diagnostic:
+        return "non-host-syntax"
+    if "timeout" in diagnostic:
+        return "timeout"
+    if str(source.get("status", "")).strip().lower() == "retired":
+        return "retired"
+    return "other"
+
+
+def build_source_health_replacement_search_terms(source: dict) -> str:
+    name = " ".join(str(source.get("name") or "").split())
+    url = str(source.get("url") or "").strip()
+    host = ""
+    try:
+        host = urllib.parse.urlparse(url).netloc
+    except Exception:
+        host = ""
+    diagnostic_class = str(source.get("diagnostic_class") or "").strip()
+    terms = [value for value in (name, host, "hosts file", "raw domain list", diagnostic_class) if value]
+    return " ".join(dict.fromkeys(terms))
+
+
+def build_source_health_remediation_report(health_report: dict) -> dict:
+    groups = {
+        group_id: {
+            "id": group_id,
+            "title": metadata["title"],
+            "description": metadata["description"],
+            "action": metadata["action"],
+            "sources": [],
+        }
+        for group_id, metadata in SOURCE_HEALTH_REMEDIATION_GROUPS.items()
+    }
+    summary = {
+        "total": 0,
+        "healthy": 0,
+        "warning": 0,
+        "failed": 0,
+        "retired": 0,
+        "grouped": 0,
+    }
+    for source in health_report.get("sources", []):
+        if not isinstance(source, dict):
+            continue
+        status = str(source.get("status") or "failed").strip().lower()
+        summary["total"] += 1
+        if status in summary:
+            summary[status] += 1
+        if status == "healthy":
+            continue
+        group_id = source_health_remediation_group_id(source)
+        if group_id not in groups:
+            group_id = "other"
+        row = dict(source)
+        row["search_terms"] = build_source_health_replacement_search_terms(row)
+        groups[group_id]["sources"].append(row)
+        summary["grouped"] += 1
+
+    ordered_groups = [
+        groups[group_id]
+        for group_id in (
+            "http-error",
+            "domain-list-moved",
+            "download-cap",
+            "non-host-syntax",
+            "unsafe-scheme",
+            "timeout",
+            "retired",
+            "other",
+        )
+        if groups[group_id]["sources"]
+    ]
+    return {
+        "schema": "hostsfileget.source-health-remediation.v1",
+        "checked_at": health_report.get("checked_at", ""),
+        "summary": summary,
+        "groups": ordered_groups,
+        "search_terms": [
+            source["search_terms"]
+            for group in ordered_groups
+            for source in group["sources"]
+            if source.get("search_terms")
+        ],
+        "failed_urls": [
+            source.get("url", "")
+            for source in health_report.get("sources", [])
+            if isinstance(source, dict) and source.get("status") == "failed" and source.get("url")
+        ],
+    }
+
+
+def format_source_health_remediation_report(report: dict) -> str:
+    summary = report.get("summary") or {}
+    lines = [
+        "Source Health Remediation",
+        f"Checked at: {report.get('checked_at') or '(unknown)'}",
+        (
+            "Summary: "
+            f"{summary.get('healthy', 0)} healthy, "
+            f"{summary.get('warning', 0)} warning, "
+            f"{summary.get('failed', 0)} failed, "
+            f"{summary.get('retired', 0)} retired."
+        ),
+    ]
+    groups = report.get("groups") or []
+    if not groups:
+        lines.append("")
+        lines.append("No unhealthy sources were found.")
+        return "\n".join(lines)
+    for group in groups:
+        sources = group.get("sources") or []
+        lines.extend([
+            "",
+            f"{group.get('title', 'Manual Review')} ({len(sources)})",
+            str(group.get("description") or "").strip(),
+            f"Action: {group.get('action') or '-'}",
+        ])
+        for source in sources[:25]:
+            lines.append(
+                f"- {source.get('name', '')} [{source.get('status', '')}] "
+                f"{source.get('diagnostic', '')}"
+            )
+            if source.get("remediation"):
+                lines.append(f"  Remediation: {source.get('remediation')}")
+            if source.get("search_terms"):
+                lines.append(f"  Search: {source.get('search_terms')}")
+        if len(sources) > 25:
+            lines.append(f"- ...and {len(sources) - 25} more source(s).")
+    return "\n".join(lines)
+
+
 def _source_health_diff_key(source: dict) -> tuple[str, str]:
     name = str(source.get("name", "")).strip().lower()
     url = normalize_custom_source_url(str(source.get("url", "")).strip()) or str(source.get("url", "")).strip()
@@ -973,6 +1173,8 @@ __all__ = [
     "SOURCE_HEALTH_TIMEOUT_SECONDS",
     "SOURCE_HEALTH_DEFAULT_WORKERS",
     "SOURCE_HEALTH_SUMMARY_STATUSES",
+    "SOURCE_HEALTH_REMEDIATION_GROUPS",
+    "SOURCE_HEALTH_DIAGNOSTIC_GROUPS",
     "SourceEntry",
     "SourceRecord",
     "SourceHealthRecord",
@@ -999,6 +1201,10 @@ __all__ = [
     "check_source_health_record",
     "check_source_health_records",
     "summarize_source_health_results",
+    "source_health_remediation_group_id",
+    "build_source_health_replacement_search_terms",
+    "build_source_health_remediation_report",
+    "format_source_health_remediation_report",
     "build_source_health_diff",
     "format_source_health_diff",
     "build_source_health_report",

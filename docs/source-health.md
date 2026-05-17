@@ -29,6 +29,22 @@ python hosts_editor.py `
   --source-health-output source-health-report.json
 ```
 
+## GUI Remediation Assistant
+
+Use **Tools > Source Health Remediation...** to run the same bounded curated-source check from the desktop app.
+
+The assistant groups unhealthy sources by likely maintenance cause:
+
+- HTTP error or access/range response.
+- Download cap warning.
+- Non-host syntax or empty sample.
+- Domain list moved to an HTML/landing page.
+- Unsafe or invalid URL.
+- Timeout or transient network failure.
+- Already-retired manifest entry.
+
+The dialog can copy replacement-search terms, open upstream GitHub/GitLab issue pages where the source URL identifies a repository, export the raw health report plus grouped remediation JSON, and mark failed URLs as excluded from the next batch-import review. The exclusion is local UI state: failed sources are pre-cleared in the next **Select Lists to Import** dialog and bulk **Select All Shown** leaves them excluded, but a user can still review and reselect an individual source manually.
+
 ## Report Shape
 
 ```json
