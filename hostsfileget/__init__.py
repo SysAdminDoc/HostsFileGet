@@ -51,6 +51,13 @@ Phase 7 extraction:
       diffs, plus the stable ``SourceRecord`` / ``SourceHealthRecord`` data
       shapes. ``hosts_editor.py`` re-exports the module surface for
       compatibility.
+
+Roadmap extractions:
+    - :mod:`hostsfileget.config_profiles` — config migration, profile
+      snapshots, portable paths, activation schedules, declarative config,
+      encrypted sync payloads, and signed share patches.
+    - :mod:`hostsfileget.shortcuts` — canonical keyboard shortcut and command
+      entry reference data shared by GUI binding and documentation audits.
 """
 
 __all__ = [
@@ -64,4 +71,6 @@ __all__ = [
     "constants",
     "fetch",
     "source_catalog",
+    "config_profiles",
+    "shortcuts",
 ]

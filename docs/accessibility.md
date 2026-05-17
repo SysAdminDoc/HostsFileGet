@@ -22,7 +22,7 @@ Run these before a release that changes layout, colors, fonts, menus, dialogs, o
 
 - Windows high contrast mode: launch the app, verify text remains readable, focus rings remain visible, and dialogs do not hide action buttons.
 - Narrator or NVDA: traverse the menu bar, sidebar actions, editor, About dialog, Preferences dialog, and Accessibility Audit dialog.
-- Keyboard-only pass: open menus with `Alt`, move through controls with `Tab` / `Shift+Tab`, close dialogs with `Esc`, and verify `Ctrl+F`, `Ctrl+S`, `Ctrl+Shift+S`, and `F5`.
+- Keyboard-only pass: open menus with `Alt`, move through controls with `Tab` / `Shift+Tab`, close dialogs with `Esc`, and verify `Ctrl+F`, `Ctrl+S`, `Ctrl+Shift+S`, `F5`, `Ctrl+P`, `Ctrl+H`, and `Ctrl+/`.
 - Font scaling: test at 125% and 150% display scale; confirm buttons and status text do not clip.
 
 ## Known Limits

@@ -180,6 +180,11 @@ Keyboard shortcuts:
 - `Ctrl+S` save cleaned
 - `Ctrl+Shift+S` save raw
 - `F5` refresh from disk
+- `Ctrl+P` open Goto Anything
+- `Ctrl+H` open Find and Replace
+- `Ctrl+/` toggle comment on the editor selection
+
+See `docs/keyboard-and-commands.md` for the canonical shortcut and command-entry table.
 
 ## Safety Notes
 
@@ -194,7 +199,8 @@ Keyboard shortcuts:
 Run the regression suite with:
 
 ```powershell
-python -m py_compile hosts_editor.py hostsfileget\source_catalog.py hostsfileget\config_profiles.py tests\test_source_catalog.py tests\test_config_profiles.py tests\test_hosts_editor_logic.py tests\test_gui_smoke.py tests\test_benchmarks.py tests\test_package_manifests.py benchmarks\large_file_benchmark.py scripts\render_package_manifests.py scripts\build_release_artifacts.py scripts\verify_release_artifact.py scripts\check_release_identity.py
+python -m py_compile hosts_editor.py hostsfileget\source_catalog.py hostsfileget\config_profiles.py hostsfileget\shortcuts.py tests\test_source_catalog.py tests\test_config_profiles.py tests\test_hosts_editor_logic.py tests\test_gui_smoke.py tests\test_benchmarks.py tests\test_package_manifests.py tests\test_shortcuts.py benchmarks\large_file_benchmark.py scripts\render_package_manifests.py scripts\build_release_artifacts.py scripts\verify_release_artifact.py scripts\audit_shortcuts.py scripts\check_release_identity.py
+python scripts\audit_shortcuts.py
 python -m unittest discover -s tests -v
 ```
 

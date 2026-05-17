@@ -11,6 +11,12 @@ This file is a handoff note for future agents, including Claude.
 
 ## 2026-05-17 Roadmap Continuation Notes
 
+- Completed R008: Keyboard and Documentation Consistency Pass.
+- Added `hostsfileget/shortcuts.py` as the canonical shortcut and command-entry registry.
+- Updated `hosts_editor.py` to bind global shortcuts and render the About dialog shortcut card from that registry.
+- Added `docs/keyboard-and-commands.md`, README/accessibility doc updates, `scripts/audit_shortcuts.py`, and `tests/test_shortcuts.py`.
+- Next roadmap item: R009 Integration Handoff Quality Pack.
+
 - Completed R007: Release Trust Hardening.
 - Added `scripts/build_release_artifacts.py` for deterministic SHA-256 generation, package-manager manifest rendering, reproducible package-manifest zipping, and `HostsFileGet.release-artifacts.json` metadata.
 - Added `scripts/verify_release_artifact.py` to run built EXE `--version` and `--help` smoke checks without opening the GUI.

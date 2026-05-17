@@ -221,3 +221,12 @@ Local implementation evidence recorded during R007:
 - `scripts/verify_release_artifact.py` now provides a local and workflow-friendly command to verify built EXE `--version` and `--help` behavior without GUI startup.
 - `.github/workflows/release.yml` runs EXE verification before artifact generation and uploads `HostsFileGet.release-artifacts.json` with the EXE, checksum, SBOM, and package-manifest zip.
 - Focused validation covered the artifact script, deterministic zip timestamps, release identity checks, and fake-CLI release verification.
+
+## R008 Keyboard/Docs Follow-Up
+
+Local implementation evidence recorded during R008:
+
+- `hostsfileget/shortcuts.py` now defines global keyboard shortcuts and grouped command entry points.
+- `hosts_editor.py` now binds global shortcuts from that registry instead of open-coded root/text bindings.
+- `docs/keyboard-and-commands.md` now holds the canonical table, and README/accessibility docs include the previously underdocumented `Ctrl+P`, `Ctrl+H`, and `Ctrl+/` shortcuts.
+- `scripts/audit_shortcuts.py` checks shortcut and command-entry docs without starting Tkinter; focused validation covered the registry, generated markdown tables, and documentation audit.
