@@ -65,7 +65,8 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `PythonLauncher.ps1` | Elevated bootstrapper that finds or installs Python, refreshes cached editor code, and launches the app |
 | `HostsFileGet.spec` | PyInstaller build definition |
 | `.github/workflows/source-health.yml` | Scheduled/manual curated-source reachability report |
-| `tests/test_hosts_editor_logic.py` | Regression suite for pure logic, deterministic parser fuzzers, golden cleaned-output fixtures, and selected GUI-adjacent helper paths |
+| `tests/test_hosts_editor_logic.py` | Regression suite for pure logic, deterministic parser fuzzers, golden cleaned-output fixtures, legacy re-export compatibility, and selected GUI-adjacent helper paths |
+| `tests/test_source_catalog.py` | Focused source-catalog module tests for manifest validation, source records, bundles, health reports, and `hosts_editor` compatibility re-exports |
 | `tests/test_gui_smoke.py` | Tk smoke tests for patched main-window startup and basic modal construction; skips when Tk cannot create a root |
 | `tests/test_benchmarks.py` | Smoke coverage for the benchmark harness without enforcing hardware-dependent timing budgets |
 | `benchmarks/large_file_benchmark.py` | Deterministic large-file parser/cleaner benchmark with human and JSON output |
@@ -195,11 +196,12 @@ The most stable implementation surface is the pure-function layer before `HostsF
 - Config sanitation and declarative profiles: `sanitize_custom_sources`, `sanitize_config_snapshot`, `sanitize_filter_query_history`, `sanitize_profile_snapshot`, `sanitize_profiles_snapshot`, `update_active_profile_snapshot`, `parse_declarative_config_text`, `format_declarative_config_payload`, `upsert_profile_in_config`, `set_active_profile_in_config`, `apply_declarative_profile_to_config`, `build_profile_quick_switch_report`, `apply_profile_quick_switch`, `build_profile_tray_availability_report`, `resolve_saved_state_hashes`.
 - Profile schedule helpers: `normalize_profile_activation_days`, `sanitize_profile_activation_schedule`, `evaluate_profile_activation_schedule`, `apply_profile_activation_schedule`, `format_profile_activation_schedule_report`.
 - Config location and portable export: `get_primary_config_path`, `get_config_root_dir`, `build_config_location_report`, `write_portable_bundle_config`, `format_portable_bundle_export_summary`.
-- Source catalog loading: `sanitize_source_manifest`, `load_blocklist_sources_manifest`, `sanitize_source_adapter_plugin_manifest`, `load_source_adapter_plugin_catalog`, `format_source_adapter_plugin_catalog`, `sanitize_source_bundle_catalog`, `load_source_bundle_catalog`, `format_source_bundle_catalog`, `format_source_bundle_report`.
+- Source catalog loading: `SourceRecord`, `SourceHealthRecord`, `sanitize_source_manifest`, `load_blocklist_sources_manifest`, `sanitize_source_bundle_catalog`, `load_source_bundle_catalog`, `format_source_bundle_catalog`, `format_source_bundle_report`, `check_source_health_record`, `build_source_health_report`, and `summarize_source_health_results` live in `hostsfileget/source_catalog.py` and are re-exported by `hosts_editor.py`.
+- Source adapter plugin loading: `sanitize_source_adapter_plugin_manifest`, `load_source_adapter_plugin_catalog`, `format_source_adapter_plugin_catalog`.
 - i18n catalog loading and contribution review: `normalize_locale_code`, `sanitize_i18n_catalog`, `load_i18n_catalog`, `translate_message`, `build_i18n_catalog_report`, `build_i18n_contribution_template`, `build_i18n_contribution_report`.
 - Source response caching and import retries: `fetch_source_with_cache`, `fetch_source_with_retries`, `resolve_import_fetch_worker_count`, `sanitize_source_cache_metadata`, `build_source_request_headers`.
 - Source trust display: `build_source_trust_badges`, `source_trust_report_url`, `format_source_trust_details`.
-- Source health reporting: `check_source_health_record`, `build_source_health_report`, `summarize_source_health_results`.
+- Source health reporting uses the source-catalog module and remains read-only unless a caller explicitly writes the returned JSON report.
 - False-positive triage: `build_false_positive_triage_report`, `format_false_positive_triage_report`, `add_domain_to_whitelist_text`, `remove_false_positive_matches_from_lines`.
 - Windows diagnostics import: `parse_windows_dns_client_events_xml`, `build_windows_dns_client_wevtutil_command`, `collect_recent_windows_dns_client_queries`.
 - DNS bypass diagnostics: `collect_dns_bypass_policy_snapshot`, `dns_bypass_policy_status`, `format_dns_bypass_diagnostics`.
@@ -248,7 +250,7 @@ Primary responsibilities:
 
 - `hostsfileget/parsing.py`
 - `hostsfileget/config.py`
-- `hostsfileget/sources.py`
+- `hostsfileget/source_catalog.py`
 - `hostsfileget/importers.py`
 - `hostsfileget/exports.py`
 - `hostsfileget/provenance.py`

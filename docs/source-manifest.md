@@ -2,7 +2,7 @@
 
 HostsFileGet keeps the built-in curated blocklist catalog in `data/blocklist_sources.json`.
 
-The GUI and CLI load this file through `load_blocklist_sources_manifest(...)` at startup. This keeps source URLs reviewable as data, lets release tooling bundle the catalog explicitly, and gives health/trust work one stable source of truth.
+The GUI and CLI load this file through `hostsfileget.source_catalog.load_blocklist_sources_manifest(...)` at startup. `hosts_editor.py` re-exports that API for compatibility. This keeps source URLs reviewable as data, lets release tooling bundle the catalog explicitly, and gives health/trust work one stable source of truth.
 
 ## Version
 
@@ -106,7 +106,8 @@ Launcher-cache path:
 Run:
 
 ```powershell
-python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py
+python -m py_compile hosts_editor.py hostsfileget\source_catalog.py tests\test_source_catalog.py tests\test_hosts_editor_logic.py
+python -m unittest tests.test_source_catalog -v
 python -m unittest discover -s tests -v
 ```
 

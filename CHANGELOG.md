@@ -4,6 +4,12 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Modularization - source catalog phase**
+- New `hostsfileget.source_catalog` (~1,005 lines): owns curated-source manifest loading and validation, lifecycle metadata, source bundle expansion, source-health reports, baseline diffs, and source-health remediation formatting.
+- Added stable standard-library dataclass shapes for `SourceRecord` and `SourceHealthRecord` while preserving legacy tuple/dict outputs for GUI, CLI, tests, and external `hosts_editor` imports.
+- `hosts_editor.py` now re-exports the source-catalog surface instead of defining that logic inline, reducing the monolith to 27,082 lines after this extraction.
+- Added focused `tests/test_source_catalog.py` coverage for direct module behavior plus compatibility checks for the `hosts_editor` re-exports.
+
 **Source catalog health reset**
 - Added curated-source lifecycle metadata (`active`, `warning`, `deprecated`, `retired`) and preserved it on existing 3-tuple source entries for compatibility.
 - Marked the 2026-05-17 source-health baseline in `data/blocklist_sources.json`; HTTP 404/410 sources are retained as retired entries and warning/failure sources now carry lifecycle reasons and notes.

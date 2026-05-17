@@ -66,7 +66,9 @@ Acceptance:
 - Source picker can show deprecated/retired status without removing historical knowledge.
 - `python hosts_editor.py --source-health ...` produces a JSON report whose warning/failure classes map to documented remediation actions.
 
-### [ ] R002 - Modularization Phase 7: Source Catalog and Manifest Layer
+### [x] R002 - Modularization Phase 7: Source Catalog and Manifest Layer
+
+Status: completed 2026-05-17 in `refactor: extract source catalog module`. `hostsfileget/source_catalog.py` now owns curated-source manifest validation, lifecycle metadata, bundle resolution, source-health reporting, and stable `SourceRecord` / `SourceHealthRecord` dataclasses. `hosts_editor.py` keeps compatibility re-exports, and focused source-catalog tests cover the extracted boundary.
 
 Evidence: `L1`, `L5`, `L8`, `G3`, `G6`, `M1`, `M4`.
 
