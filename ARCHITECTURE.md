@@ -70,6 +70,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `tests/test_gui_smoke.py` | Tk smoke tests for patched main-window startup and basic modal construction; skips when Tk cannot create a root |
 | `tests/test_benchmarks.py` | Smoke coverage for the benchmark harness without enforcing hardware-dependent timing budgets |
 | `benchmarks/large_file_benchmark.py` | Deterministic large-file parser/cleaner benchmark with human and JSON output |
+| `scripts/check_release_identity.py` | Release-facing version, PyInstaller advisory pin, `pip-audit`, and checklist guard |
 
 ## Repository Layout
 
@@ -418,7 +419,7 @@ Required before large refactors:
 - Curated source and source bundle edits must update `data/blocklist_sources.json`; invalid manifests fail startup and launcher validation.
 - Public source health is inherently flaky; use reports for review and only gate when explicitly passing `--source-health-fail-on-unhealthy`.
 - PowerShell launcher changes need parser validation because quoting and elevation paths are easy to break.
-- PyInstaller packaging should be built from pinned dependencies and scanned for the PyInstaller CVE class noted in the roadmap.
+- PyInstaller packaging should be built from pinned dependencies and guarded by `scripts/check_release_identity.py`; the guard rejects PyInstaller pins below the safe range for `GHSA-p2xp-xx3r-mffc`.
 - DNS-over-HTTPS, DNS-over-QUIC, browser private DNS, VPN DNS, and hardcoded device resolvers can bypass the hosts file entirely.
 - Browser adblock syntax includes cosmetic, scriptlet, exception, and URL-path rules that hosts files cannot represent; keep these as lint/quarantine findings instead of broad domain rewrites.
 - IDN/Punycode and homograph findings are advisory. Do not auto-block all IDNs; legitimate internationalized domains are common and false positives are expected.

@@ -65,3 +65,13 @@ R002 Source Catalog and Manifest Layer extraction was implemented after R001:
 - Updated `hosts_editor.py` to re-export the source-catalog API instead of defining that logic inline.
 - Added `tests/test_source_catalog.py` for focused source-catalog module coverage and compatibility checks.
 - Updated architecture, source manifest/health docs, changelogs, project context, and `ROADMAP.md`; the next P0 item is R003.
+
+## 2026-05-17 R003 Implementation Follow-Up
+
+R003 Release Identity and Version Hygiene was implemented after R002:
+
+- Updated README and release-facing docs/examples from preview or v2.20.0 references to v2.27.0.
+- Added `scripts/check_release_identity.py` to verify README badge identity, release example versions, PyInstaller advisory-safe pins, `pip-audit` pins, release checklist terms, and workflow gating.
+- Wired the release identity check into `.github/workflows/release.yml` and `tests/test_package_manifests.py`.
+- Expanded `docs/release.md` with a PyInstaller `GHSA-p2xp-xx3r-mffc` guard and explicit `pip-audit`, SHA-256, SBOM, and package-manager-manifest checklist items.
+- Updated `ROADMAP.md` and `PROJECT_CONTEXT.md`; the next roadmap item is R004.

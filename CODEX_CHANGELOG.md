@@ -11,6 +11,12 @@ This file is a handoff note for future agents, including Claude.
 
 ## 2026-05-17 Roadmap Continuation Notes
 
+- Completed R003: Release Identity and Version Hygiene from the 2026-05-17 roadmap.
+- Updated the README badge and release-facing docs/examples to v2.27.0.
+- Added `scripts/check_release_identity.py`, release workflow gating, and package-manifest unit coverage for stale preview/version text, PyInstaller advisory-safe pins, `pip-audit`, and release checklist hardening terms.
+- Expanded `docs/release.md` with explicit PyInstaller `GHSA-p2xp-xx3r-mffc`, `pip-audit`, SHA-256, SBOM, and package-manager-manifest review checks.
+- Next roadmap item: R004 Python Runtime Compatibility Matrix.
+
 - Completed R002: Source Catalog and Manifest Layer extraction from the 2026-05-17 roadmap.
 - Added `hostsfileget/source_catalog.py` for curated source manifest validation, lifecycle metadata, bundle resolution, source-health checks, source-health diffs, and stable `SourceRecord` / `SourceHealthRecord` dataclass shapes.
 - Kept `hosts_editor.py` compatibility re-exports for the source-catalog API and reduced the monolith to 27,082 lines.

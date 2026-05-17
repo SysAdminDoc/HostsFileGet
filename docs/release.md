@@ -22,7 +22,8 @@ Run from the repository root:
 python -m pip install --upgrade pip
 python -m pip install -r requirements-build.txt
 python -m pip install -r requirements-security.txt
-python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py tests\test_gui_smoke.py tests\test_benchmarks.py tests\test_package_manifests.py benchmarks\large_file_benchmark.py scripts\render_package_manifests.py
+python -m py_compile hosts_editor.py hostsfileget\source_catalog.py tests\test_source_catalog.py tests\test_hosts_editor_logic.py tests\test_gui_smoke.py tests\test_benchmarks.py tests\test_package_manifests.py benchmarks\large_file_benchmark.py scripts\render_package_manifests.py scripts\check_release_identity.py
+python scripts\check_release_identity.py
 python -m unittest discover -s tests -v
 python -m pip_audit -r requirements-build.txt --strict
 
@@ -37,8 +38,8 @@ if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; 
 
 python -m PyInstaller --clean --noconfirm HostsFileGet.spec
 Get-FileHash -Algorithm SHA256 dist\HostsFileGet.exe
-python scripts\render_package_manifests.py --version 2.20.0 --installer-url https://github.com/SysAdminDoc/HostsFileGet/releases/download/v2.20.0/HostsFileGet.exe --sha256 (Get-FileHash -Algorithm SHA256 dist\HostsFileGet.exe).Hash --output-dir dist\package-manifests
-python hosts_editor.py --managed-package-export intune-win32 .\default.txt dist\managed-package-export --managed-package-version 2.20.0 --managed-installer-url https://github.com/SysAdminDoc/HostsFileGet/releases/download/v2.20.0/HostsFileGet.exe --managed-sha256 (Get-FileHash -Algorithm SHA256 dist\HostsFileGet.exe).Hash
+python scripts\render_package_manifests.py --version 2.27.0 --installer-url https://github.com/SysAdminDoc/HostsFileGet/releases/download/v2.27.0/HostsFileGet.exe --sha256 (Get-FileHash -Algorithm SHA256 dist\HostsFileGet.exe).Hash --output-dir dist\package-manifests
+python hosts_editor.py --managed-package-export intune-win32 .\default.txt dist\managed-package-export --managed-package-version 2.27.0 --managed-installer-url https://github.com/SysAdminDoc/HostsFileGet/releases/download/v2.27.0/HostsFileGet.exe --managed-sha256 (Get-FileHash -Algorithm SHA256 dist\HostsFileGet.exe).Hash
 python -m pip_audit -r requirements-build.txt --strict --format cyclonedx-json --output dist\HostsFileGet.sbom.cdx.json
 ```
 
@@ -68,8 +69,8 @@ The workflow:
 2. Installs Python 3.12.
 3. Installs pinned build dependencies from `requirements-build.txt`.
 4. Compiles Python sources.
-5. Runs unit tests.
-6. Audits pinned build dependencies.
+5. Checks release identity/version hygiene.
+6. Runs unit tests.
 7. Parses `PythonLauncher.ps1`.
 8. Builds `dist\HostsFileGet.exe` with PyInstaller.
 9. Bundles `data/blocklist_sources.json` into the executable runtime.
@@ -77,7 +78,7 @@ The workflow:
 11. Records Authenticode signature status.
 12. Writes `dist\HostsFileGet.exe.sha256`.
 13. Renders Winget and Chocolatey manifests from the release URL and SHA-256.
-14. Writes `dist\HostsFileGet.sbom.cdx.json`.
+14. Writes `dist\HostsFileGet.sbom.cdx.json` and audits pinned build dependencies.
 15. Uploads release files as workflow artifacts.
 16. On tag builds, creates or updates the matching GitHub release assets.
 
@@ -90,13 +91,25 @@ The workflow supports Authenticode signing when these GitHub Actions secrets exi
 
 If `WINDOWS_SIGNING_CERTIFICATE_PFX_BASE64` is absent, the workflow leaves `HostsFileGet.exe` unsigned and prints that status. This keeps unsigned local/community builds explicit while allowing the same workflow to sign official releases after a certificate is available.
 
+## Build-Tool Security Guard
+
+`requirements-build.txt` pins PyInstaller to `6.20.0`. This is above the vulnerable `<6.0.0` range in [GHSA-p2xp-xx3r-mffc](https://github.com/advisories/GHSA-p2xp-xx3r-mffc). The advisory marks `6.0.0` as patched and notes that `6.10.0` further reworked bootstrap path handling; the pinned build dependency should not be lowered below `6.0.0`.
+
+`scripts/check_release_identity.py` verifies the README version badge, release-facing example versions, PyInstaller pin, `pip-audit` pin, this checklist, and the release workflow gate.
+
 ## Release Checklist
 
 Before tagging:
 
 - Confirm `CHANGELOG.md` includes the release version and date.
-- Confirm `APP_VERSION` in `hosts_editor.py` matches the intended release.
+- Confirm `python hosts_editor.py --version`, `APP_VERSION` in `hostsfileget.constants`, the README badge, and the tag agree.
+- Run `python scripts\check_release_identity.py`.
 - Confirm `data/blocklist_sources.json` validates through the unit tests.
+- Confirm `requirements-build.txt` keeps PyInstaller above the `GHSA-p2xp-xx3r-mffc` vulnerable range.
+- Run `python -m pip_audit -r requirements-build.txt --strict` and review the dependency audit.
+- Generate and review the SHA-256 checksum for `dist\HostsFileGet.exe`.
+- Generate and review the SBOM at `dist\HostsFileGet.sbom.cdx.json`.
+- Render and inspect package manager manifests in `dist\package-manifests`.
 - Run the local validation commands above.
 - Confirm the worktree is clean.
 - Tag using `vMAJOR.MINOR.PATCH`.

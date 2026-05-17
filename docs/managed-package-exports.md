@@ -16,8 +16,8 @@ Create a bundle:
 
 ```powershell
 python hosts_editor.py --managed-package-export intune-win32 .\managed-hosts.txt .\managed-bundle `
-  --managed-package-version 2.20.0 `
-  --managed-installer-url https://github.com/SysAdminDoc/HostsFileGet/releases/download/v2.20.0/HostsFileGet.exe `
+  --managed-package-version 2.27.0 `
+  --managed-installer-url https://github.com/SysAdminDoc/HostsFileGet/releases/download/v2.27.0/HostsFileGet.exe `
   --managed-sha256 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA `
   --managed-label "Corp Managed"
 ```

@@ -6,6 +6,7 @@ from scripts.render_package_manifests import (
     render_package_manifests,
     validate_release_inputs,
 )
+from scripts.check_release_identity import check_release_identity
 
 
 class PackageManifestTests(unittest.TestCase):
@@ -48,6 +49,10 @@ class PackageManifestTests(unittest.TestCase):
         self.assertIn("PackageVersion: 2.20.0", installer)
         self.assertIn("ChecksumType64 'sha256'", chocolatey)
         self.assertNotIn("{{", installer + chocolatey)
+
+    def test_release_identity_docs_are_current(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        self.assertEqual(check_release_identity(repo_root), [])
 
 
 if __name__ == "__main__":

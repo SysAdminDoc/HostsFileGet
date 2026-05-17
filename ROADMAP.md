@@ -89,7 +89,9 @@ Acceptance:
 - Unit tests can exercise source catalog behavior without importing Tkinter.
 - `hosts_editor.py` loses a meaningful amount of source-manifest logic without breaking public imports.
 
-### [ ] R003 - Release Identity and Version Hygiene
+### [x] R003 - Release Identity and Version Hygiene
+
+Status: completed 2026-05-17 in `chore: tighten release identity checks`. README release badge, release-facing examples, release checklist, package-manager docs, and managed-package docs now align with v2.27.0. `scripts/check_release_identity.py` and the release workflow gate stale `version-preview` text, stale release URL/example versions, missing release checklist terms, PyInstaller pins below `GHSA-p2xp-xx3r-mffc`'s safe range, and missing `pip-audit` pins.
 
 Evidence: `L2`, `L3`, `L4`, `D1`, `D2`, `D3`, `D4`, `D5`, `D6`.
 
