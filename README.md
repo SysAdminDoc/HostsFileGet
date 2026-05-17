@@ -199,8 +199,9 @@ See `docs/keyboard-and-commands.md` for the canonical shortcut and command-entry
 Run the regression suite with:
 
 ```powershell
-python -m py_compile hosts_editor.py hostsfileget\source_catalog.py hostsfileget\config_profiles.py hostsfileget\shortcuts.py tests\test_source_catalog.py tests\test_config_profiles.py tests\test_hosts_editor_logic.py tests\test_gui_smoke.py tests\test_benchmarks.py tests\test_package_manifests.py tests\test_shortcuts.py benchmarks\large_file_benchmark.py scripts\render_package_manifests.py scripts\build_release_artifacts.py scripts\verify_release_artifact.py scripts\audit_shortcuts.py scripts\check_release_identity.py
+python -m py_compile hosts_editor.py hostsfileget\source_catalog.py hostsfileget\config_profiles.py hostsfileget\shortcuts.py tests\test_source_catalog.py tests\test_config_profiles.py tests\test_hosts_editor_logic.py tests\test_gui_smoke.py tests\test_benchmarks.py tests\test_package_manifests.py tests\test_shortcuts.py tests\test_cli_contracts.py benchmarks\large_file_benchmark.py scripts\render_package_manifests.py scripts\build_release_artifacts.py scripts\verify_release_artifact.py scripts\audit_shortcuts.py scripts\audit_cli_contract.py scripts\check_release_identity.py
 python scripts\audit_shortcuts.py
+python scripts\audit_cli_contract.py
 python -m unittest discover -s tests -v
 ```
 
@@ -511,6 +512,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Advanced DNS rewrites: `docs/dns-rewrites.md`
 - Optional Git history: `docs/git-history.md`
 - Scheduler activity report: `docs/scheduler-activity.md`
+- CLI automation contract: `docs/cli-automation-contract.md`
 - Portable bundle config: `docs/portable-config.md`
 - DNS interoperability pack: `docs/dns-integrations.md`
 - Cloud DNS adapters: `docs/cloud-dns-adapters.md`

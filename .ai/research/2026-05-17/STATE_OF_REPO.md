@@ -61,6 +61,10 @@ After the R009 continuation pass, integration artifacts that cross the Windows h
 
 After the R010 continuation pass, false-positive triage and why-blocked summaries include `why_likely_blocked` factors. The Check Domain workflow can add a session-scoped temporary allow until next import, and it can export manual upstream report artifacts with schema `hostsfileget.false-positive-upstream-report.v1`.
 
+## R011 Post-State Note
+
+After the R011 continuation pass, high-risk automation-facing CLI surfaces are guarded by `tests/fixtures/cli_contract_snapshot.json`, `scripts/audit_cli_contract.py`, and `tests/test_cli_contracts.py`. The audit captures `--help`, validates required phrases, and probes representative pure CLI report/plan/service routes with GUI initialization patched to fail. `--source-cache-prune` is now present in the early CLI flag detector and no longer falls through to GUI startup.
+
 ## Source Manifest
 
 `data/blocklist_sources.json` contains:

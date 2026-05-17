@@ -143,3 +143,14 @@ R010 False-Positive and Allowlist Workflow Refresh was implemented after R009:
 - Added local upstream false-positive exports with schema `hostsfileget.false-positive-upstream-report.v1`, embedded Markdown, redaction notes, and explicit `auto_filed: false`.
 - Added session-scoped temporary allow entries with schema `hostsfileget.temporary-allowlist-entry.v1`; temporary domains participate in cleaned-save filtering and clear automatically when the next source import starts.
 - Updated `docs/false-positive-triage.md`, `docs/why-blocked-summaries.md`, changelogs, `ROADMAP.md`, and `PROJECT_CONTEXT.md`; the next roadmap item is R011.
+
+## 2026-05-17 R011 Implementation Follow-Up
+
+R011 CLI Contract Snapshot Tests was implemented after R010:
+
+- Added `tests/fixtures/cli_contract_snapshot.json` with stable high-risk `--help` phrases for hosts write, source health/cache, plan-only handoff, provider/DNS handoff, local report, and local automation-service command families.
+- Added `scripts/audit_cli_contract.py`, which captures `--help`, validates the snapshot fixture, and probes representative pure CLI routes while Tk and `HostsFileEditor` initialization are patched to fail.
+- Added `tests/test_cli_contracts.py` and wired the contract audit into CI/release validation.
+- Added `docs/cli-automation-contract.md` and README/release documentation links for automation-user compatibility expectations.
+- Fixed `--source-cache-prune` by adding it to the early CLI flag detector; the existing parser route now remains reachable without GUI startup.
+- Updated `ROADMAP.md`, `CHANGELOG.md`, `CODEX_CHANGELOG.md`, and `PROJECT_CONTEXT.md`; no unchecked 2026-05-17 roadmap item remains.

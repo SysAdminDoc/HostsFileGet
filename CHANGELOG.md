@@ -4,6 +4,11 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**CLI automation contracts**
+- Added `tests/fixtures/cli_contract_snapshot.json`, `scripts/audit_cli_contract.py`, and `tests/test_cli_contracts.py` to snapshot high-risk `--help` phrases and verify pure CLI routes do not require Tk/GUI initialization.
+- Added `docs/cli-automation-contract.md` for automation-user compatibility notes and wired the CLI contract audit into CI/release validation.
+- Fixed `--source-cache-prune` so it is recognized by the early CLI flag detector and no longer falls through to GUI startup.
+
 **False-positive and temporary allow workflow**
 - Added deterministic `why_likely_blocked` factors to false-positive triage and why-blocked summaries using editor matches, fetched-source matches, local provenance, allowlist history, temporary allow state, and pins.
 - Added schema `hostsfileget.false-positive-upstream-report.v1` for local JSON/Markdown false-positive report exports that are suitable for manual upstream review and never auto-file issues.

@@ -38,6 +38,7 @@ RELEASE_WORKFLOW_REQUIRED_SCRIPTS = (
     "scripts\\check_release_identity.py",
     "scripts\\build_release_artifacts.py",
     "scripts\\verify_release_artifact.py",
+    "scripts\\audit_cli_contract.py",
 )
 MIN_SAFE_PYINSTALLER = (6, 0, 0)
 

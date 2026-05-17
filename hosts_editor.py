@@ -24760,6 +24760,7 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--apply",
         "--update",
         "--config-location",
+        "--source-cache-prune",
         "--config-plan",
         "--config-apply",
         "--config-export",

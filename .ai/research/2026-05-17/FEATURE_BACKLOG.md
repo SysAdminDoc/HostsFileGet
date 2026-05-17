@@ -46,6 +46,8 @@ This is the raw harvested idea pool before final prioritization. Source IDs map 
 
 R010 implementation note: B019-B020 are now covered by session-scoped temporary allow entries, cleaned-save participation until next import, `why_likely_blocked` factors, and schema-versioned upstream false-positive report exports.
 
+R011 implementation note: B009 is partially covered by a safer first step rather than a full dispatch-table extraction. High-risk CLI routes now have a snapshot fixture, an audit script, and pure route probes; a future dispatch-table extraction should build on that contract.
+
 ## Integrations And Handoff Artifacts
 
 | ID | Idea | Evidence | Notes |

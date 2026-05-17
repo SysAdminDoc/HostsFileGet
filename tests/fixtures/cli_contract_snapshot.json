@@ -1,0 +1,190 @@
+{
+  "schema": "hostsfileget.cli-contract-snapshot.v1",
+  "description": "Stable help and routing probes for high-risk automation-facing CLI surfaces. Keep this intentionally narrower than the full CLI so additions remain deliberate.",
+  "help_sections": [
+    {
+      "id": "hosts-file-write-safety",
+      "required_phrases": [
+        "--backup",
+        "--apply PATH",
+        "--update",
+        "--disable",
+        "--enable",
+        "--silent"
+      ]
+    },
+    {
+      "id": "source-and-cache-operations",
+      "required_phrases": [
+        "--source-health",
+        "--source-health-output PATH",
+        "--source-health-baseline PATH",
+        "--source-cache-prune"
+      ]
+    },
+    {
+      "id": "plan-only-platform-handoffs",
+      "required_phrases": [
+        "--wfp-blocker-plan INPUT OUTPUT",
+        "--nrpt-plan INPUT OUTPUT",
+        "--router-push-plan ADAPTER INPUT OUTPUT_DIR",
+        "--managed-package-export TARGET INPUT OUTPUT_DIR",
+        "--sandbox-vm-hosts-plan INPUT OUTPUT_DIR"
+      ]
+    },
+    {
+      "id": "provider-and-dns-handoffs",
+      "required_phrases": [
+        "--integration-export PACK INPUT OUTPUT",
+        "--cloud-adapter-plan ADAPTER INPUT OUTPUT",
+        "--mobile-dns-profile-export TARGET OUTPUT_DIR",
+        "--dns-rewrite-plan PROVIDER INPUT OUTPUT"
+      ]
+    },
+    {
+      "id": "local-review-reports",
+      "required_phrases": [
+        "--why-blocked-summary DOMAIN INPUT OUTPUT",
+        "--dns-rebinding-report INPUT",
+        "--adblock-lint INPUT",
+        "--rule-tier-report INPUT",
+        "--idn-report INPUT"
+      ]
+    },
+    {
+      "id": "local-automation-services",
+      "required_phrases": [
+        "--api-serve",
+        "--api-token TOKEN",
+        "--block-page-serve",
+        "--block-page-preview OUTPUT",
+        "--activity-report"
+      ]
+    }
+  ],
+  "pure_cli_route_probes": [
+    {
+      "id": "source-health-report",
+      "argv": [
+        "--source-health",
+        "--source-health-output",
+        "source-health.json"
+      ],
+      "handler": "_cli_source_health"
+    },
+    {
+      "id": "source-cache-prune",
+      "argv": [
+        "--source-cache-prune"
+      ],
+      "handler": "_cli_source_cache_prune"
+    },
+    {
+      "id": "integration-export",
+      "argv": [
+        "--integration-export",
+        "blocky",
+        "hosts.txt",
+        "blocky.txt"
+      ],
+      "handler": "_cli_integration_export"
+    },
+    {
+      "id": "cloud-adapter-plan",
+      "argv": [
+        "--cloud-adapter-plan",
+        "nextdns",
+        "hosts.txt",
+        "nextdns-plan.json"
+      ],
+      "handler": "_cli_cloud_adapter_plan"
+    },
+    {
+      "id": "mobile-dns-profile-export",
+      "argv": [
+        "--mobile-dns-profile-export",
+        "nextdns",
+        "mobile-bundle"
+      ],
+      "handler": "_cli_mobile_dns_profile_export"
+    },
+    {
+      "id": "why-blocked-summary",
+      "argv": [
+        "--why-blocked-summary",
+        "ads.example",
+        "hosts.txt",
+        "why-blocked.json"
+      ],
+      "handler": "_cli_why_blocked_summary"
+    },
+    {
+      "id": "nrpt-policy-plan",
+      "argv": [
+        "--nrpt-plan",
+        "namespaces.txt",
+        "nrpt.json",
+        "--nrpt-name-server",
+        "10.0.0.53"
+      ],
+      "handler": "_cli_nrpt_policy_plan"
+    },
+    {
+      "id": "router-push-plan",
+      "argv": [
+        "--router-push-plan",
+        "openwrt-dnsmasq",
+        "hosts.txt",
+        "router-bundle"
+      ],
+      "handler": "_cli_router_gateway_push_plan"
+    },
+    {
+      "id": "managed-package-export",
+      "argv": [
+        "--managed-package-export",
+        "intune",
+        "managed-hosts.txt",
+        "managed-bundle",
+        "--managed-installer-url",
+        "https://example.com/HostsFileGet.exe",
+        "--managed-sha256",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "handler": "_cli_managed_package_export"
+    },
+    {
+      "id": "dns-rebinding-report",
+      "argv": [
+        "--dns-rebinding-report",
+        "hosts.txt",
+        "--dns-rebinding-output",
+        "dns-rebinding.json"
+      ],
+      "handler": "_cli_dns_rebinding_report"
+    },
+    {
+      "id": "adblock-lint-report",
+      "argv": [
+        "--adblock-lint",
+        "filters.txt",
+        "--adblock-lint-output",
+        "adblock-lint.json"
+      ],
+      "handler": "_cli_adblock_lint"
+    },
+    {
+      "id": "local-api-serve",
+      "argv": [
+        "--api-serve",
+        "--api-host",
+        "127.0.0.1",
+        "--api-port",
+        "0",
+        "--api-token",
+        "0123456789abcdef"
+      ],
+      "handler": "_cli_api_serve"
+    }
+  ]
+}

@@ -11,11 +11,17 @@ This file is a handoff note for future agents, including Claude.
 
 ## 2026-05-17 Roadmap Continuation Notes
 
+- Completed R011: CLI Contract Snapshot Tests.
+- Added `tests/fixtures/cli_contract_snapshot.json`, `scripts/audit_cli_contract.py`, and `tests/test_cli_contracts.py` for high-risk CLI help phrases and pure CLI route probes.
+- Added `docs/cli-automation-contract.md` and wired the audit into CI/release validation.
+- Fixed the `--source-cache-prune` early CLI detector so the existing parser route no longer falls through to GUI startup.
+- No unchecked 2026-05-17 roadmap items remain.
+
 - Completed R010: False-Positive and Allowlist Workflow Refresh.
 - Added `why_likely_blocked` factors to false-positive triage and why-blocked summaries, combining editor matches, fetched-source matches, local provenance, allowlist history, temporary allow state, and pins.
 - Added schema `hostsfileget.false-positive-upstream-report.v1` for local JSON/Markdown exports suitable for manual upstream false-positive reports; HostsFileGet does not auto-file issues.
 - Added session-scoped temporary allow entries with schema `hostsfileget.temporary-allowlist-entry.v1`; they participate in cleaned-save filtering and are cleared when the next import starts.
-- Next roadmap item: R011 CLI Contract Snapshot Tests.
+- Next roadmap item at that point was R011 CLI Contract Snapshot Tests; R011 is now complete.
 
 - Completed R009: Integration Handoff Quality Pack.
 - Added `hostsfileget.handoff-contract.v1` metadata and "What this will not do" report/readme sections for DNS integration exports, cloud DNS adapter plans, NRPT policy exports, router/gateway bundles, mobile DNS profile bundles, and managed deployment package bundles.
