@@ -248,6 +248,7 @@ DECLARATIVE_CONFIG_EXTENSION_FORMATS = {
 }
 SOURCE_MANIFEST_SCHEMA_VERSION = 1
 SOURCE_MANIFEST_RELATIVE_PATH = os.path.join("data", "blocklist_sources.json")
+SOURCE_LIFECYCLE_STATES = ("active", "warning", "deprecated", "retired")
 SOURCE_BUNDLE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 SOURCE_BUNDLE_RISK_LEVELS = ("low", "medium", "high", "guarded")
 SOURCE_ADAPTER_PLUGIN_SCHEMA_VERSION = 1
@@ -284,6 +285,7 @@ SOURCE_HEALTH_REPORT_SCHEMA_VERSION = 1
 SOURCE_HEALTH_SAMPLE_BYTES = 256 * 1024
 SOURCE_HEALTH_TIMEOUT_SECONDS = 15
 SOURCE_HEALTH_DEFAULT_WORKERS = 8
+SOURCE_HEALTH_SUMMARY_STATUSES = ("healthy", "warning", "failed", "retired")
 DNS_REBINDING_REPORT_SCHEMA_VERSION = 1
 SOURCE_CACHE_DIRNAME = "source_cache"
 GIT_HISTORY_DIRNAME = "hosts_history_git"
@@ -1244,16 +1246,24 @@ class BulkSelectionDialog(tk.Toplevel):
         self.result = None
         self.filter_var = tk.StringVar()
         self.filter_var.trace_add("write", lambda *_args: self._rebuild_source_rows())
-        self._all_sources: list[tuple[str, str, str, str]] = []
+        self._all_sources: list[tuple[str, str, str, str, dict]] = []
+        self._disabled_source_keys: set[tuple[str, str]] = set()
         self._selection_state: dict[tuple[str, str], bool] = {}
         for category, sources in blocklist_sources.items():
-            for name, url, tooltip in sources:
-                self._all_sources.append((category, name, url, tooltip))
-                self._selection_state[(name, url)] = True
+            for source in sources:
+                name, url, tooltip = source[:3]
+                metadata = source_entry_metadata(source)
+                self._all_sources.append((category, name, url, tooltip, metadata))
+                key = (name, url)
+                if source_lifecycle_state(source) == "retired":
+                    self._disabled_source_keys.add(key)
+                    self._selection_state[key] = False
+                else:
+                    self._selection_state[key] = True
         for src in custom_sources:
             name = src["name"]
             url = src["url"]
-            self._all_sources.append(("Custom Sources", name, url, "Custom source"))
+            self._all_sources.append(("Custom Sources", name, url, "Custom source", {"lifecycle": "active"}))
             self._selection_state[(name, url)] = True
         self._visible_source_keys: list[tuple[str, str]] = []
 
@@ -1337,12 +1347,12 @@ class BulkSelectionDialog(tk.Toplevel):
 
         query = self.filter_var.get().strip().lower()
         self._visible_source_keys.clear()
-        grouped: dict[str, list[tuple[str, str, str, str]]] = {}
-        for category, name, url, tooltip in self._all_sources:
-            haystack = f"{category} {name} {url} {tooltip}".lower()
+        grouped: dict[str, list[tuple[str, str, str, str, dict]]] = {}
+        for category, name, url, tooltip, metadata in self._all_sources:
+            haystack = f"{category} {name} {url} {tooltip} {format_source_lifecycle_details(metadata)}".lower()
             if query and query not in haystack:
                 continue
-            grouped.setdefault(category, []).append((category, name, url, tooltip))
+            grouped.setdefault(category, []).append((category, name, url, tooltip, metadata))
 
         if not grouped:
             self.empty_state_label = ttk.Label(
@@ -1358,8 +1368,8 @@ class BulkSelectionDialog(tk.Toplevel):
 
         for category, sources in grouped.items():
             self._add_category_header(category, len(sources))
-            for source_category, name, url, tooltip in sources:
-                self._add_checkbox(source_category, name, url, tooltip)
+            for source_category, name, url, tooltip, metadata in sources:
+                self._add_checkbox(source_category, name, url, tooltip, metadata)
         self._update_selection_summary()
 
     def _add_category_header(self, text, count):
@@ -1377,7 +1387,9 @@ class BulkSelectionDialog(tk.Toplevel):
         ttk.Label(inner, text=text, style="SectionTitle.TLabel").pack(side="left")
         ttk.Label(inner, text=f"{count} shown", style="SectionBody.TLabel").pack(side="right")
 
-    def _add_checkbox(self, category, name, url, tooltip):
+    def _add_checkbox(self, category, name, url, tooltip, metadata=None):
+        metadata = dict(metadata or {})
+        lifecycle = sanitize_source_lifecycle(metadata.get("lifecycle"))
         key = (name, url)
         var = tk.BooleanVar(value=self._selection_state.get(key, True))
         shell = tk.Frame(
@@ -1400,6 +1412,8 @@ class BulkSelectionDialog(tk.Toplevel):
             variable=var,
             command=lambda k=key, v=var: self._toggle_selection(k, v),
         )
+        if lifecycle == "retired":
+            cb.configure(state="disabled")
         cb.pack(side="left", fill="x", expand=True)
         source_host = urllib.parse.urlparse(url).netloc or url
         ttk.Label(row, text=source_host, foreground=PALETTE["subtext"]).pack(side="right", padx=(8, 0))
@@ -1427,6 +1441,14 @@ class BulkSelectionDialog(tk.Toplevel):
             wraplength=600,
             justify="left",
         ).pack(anchor="w", pady=(5, 0))
+        if lifecycle != "active":
+            ttk.Label(
+                frame,
+                text=format_source_lifecycle_label(metadata),
+                style="SectionBody.TLabel",
+                wraplength=600,
+                justify="left",
+            ).pack(anchor="w", pady=(5, 0))
         ttk.Label(
             frame,
             text=tooltip,
@@ -1437,7 +1459,7 @@ class BulkSelectionDialog(tk.Toplevel):
 
         url_short = (url[:72] + "..") if len(url) > 72 else url
         trust_details = format_source_trust_details(trust_badges)
-        ToolTip(cb, f"{tooltip}\nURL: {url_short}\n\nTrust badges:\n{trust_details}")
+        ToolTip(cb, f"{tooltip}\nURL: {url_short}\n\n{format_source_lifecycle_details(metadata)}\n\nTrust badges:\n{trust_details}")
 
         self._visible_source_keys.append(key)
 
@@ -1470,7 +1492,8 @@ class BulkSelectionDialog(tk.Toplevel):
             [] if self.filter_var.get().strip() else list(self._selection_state.keys())
         )
         for key in targets:
-            self._selection_state[key] = True
+            if key not in self._disabled_source_keys:
+                self._selection_state[key] = True
         self._clear_feedback()
         self._rebuild_source_rows()
 
@@ -1486,7 +1509,7 @@ class BulkSelectionDialog(tk.Toplevel):
     def confirm(self):
         selected = [
             (name, url)
-            for (_category, name, url, _tooltip) in self._all_sources
+            for (_category, name, url, _tooltip, _metadata) in self._all_sources
             if self._selection_state.get((name, url))
         ]
 
@@ -5999,8 +6022,85 @@ def _coerce_source_manifest_schema_version(value) -> int:
         return 0
 
 
-def sanitize_source_manifest(manifest) -> dict[str, list[tuple[str, str, str]]]:
-    """Validate and normalize the bundled curated-source manifest."""
+class SourceEntry(tuple):
+    """3-tuple source entry with optional manifest metadata attached."""
+
+    def __new__(cls, name: str, url: str, description: str, metadata: dict | None = None):
+        entry = super().__new__(cls, (name, url, description))
+        entry.metadata = dict(metadata or {})
+        return entry
+
+
+def sanitize_source_lifecycle(value) -> str:
+    lifecycle = str(value or "active").strip().lower()
+    if lifecycle not in SOURCE_LIFECYCLE_STATES:
+        raise ValueError(
+            f"Source lifecycle {value!r} is invalid; expected one of "
+            f"{', '.join(SOURCE_LIFECYCLE_STATES)}."
+        )
+    return lifecycle
+
+
+def source_entry_metadata(source) -> dict:
+    if isinstance(source, dict):
+        metadata = source.get("metadata")
+        if isinstance(metadata, dict):
+            base = dict(metadata)
+        else:
+            base = {}
+        for key in (
+            "lifecycle",
+            "lifecycle_reason",
+            "lifecycle_checked_at",
+            "replacement_url",
+            "replacement_source",
+            "notes",
+        ):
+            if key in source:
+                base[key] = source.get(key)
+        return base
+    metadata = getattr(source, "metadata", None)
+    return dict(metadata or {}) if isinstance(metadata, dict) else {}
+
+
+def source_lifecycle_state(source) -> str:
+    try:
+        return sanitize_source_lifecycle(source_entry_metadata(source).get("lifecycle"))
+    except ValueError:
+        return "active"
+
+
+def format_source_lifecycle_label(metadata: dict | None) -> str:
+    metadata = dict(metadata or {})
+    lifecycle = sanitize_source_lifecycle(metadata.get("lifecycle"))
+    if lifecycle == "active":
+        return "Lifecycle: active"
+    reason = str(metadata.get("lifecycle_reason", "")).strip()
+    if reason:
+        return f"Lifecycle: {lifecycle} - {reason}"
+    return f"Lifecycle: {lifecycle}"
+
+
+def format_source_lifecycle_details(metadata: dict | None) -> str:
+    metadata = dict(metadata or {})
+    lifecycle = sanitize_source_lifecycle(metadata.get("lifecycle"))
+    lines = [format_source_lifecycle_label(metadata)]
+    replacement = str(metadata.get("replacement_source") or metadata.get("replacement_url") or "").strip()
+    notes = str(metadata.get("notes", "")).strip()
+    checked_at = str(metadata.get("lifecycle_checked_at", "")).strip()
+    if replacement:
+        lines.append(f"Replacement: {replacement}")
+    if checked_at:
+        lines.append(f"Lifecycle evidence: {checked_at}")
+    if notes:
+        lines.append(f"Notes: {notes}")
+    if lifecycle == "retired":
+        lines.append("Retired sources are shown for history but are disabled for one-click import and bundle selection.")
+    return "\n".join(lines)
+
+
+def sanitize_source_manifest_records(manifest) -> dict[str, list[SourceEntry]]:
+    """Validate and normalize the bundled curated-source manifest with metadata."""
     if not isinstance(manifest, dict):
         raise ValueError("Source manifest must be a JSON object.")
 
@@ -6015,7 +6115,7 @@ def sanitize_source_manifest(manifest) -> dict[str, list[tuple[str, str, str]]]:
     if not isinstance(categories, list) or not categories:
         raise ValueError("Source manifest must contain a non-empty categories list.")
 
-    sanitized: dict[str, list[tuple[str, str, str]]] = {}
+    sanitized: dict[str, list[SourceEntry]] = {}
     seen_categories = set()
     seen_source_names = set()
     seen_source_urls = set()
@@ -6039,7 +6139,7 @@ def sanitize_source_manifest(manifest) -> dict[str, list[tuple[str, str, str]]]:
         if not isinstance(sources, list) or not sources:
             raise ValueError(f"Source manifest category {category_name!r} must contain sources.")
 
-        sanitized_sources: list[tuple[str, str, str]] = []
+        sanitized_sources: list[SourceEntry] = []
         for source_index, source_payload in enumerate(sources, start=1):
             if not isinstance(source_payload, dict):
                 raise ValueError(
@@ -6049,6 +6149,12 @@ def sanitize_source_manifest(manifest) -> dict[str, list[tuple[str, str, str]]]:
             source_name = str(source_payload.get("name", "")).strip()
             source_url = str(source_payload.get("url", "")).strip()
             source_description = str(source_payload.get("description", "")).strip()
+            lifecycle = sanitize_source_lifecycle(source_payload.get("lifecycle", "active"))
+            lifecycle_reason = str(source_payload.get("lifecycle_reason", "")).strip()
+            lifecycle_checked_at = str(source_payload.get("lifecycle_checked_at", "")).strip()
+            replacement_url = str(source_payload.get("replacement_url", "")).strip()
+            replacement_source = str(source_payload.get("replacement_source", "")).strip()
+            notes = str(source_payload.get("notes", "")).strip()
 
             if not source_name or len(source_name) > 120 or _contains_control_chars(source_name):
                 raise ValueError(
@@ -6067,6 +6173,33 @@ def sanitize_source_manifest(manifest) -> dict[str, list[tuple[str, str, str]]]:
                 raise ValueError(
                     f"Source manifest entry {source_name!r} has an invalid description."
                 )
+            if len(lifecycle_reason) > 300 or _contains_control_chars(lifecycle_reason):
+                raise ValueError(
+                    f"Source manifest entry {source_name!r} has an invalid lifecycle_reason."
+                )
+            if len(lifecycle_checked_at) > 40 or _contains_control_chars(lifecycle_checked_at):
+                raise ValueError(
+                    f"Source manifest entry {source_name!r} has an invalid lifecycle_checked_at."
+                )
+            if (
+                replacement_url
+                and (
+                    len(replacement_url) > 2083
+                    or _contains_control_chars(replacement_url)
+                    or _parse_valid_http_source_url(replacement_url) is None
+                )
+            ):
+                raise ValueError(
+                    f"Source manifest entry {source_name!r} has an invalid replacement_url."
+                )
+            if len(replacement_source) > 120 or _contains_control_chars(replacement_source):
+                raise ValueError(
+                    f"Source manifest entry {source_name!r} has an invalid replacement_source."
+                )
+            if len(notes) > 500 or _contains_control_chars(notes):
+                raise ValueError(
+                    f"Source manifest entry {source_name!r} has invalid notes."
+                )
 
             normalized_source_name = source_name.lower()
             normalized_source_url = normalize_custom_source_url(source_url)
@@ -6077,11 +6210,24 @@ def sanitize_source_manifest(manifest) -> dict[str, list[tuple[str, str, str]]]:
 
             seen_source_names.add(normalized_source_name)
             seen_source_urls.add(normalized_source_url)
-            sanitized_sources.append((source_name, source_url, source_description))
+            metadata = {
+                "lifecycle": lifecycle,
+                "lifecycle_reason": lifecycle_reason,
+                "lifecycle_checked_at": lifecycle_checked_at,
+                "replacement_url": replacement_url,
+                "replacement_source": replacement_source,
+                "notes": notes,
+            }
+            sanitized_sources.append(SourceEntry(source_name, source_url, source_description, metadata))
 
         sanitized[category_name] = sanitized_sources
 
     return sanitized
+
+
+def sanitize_source_manifest(manifest) -> dict[str, list[tuple[str, str, str]]]:
+    """Validate and normalize the bundled curated-source manifest."""
+    return sanitize_source_manifest_records(manifest)
 
 
 def load_blocklist_sources_manifest(path: str | None = None) -> dict[str, list[tuple[str, str, str]]]:
@@ -6110,6 +6256,7 @@ def build_source_manifest_index(blocklist_sources) -> dict[str, dict]:
             name = str(source[0]).strip()
             url = str(source[1]).strip()
             description = str(source[2]).strip() if len(source) > 2 else ""
+            metadata = source_entry_metadata(source)
             if not name or name in index:
                 continue
             index[name] = {
@@ -6117,6 +6264,8 @@ def build_source_manifest_index(blocklist_sources) -> dict[str, dict]:
                 "url": url,
                 "description": description,
                 "category": str(category),
+                "lifecycle": source_lifecycle_state(source),
+                "metadata": metadata,
             }
     return index
 
@@ -6207,6 +6356,10 @@ def sanitize_source_bundle_catalog(manifest, blocklist_sources=None) -> list[dic
             if source_record is None:
                 raise ValueError(
                     f"Source bundle {bundle_id!r} references unknown source {source_name!r}."
+                )
+            if source_record.get("lifecycle") == "retired":
+                raise ValueError(
+                    f"Source bundle {bundle_id!r} references retired source {source_name!r}."
                 )
             seen_sources.add(normalized_source_name)
             sources.append(dict(source_record))
@@ -6310,10 +6463,15 @@ def format_source_bundle_report(bundle: dict | None) -> str:
     for source in sources:
         category = str(source.get("category", "")).strip()
         suffix = f" [{category}]" if category else ""
-        lines.append(f"- {source.get('name', 'Unnamed source')}{suffix}")
+        lifecycle = str(source.get("lifecycle", "active")).strip().lower() or "active"
+        lifecycle_suffix = "" if lifecycle == "active" else f" ({lifecycle})"
+        lines.append(f"- {source.get('name', 'Unnamed source')}{suffix}{lifecycle_suffix}")
         source_description = str(source.get("description", "")).strip()
         if source_description:
             lines.append(f"  {source_description}")
+        metadata = source_entry_metadata(source)
+        if lifecycle != "active":
+            lines.append(f"  {format_source_lifecycle_label(metadata)}")
     return "\n".join(lines)
 
 
@@ -6887,12 +7045,16 @@ def format_i18n_contribution_report(report: dict) -> str:
 
 def iter_curated_source_records(blocklist_sources: dict[str, list[tuple[str, str, str]]]):
     for category, sources in blocklist_sources.items():
-        for name, url, description in sources:
+        for source in sources:
+            name, url, description = source[:3]
+            metadata = source_entry_metadata(source)
             yield {
                 "category": category,
                 "name": name,
                 "url": url,
                 "description": description,
+                "lifecycle": source_lifecycle_state(source),
+                "metadata": metadata,
             }
 
 
@@ -6913,10 +7075,14 @@ def _sample_contains_host_like_content(lines: list[str]) -> bool:
 
 
 def _source_health_base_result(source: dict, checked_at: str) -> dict:
+    metadata = source_entry_metadata(source)
+    lifecycle = source_lifecycle_state(source)
     return {
         "category": str(source.get("category", "")).strip(),
         "name": str(source.get("name", "")).strip(),
         "url": str(source.get("url", "")).strip(),
+        "lifecycle": lifecycle,
+        "lifecycle_reason": str(metadata.get("lifecycle_reason", "")).strip(),
         "checked_at": checked_at,
         "status": "failed",
         "http_status": None,
@@ -6924,8 +7090,48 @@ def _source_health_base_result(source: dict, checked_at: str) -> dict:
         "bytes_read": 0,
         "sample_lines": 0,
         "elapsed_ms": 0,
+        "diagnostic_class": "unknown",
         "diagnostic": "",
+        "remediation": "",
     }
+
+
+def classify_source_health_diagnostic(
+    status: str,
+    diagnostic: str,
+    http_status: int | None = None,
+) -> tuple[str, str]:
+    status = str(status or "").strip().lower()
+    diagnostic_text = str(diagnostic or "")
+    diagnostic_lower = diagnostic_text.lower()
+    if status == "healthy":
+        return "ok", "No action needed."
+    if status == "retired":
+        return (
+            "retired",
+            "Retired sources are disabled; choose the documented replacement or reactivate only after a URL audit.",
+        )
+    if "invalid source url" in diagnostic_lower:
+        return "invalid-url", "Fix or retire the manifest URL."
+    if "exceeded the cap" in diagnostic_lower:
+        return "sample-cap", "Reachable but too large for the bounded health sample; keep guarded and review before scheduling."
+    if "html page" in diagnostic_lower:
+        return "html-response", "Replace landing-page URLs with a direct raw list URL."
+    if "empty sample" in diagnostic_lower:
+        return "empty-sample", "Review whether the upstream list is intentionally empty or should be retired."
+    if "did not contain host-like" in diagnostic_lower:
+        return "non-host-like", "Run syntax lint or replace with a hosts/domain-compatible source."
+    if "timeout" in diagnostic_lower:
+        return "timeout", "Retry later and avoid unattended use until the source is consistently reachable."
+    if "network error" in diagnostic_lower:
+        return "network-error", "Retry later and keep the source guarded until the network failure is understood."
+    if (http_status is not None and http_status >= 400) or diagnostic_lower.startswith("http "):
+        if http_status in {404, 410}:
+            return "http-gone", "Retire the source or replace it with a currently maintained URL."
+        if http_status in {401, 403, 416, 429}:
+            return "http-access", "Review provider access, range support, or rate limits before using this source in bundles."
+        return "http-error", "Review the upstream status and keep the source out of default bundles until it is healthy."
+    return "unknown", "Review the source manually before using it in recurring imports."
 
 
 def check_source_health_record(
@@ -6944,8 +7150,19 @@ def check_source_health_record(
     def finish(status: str, diagnostic: str) -> dict:
         result["status"] = status
         result["diagnostic"] = diagnostic
+        diagnostic_class, remediation = classify_source_health_diagnostic(
+            status,
+            diagnostic,
+            result.get("http_status"),
+        )
+        result["diagnostic_class"] = diagnostic_class
+        result["remediation"] = remediation
         result["elapsed_ms"] = max(0, int((time.monotonic() - started) * 1000))
         return result
+
+    if result["lifecycle"] == "retired":
+        reason = result.get("lifecycle_reason") or "Source is marked retired in the curated manifest."
+        return finish("retired", reason)
 
     parsed = _parse_valid_http_source_url(result["url"])
     if parsed is None:
@@ -7049,7 +7266,9 @@ def check_source_health_records(
 
 
 def summarize_source_health_results(results: list[dict]) -> dict:
-    summary = {"total": len(results), "healthy": 0, "warning": 0, "failed": 0}
+    summary = {"total": len(results)}
+    for status in SOURCE_HEALTH_SUMMARY_STATUSES:
+        summary[status] = 0
     for result in results:
         status = result.get("status")
         if status in summary:
@@ -7057,6 +7276,134 @@ def summarize_source_health_results(results: list[dict]) -> dict:
         else:
             summary["failed"] += 1
     return summary
+
+
+def _source_health_diff_key(source: dict) -> tuple[str, str]:
+    name = str(source.get("name", "")).strip().lower()
+    url = normalize_custom_source_url(str(source.get("url", "")).strip()) or str(source.get("url", "")).strip()
+    return name, url.lower()
+
+
+def build_source_health_diff(current_report: dict, baseline_report: dict) -> dict:
+    current_sources = {
+        _source_health_diff_key(source): source
+        for source in current_report.get("sources", [])
+        if isinstance(source, dict)
+    }
+    baseline_sources = {
+        _source_health_diff_key(source): source
+        for source in baseline_report.get("sources", [])
+        if isinstance(source, dict)
+    }
+    severity = {"healthy": 0, "retired": 0, "warning": 1, "failed": 2}
+    changes: list[dict] = []
+    summary = {
+        "new": 0,
+        "removed": 0,
+        "status_changed": 0,
+        "improved": 0,
+        "regressed": 0,
+        "unchanged": 0,
+    }
+
+    for key in sorted(set(current_sources) | set(baseline_sources)):
+        current = current_sources.get(key)
+        baseline = baseline_sources.get(key)
+        if current is None:
+            summary["removed"] += 1
+            changes.append({
+                "change": "removed",
+                "name": baseline.get("name", ""),
+                "url": baseline.get("url", ""),
+                "baseline_status": baseline.get("status", ""),
+                "current_status": "",
+                "baseline_diagnostic": baseline.get("diagnostic", ""),
+                "current_diagnostic": "",
+            })
+            continue
+        if baseline is None:
+            summary["new"] += 1
+            changes.append({
+                "change": "new",
+                "name": current.get("name", ""),
+                "url": current.get("url", ""),
+                "baseline_status": "",
+                "current_status": current.get("status", ""),
+                "baseline_diagnostic": "",
+                "current_diagnostic": current.get("diagnostic", ""),
+            })
+            continue
+
+        baseline_status = str(baseline.get("status", "failed"))
+        current_status = str(current.get("status", "failed"))
+        if baseline_status == current_status:
+            summary["unchanged"] += 1
+            continue
+
+        summary["status_changed"] += 1
+        baseline_severity = severity.get(baseline_status, 2)
+        current_severity = severity.get(current_status, 2)
+        if current_severity > baseline_severity:
+            change = "regressed"
+            summary["regressed"] += 1
+        elif current_severity < baseline_severity:
+            change = "improved"
+            summary["improved"] += 1
+        else:
+            change = "changed"
+        changes.append({
+            "change": change,
+            "name": current.get("name", baseline.get("name", "")),
+            "url": current.get("url", baseline.get("url", "")),
+            "baseline_status": baseline_status,
+            "current_status": current_status,
+            "baseline_diagnostic": baseline.get("diagnostic", ""),
+            "current_diagnostic": current.get("diagnostic", ""),
+        })
+
+    return {
+        "schema": "hostsfileget.source-health-diff.v1",
+        "baseline_checked_at": baseline_report.get("checked_at", ""),
+        "current_checked_at": current_report.get("checked_at", ""),
+        "summary": summary,
+        "changes": changes,
+    }
+
+
+def format_source_health_diff(diff: dict) -> str:
+    summary = diff.get("summary") or {}
+    lines = [
+        "Source Health Diff",
+        f"Baseline checked at: {diff.get('baseline_checked_at', '') or '(unknown)'}",
+        f"Current checked at: {diff.get('current_checked_at', '') or '(unknown)'}",
+        (
+            "Summary: "
+            f"{summary.get('improved', 0)} improved, "
+            f"{summary.get('regressed', 0)} regressed, "
+            f"{summary.get('status_changed', 0)} status changed, "
+            f"{summary.get('new', 0)} new, "
+            f"{summary.get('removed', 0)} removed."
+        ),
+    ]
+    changes = diff.get("changes") or []
+    if not changes:
+        lines.append("No source-health status changes.")
+        return "\n".join(lines)
+    lines.append("")
+    lines.append("Changes:")
+    for change in changes[:50]:
+        lines.append(
+            f"- {change.get('name', '')}: "
+            f"{change.get('baseline_status', '') or '(missing)'} -> "
+            f"{change.get('current_status', '') or '(missing)'} "
+            f"({change.get('change', 'changed')})"
+        )
+        current_diagnostic = str(change.get("current_diagnostic", "")).strip()
+        if current_diagnostic:
+            lines.append(f"  Current: {current_diagnostic}")
+    if len(changes) > 50:
+        lines.append(f"- ...and {len(changes) - 50} more change(s).")
+    return "\n".join(lines)
 
 
 def build_source_health_report(
@@ -18281,8 +18628,17 @@ class HostsFileEditor:
 
     def _iter_known_sources(self):
         for category, sources in self.BLOCKLIST_SOURCES.items():
-            for name, url, _tooltip in sources:
-                yield {"name": name, "url": url, "category": category, "kind": "curated"}
+            for source in sources:
+                name, url, _tooltip = source[:3]
+                metadata = source_entry_metadata(source)
+                yield {
+                    "name": name,
+                    "url": url,
+                    "category": category,
+                    "kind": "curated",
+                    "lifecycle": source_lifecycle_state(source),
+                    "metadata": metadata,
+                }
         for entry in self.custom_sources:
             yield {
                 "name": entry["name"],
@@ -18339,11 +18695,20 @@ class HostsFileEditor:
         matched_sources = 0
 
         for category, sources in self.BLOCKLIST_SOURCES.items():
-            filtered_sources = [
-                (name, url, tooltip)
-                for name, url, tooltip in sources
-                if not query or query in category.lower() or query in name.lower() or query in tooltip.lower() or query in url.lower()
-            ]
+            filtered_sources = []
+            for source in sources:
+                name, url, tooltip = source[:3]
+                metadata = source_entry_metadata(source)
+                lifecycle_text = format_source_lifecycle_details(metadata)
+                if (
+                    not query
+                    or query in category.lower()
+                    or query in name.lower()
+                    or query in tooltip.lower()
+                    or query in url.lower()
+                    or query in lifecycle_text.lower()
+                ):
+                    filtered_sources.append((name, url, tooltip, metadata))
             if not filtered_sources:
                 continue
 
@@ -18359,7 +18724,7 @@ class HostsFileEditor:
             ttk.Separator(category_frame, orient="horizontal").pack(fill="x", pady=(0, 4))
             rows_container = ttk.Frame(category_frame, style="Inset.TFrame")
             rows_container.pack(fill="x")
-            for index, (name, url, tooltip) in enumerate(filtered_sources):
+            for index, (name, url, tooltip, metadata) in enumerate(filtered_sources):
                 row = ttk.Frame(rows_container, style="Inset.TFrame", padding=(0, 8, 0, 8))
                 row.pack(fill="x")
 
@@ -18381,8 +18746,11 @@ class HostsFileEditor:
                 )
                 trust_text = format_source_trust_badges(trust_badges)
                 trust_details = format_source_trust_details(trust_badges)
+                lifecycle = sanitize_source_lifecycle(metadata.get("lifecycle"))
+                lifecycle_details = format_source_lifecycle_details(metadata)
                 tooltip_full = (
                     f"{tooltip}\n\nLast fetched: {stamp_hint or 'Not fetched yet'}"
+                    f"\n\n{lifecycle_details}"
                     f"\n\nTrust badges:\n{trust_details}"
                 )
 
@@ -18397,6 +18765,14 @@ class HostsFileEditor:
                 ToolTip(dot, dot_tip)
                 ttk.Label(title_row, text=name, style="InsetTitle.TLabel").pack(side="left")
                 ttk.Label(copy, text=f"{source_host}  |  {freshness}", style="InsetBody.TLabel", wraplength=260, justify="left").pack(anchor="w", pady=(3, 0))
+                if lifecycle != "active":
+                    ttk.Label(
+                        copy,
+                        text=format_source_lifecycle_label(metadata),
+                        style="InsetBody.TLabel",
+                        wraplength=270,
+                        justify="left",
+                    ).pack(anchor="w", pady=(3, 0))
                 ttk.Label(copy, text=trust_text, style="InsetBody.TLabel", wraplength=270, justify="left").pack(anchor="w", pady=(3, 0))
                 ttk.Label(copy, text=tooltip, style="InsetBody.TLabel", wraplength=250, justify="left").pack(anchor="w", pady=(3, 0))
 
@@ -18408,6 +18784,8 @@ class HostsFileEditor:
                     tooltip_full,
                     style="Action.TButton",
                 )
+                if lifecycle == "retired":
+                    import_btn.configure(state="disabled")
                 self._register_import_widget(import_btn)
                 import_btn.pack(side="left")
                 preview_btn = self._btn(
@@ -22880,12 +23258,15 @@ class HostsFileEditor:
         source_category = ""
         source_kind = "external"
         description = ""
+        lifecycle_metadata = {"lifecycle": "active"}
         for category, sources in self.BLOCKLIST_SOURCES.items():
-            for source_name, source_url, source_description in sources:
+            for source in sources:
+                source_name, source_url, source_description = source[:3]
                 if source_name == name and source_url == url:
                     source_category = category
                     source_kind = "curated"
                     description = source_description
+                    lifecycle_metadata = source_entry_metadata(source)
                     break
             if source_category:
                 break
@@ -22908,6 +23289,7 @@ class HostsFileEditor:
             cache_metadata=cache_metadata,
         )
         trust_details = format_source_trust_details(trust_badges)
+        lifecycle_details = format_source_lifecycle_details(lifecycle_metadata)
         dialog = tk.Toplevel(self.root)
         self._configure_modal_window(
             dialog,
@@ -22924,7 +23306,11 @@ class HostsFileEditor:
         )
         ttk.Label(
             intro,
-            text=f"{url}\nShowing the first ~{SOURCE_PREVIEW_MAX_LINES} lines only. This preview never edits the editor on its own.",
+            text=(
+                f"{url}\n{lifecycle_details}\n"
+                f"Showing the first ~{SOURCE_PREVIEW_MAX_LINES} lines only. "
+                "This preview never edits the editor on its own."
+            ),
             wraplength=720,
             justify="left",
             style="SectionBody.TLabel",
@@ -25224,7 +25610,13 @@ def _cli_update(hosts_path: str) -> int:
     )
 
 
-def _cli_source_health(output_path: str | None, timeout: float, workers: int, fail_on_unhealthy: bool) -> int:
+def _cli_source_health(
+    output_path: str | None,
+    timeout: float,
+    workers: int,
+    fail_on_unhealthy: bool,
+    baseline_path: str | None = None,
+) -> int:
     report = build_source_health_report(
         HostsFileEditor.BLOCKLIST_SOURCES,
         timeout=timeout,
@@ -25234,20 +25626,34 @@ def _cli_source_health(output_path: str | None, timeout: float, workers: int, fa
     _cli_print(
         "Source health: "
         f"{summary['healthy']} healthy, {summary['warning']} warning, "
-        f"{summary['failed']} failed, {summary['total']} total."
+        f"{summary['failed']} failed, {summary.get('retired', 0)} retired, "
+        f"{summary['total']} total."
     )
 
     notable = [
         source for source in report["sources"]
-        if source.get("status") in {"warning", "failed"}
+        if source.get("status") in {"warning", "failed", "retired"}
     ]
     for source in notable[:25]:
         _cli_print(
             f"{source['status'].upper():7} {source['name']} "
             f"({source['category']}): {source['diagnostic']}"
         )
+        if source.get("remediation"):
+            _cli_print(f"        Remediation: {source['remediation']}")
     if len(notable) > 25:
-        _cli_print(f"... {len(notable) - 25} additional warning/failed source(s) omitted from console output.")
+        _cli_print(f"... {len(notable) - 25} additional warning/failed/retired source(s) omitted from console output.")
+
+    if baseline_path:
+        try:
+            baseline = json.loads(read_text_file_content(baseline_path))
+            diff = build_source_health_diff(report, baseline)
+            report["baseline_diff"] = diff
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            _cli_print(f"Could not compare source health baseline: {exc}")
+            return 2
+        _cli_print("")
+        _cli_print(format_source_health_diff(diff))
 
     if output_path:
         try:
@@ -26655,6 +27061,7 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--source-health-timeout",
         "--source-health-workers",
         "--source-health-fail-on-unhealthy",
+        "--source-health-baseline",
         "--api-serve",
         "--api-host",
         "--api-port",
@@ -26774,6 +27181,7 @@ def _handle_cli_args(argv: list[str]) -> int | None:
         "--source-health-output=",
         "--source-health-timeout=",
         "--source-health-workers=",
+        "--source-health-baseline=",
         "--api-host=",
         "--api-port=",
         "--api-token=",
@@ -27056,6 +27464,7 @@ def _handle_cli_args(argv: list[str]) -> int | None:
     parser.add_argument("--source-health-timeout", type=float, default=SOURCE_HEALTH_TIMEOUT_SECONDS, help="Per-source network timeout in seconds.")
     parser.add_argument("--source-health-workers", type=int, default=SOURCE_HEALTH_DEFAULT_WORKERS, help="Parallel source-health worker count.")
     parser.add_argument("--source-health-fail-on-unhealthy", action="store_true", help="Return a non-zero exit code when any source fails.")
+    parser.add_argument("--source-health-baseline", metavar="PATH", help="Compare the current source-health run against a prior JSON report.")
     parser.add_argument("--api-serve", action="store_true", help="Start the opt-in loopback-only local REST API with bearer auth.")
     parser.add_argument("--api-host", default=LOCAL_API_DEFAULT_HOST, metavar="HOST", help="Loopback host for --api-serve; defaults to 127.0.0.1.")
     parser.add_argument("--api-port", type=int, default=LOCAL_API_DEFAULT_PORT, metavar="PORT", help="Port for --api-serve; use 0 for an ephemeral test port.")
@@ -27460,6 +27869,7 @@ def _handle_cli_args(argv: list[str]) -> int | None:
             args.source_health_timeout,
             args.source_health_workers,
             args.source_health_fail_on_unhealthy,
+            args.source_health_baseline,
         )
     if args.api_serve:
         return _cli_api_serve(args.api_host, args.api_port, args.api_token)

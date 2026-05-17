@@ -15,7 +15,7 @@ Bundles live in the optional top-level `bundles` array:
   "name": "Starter Low-Breakage",
   "description": "Conservative starter bundle.",
   "risk": "low",
-  "source_names": ["HaGezi Light", "StevenBlack Unified", "OISD Full"]
+  "source_names": ["HaGezi Light", "StevenBlack Unified", "MVPS Hosts"]
 }
 ```
 
@@ -24,6 +24,8 @@ Rules:
 - `id` must be lowercase ASCII with letters, digits, hyphens, or underscores.
 - `risk` must be `low`, `medium`, `high`, or `guarded`.
 - Every `source_names` entry must match a curated source in the same manifest.
+- Retired sources are rejected. Move a retired source out of bundles before
+  committing lifecycle metadata.
 - Duplicate bundle IDs, duplicate bundle names, and duplicate source references
   inside a bundle are rejected at startup and in tests.
 

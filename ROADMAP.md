@@ -42,7 +42,9 @@ Score work by:
 
 ## P0 - Next Required Work
 
-### R001 - Source Catalog Health Reset
+### [x] R001 - Source Catalog Health Reset
+
+Status: Completed 2026-05-17 in `feat: reset source catalog health lifecycle`. The implementation added source lifecycle metadata, retired-source bundle guards, source-health remediation classes, baseline diff support, and the tracked `docs/source-health-baseline-2026-05-17.md`.
 
 Evidence: `L5`, `L6`, `M1`, `M2`, `M3`, `M4`, `M5`.
 
@@ -64,7 +66,7 @@ Acceptance:
 - Source picker can show deprecated/retired status without removing historical knowledge.
 - `python hosts_editor.py --source-health ...` produces a JSON report whose warning/failure classes map to documented remediation actions.
 
-### R002 - Modularization Phase 7: Source Catalog and Manifest Layer
+### [ ] R002 - Modularization Phase 7: Source Catalog and Manifest Layer
 
 Evidence: `L1`, `L5`, `L8`, `G3`, `G6`, `M1`, `M4`.
 
@@ -85,7 +87,7 @@ Acceptance:
 - Unit tests can exercise source catalog behavior without importing Tkinter.
 - `hosts_editor.py` loses a meaningful amount of source-manifest logic without breaking public imports.
 
-### R003 - Release Identity and Version Hygiene
+### [ ] R003 - Release Identity and Version Hygiene
 
 Evidence: `L2`, `L3`, `L4`, `D1`, `D2`, `D3`, `D4`, `D5`, `D6`.
 
@@ -107,7 +109,7 @@ Acceptance:
 
 ## P1 - High-Value Work
 
-### R004 - Python Runtime Compatibility Matrix
+### [ ] R004 - Python Runtime Compatibility Matrix
 
 Evidence: `L2`, `D1`, `D2`, `D5`, `D7`, `D8`.
 
@@ -121,7 +123,7 @@ Why now:
 
 Python and PyInstaller compatibility is a release risk for a Windows desktop app. Current PyPI metadata says PyInstaller 6.20.0 supports `<3.15,>=3.8`, while prompt_toolkit 3.0.52 supports `>=3.8`; the project should state what it actually tests.
 
-### R005 - Config/Profile Service Extraction
+### [ ] R005 - Config/Profile Service Extraction
 
 Evidence: `L1`, `L2`, `L8`, `G2`, `G3`, `C1`, `C2`, `C3`.
 
@@ -135,7 +137,7 @@ Why now:
 
 SwitchHosts, Gas Mask, Control D, and NextDNS all reinforce that profile management is a core mental model. HostsFileGet already has profile features, but they remain scattered.
 
-### R006 - Source Health UX and Remediation Assistant
+### [ ] R006 - Source Health UX and Remediation Assistant
 
 Evidence: `L6`, `M1`, `M2`, `M3`, `M4`, `M5`, `C8`.
 
@@ -149,7 +151,7 @@ Why now:
 
 The current source-health data is actionable but too raw for routine maintenance. The app should make feed decay visible without forcing users to inspect JSON.
 
-### R007 - Release Trust Hardening
+### [ ] R007 - Release Trust Hardening
 
 Evidence: `L4`, `D3`, `D4`, `D5`, `D6`, `P1`.
 
@@ -164,7 +166,7 @@ Why now:
 
 Hosts-file editors touch a protected system file and are often run elevated. Release provenance and repeatable verification matter more than cosmetic packaging polish.
 
-### R008 - Keyboard and Documentation Consistency Pass
+### [ ] R008 - Keyboard and Documentation Consistency Pass
 
 Evidence: `L2`, `L3`, `L4`, `G1`, `G2`.
 
@@ -180,7 +182,7 @@ The UI has many power-user workflows. Documentation drift is an avoidable usabil
 
 ## P2 - Opportunistic Work
 
-### R009 - Integration Handoff Quality Pack
+### [ ] R009 - Integration Handoff Quality Pack
 
 Evidence: `C1`, `C2`, `C3`, `C4`, `C5`, `C6`, `S1`, `S2`, `S3`, `S7`, `S8`, `S9`, `S10`, `S11`.
 
@@ -194,7 +196,7 @@ Why later:
 
 The repo already contains plan-only integrations. The higher leverage first step is source health and modularization.
 
-### R010 - False-Positive and Allowlist Workflow Refresh
+### [ ] R010 - False-Positive and Allowlist Workflow Refresh
 
 Evidence: `L2`, `L4`, `G6`, `M1`, `M2`, `C4`, `X2`, `X3`.
 
@@ -208,7 +210,7 @@ Why later:
 
 False-positive UX is already present. Source catalog decay is a more immediate risk.
 
-### R011 - CLI Contract Snapshot Tests
+### [ ] R011 - CLI Contract Snapshot Tests
 
 Evidence: `L7`, `L8`, `P1`.
 

@@ -29,7 +29,8 @@ Unsupported schema versions fail validation. Add future migrations before changi
         {
           "name": "Example Source",
           "url": "https://example.com/hosts.txt",
-          "description": "Short tooltip text."
+          "description": "Short tooltip text.",
+          "lifecycle": "active"
         }
       ]
     }
@@ -46,6 +47,23 @@ Unsupported schema versions fail validation. Add future migrations before changi
 | `sources[].name` | string | Non-empty, unique case-insensitively across the manifest, max 120 chars, no control characters |
 | `sources[].url` | string | Direct `http` or `https` URL with a host, max 2083 chars, unique after URL normalization, no control characters |
 | `sources[].description` | string | Optional tooltip text, max 500 chars, no control characters |
+| `sources[].lifecycle` | string | Optional; `active`, `warning`, `deprecated`, or `retired`. Missing means `active` |
+| `sources[].lifecycle_reason` | string | Optional maintainer note explaining warning/deprecated/retired state, max 300 chars |
+| `sources[].lifecycle_checked_at` | string | Optional date or timestamp for the lifecycle evidence |
+| `sources[].replacement_source` | string | Optional in-catalog replacement source name, max 120 chars |
+| `sources[].replacement_url` | string | Optional direct `http` or `https` replacement URL |
+| `sources[].notes` | string | Optional source-specific maintenance note, max 500 chars |
+
+## Lifecycle States
+
+| State | Meaning |
+| --- | --- |
+| `active` | Normal curated source. |
+| `warning` | Source is reachable or useful but needs guarded review before recurring imports. |
+| `deprecated` | Source is still visible but should be migrated away from. |
+| `retired` | Source is retained for audit/history but disabled from built-in bundles and one-click import. |
+
+Retired sources must not be referenced by built-in bundles. The source picker still shows them with lifecycle context so users can see why a familiar feed disappeared from presets.
 
 ## Runtime Loading
 
@@ -78,6 +96,8 @@ Launcher-cache path:
 - Keep high-churn threat feeds such as NRD/DGA lists in a separate category with descriptions that call out freshness and false-positive risk.
 - Keep CNAME cloaking original-target feeds out of normal hosts-import categories unless the description explicitly marks them as DNS handoff only; only exact disguised-domain lists are hosts-reviewable.
 - Keep encrypted-DNS/VPN/Tor/proxy bypass feeds source-isolated with descriptions that warn hosts-file blocking is incomplete without router/firewall policy.
+- Use lifecycle metadata instead of deleting dead feeds silently; this preserves source history while keeping presets safe.
+- Keep `docs/source-health-baseline-YYYY-MM-DD.md` in sync with major lifecycle resets.
 - Source trust badges are derived from URL shape, local freshness/cache metadata, and description/category risk words. Badge meanings are documented in `docs/source-trust.md`.
 - Run the regression suite after every catalog edit.
 
@@ -98,3 +118,5 @@ The tests verify:
 - URL validation
 - control-character rejection
 - explicit-path manifest loading
+- lifecycle metadata validation
+- built-in bundle rejection of retired sources

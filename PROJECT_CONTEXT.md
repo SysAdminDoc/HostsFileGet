@@ -63,7 +63,7 @@ Extracted package modules observed:
 ## Current Risks
 
 - `hosts_editor.py` remains too large and owns too many workflows, which raises regression risk during feature work.
-- `data/blocklist_sources.json` has live decay. The 2026-05-17 source-health run found 122 healthy, 21 warning, and 34 failed sources.
+- `data/blocklist_sources.json` has lifecycle metadata from the 2026-05-17 source-health reset. The baseline found 122 healthy, 21 warning, and 34 failed sources; hard-gone sources are now retained as `retired` and removed from built-in bundles.
 - Release identity is uneven: runtime reports v2.27.0, but README release-facing text still contains preview-version language.
 - The project has many plan-only integrations. Future work must continue distinguishing reviewed handoff artifacts from active external writers.
 - Python/PyInstaller compatibility should be stated explicitly as Python 3.14 and PyInstaller 6.x evolve.
@@ -99,10 +99,9 @@ At the start of future work:
 
 ## Recommended Next Pass
 
-Start with `ROADMAP.md` P0 items:
+Start with the remaining `ROADMAP.md` P0 items:
 
-1. Source Catalog Health Reset.
-2. Source Catalog and Manifest Layer extraction.
-3. Release Identity and Version Hygiene.
+1. Source Catalog and Manifest Layer extraction.
+2. Release Identity and Version Hygiene.
 
 These are highest leverage because they reduce live feed risk, continue the active modularization arc, and improve release trust without changing the app's product contract.
