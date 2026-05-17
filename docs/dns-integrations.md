@@ -8,6 +8,8 @@ For plan-only NextDNS and Control D API replay artifacts plus their CSV log impo
 
 For guarded router/gateway dnsmasq and Unbound bundle generation, see `docs/router-gateway-adapters.md`.
 
+All generated handoff metadata follows the shared contract in `docs/integration-handoff-contract.md`.
+
 ## Presets
 
 | Preset | Output shape | Primary use |
@@ -30,6 +32,8 @@ python hosts_editor.py --integration-export blocky .\cleaned-hosts.txt .\blocky-
 
 `INPUT` can contain normal hosts rows, bare domains, URLs, adblock-style host rules, or dnsmasq rows supported by the normal parser. Non-blocking local mappings are skipped in DNS integration exports.
 
+Each export still writes the selected DNS-list file to `OUTPUT`, and now also writes `OUTPUT.handoff.json` with schema `hostsfileget.dns-integration-export.v1`, a SHA-256 of the generated file content, warnings, source URL, and `handoff_contract`.
+
 ## Import Side
 
 HostsFileGet already imports observed blocked-domain history from:
@@ -42,6 +46,7 @@ Technitium and blocky are intentionally export-only for this pack. Use their ser
 ## Limits
 
 - Hosts data is exact-domain data. It cannot express wildcard, regex, client-specific, upstream, CNAME, response rewrite, or schedule policies.
+- The handoff JSON `will_not` section makes that boundary machine-readable: HostsFileGet will not authenticate to DNS tools, subscribe or reload downstream lists, translate exact hosts rows into provider-only rule types, or change downstream client/policy behavior.
 - `adguard-home` and `adguard-dns` use `||domain^` because AdGuard documents that shape as DNS-filter syntax that matches a hostname and subdomains.
 - `pihole`, `technitium`, and `blocky` default to plain domains as the lowest-risk portable shape.
 - The exported file represents the cleaned view at export time. Downstream list refresh, reload, dedupe, allowlist priority, and client grouping remain downstream responsibilities.

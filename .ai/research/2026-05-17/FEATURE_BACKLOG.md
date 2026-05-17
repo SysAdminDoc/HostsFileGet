@@ -54,6 +54,8 @@ This is the raw harvested idea pool before final prioritization. Source IDs map 
 | B026 | Improve NRPT and WFP plan validation warnings | `S3`-`S5` | High-risk Windows platform features need explicit boundaries. |
 | B027 | Improve mobile DNS profile QR/export warnings | `C9`, `C10`, prior docs | Keep mobile handoffs reviewed. |
 
+R009 implementation note: B023-B027 are now covered for DNS integration, cloud DNS, NRPT, router/gateway, mobile DNS, and managed package handoffs by `hostsfileget.handoff-contract.v1`, `hostsfileget.dns-integration-export.v1`, generated `OUTPUT.handoff.json` sidecars, and updated integration docs. WFP-specific plan warnings remain handled by the existing WFP blocker companion plan rather than the R009 handoff contract because R009 targeted DNS/provider/mobile/router/managed/NRPT artifacts.
+
 ## Data, Model, Evaluation, And Intelligence
 
 | ID | Idea | Evidence | Notes |

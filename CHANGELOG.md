@@ -4,6 +4,11 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Integration handoff contracts**
+- Added `hostsfileget.handoff-contract.v1` metadata to DNS integration exports, cloud DNS adapter plans, NRPT policy exports, router/gateway bundles, mobile DNS profile bundles, and managed package export bundles.
+- DNS interoperability exports now keep writing the requested provider list file and also write `OUTPUT.handoff.json` using schema `hostsfileget.dns-integration-export.v1`.
+- Added "What this will not do" sections to handoff reports/readmes/catalogs and documented the shared integration boundary in `docs/integration-handoff-contract.md`.
+
 **Keyboard and command documentation**
 - Added `hostsfileget.shortcuts` as the canonical shortcut and command-entry registry.
 - Added `docs/keyboard-and-commands.md` and `scripts/audit_shortcuts.py` so README/docs shortcut coverage can be checked without starting the GUI.

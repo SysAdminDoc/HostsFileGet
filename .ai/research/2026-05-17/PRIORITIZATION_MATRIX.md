@@ -40,3 +40,8 @@ Recommended order:
 - Extraction should preserve compatibility re-exports in `hosts_editor.py`.
 - Do not remove historical source entries without a clear retired-state record.
 - Release changes should avoid creating a new release unless explicitly requested in the implementation pass.
+
+## Implementation Notes
+
+- R001-R009 have been implemented as of the 2026-05-17 autonomous continuation passes.
+- R010 is the next unchecked roadmap item and should build on existing provenance, allowlist, and why-blocked foundations.

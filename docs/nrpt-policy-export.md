@@ -4,6 +4,8 @@ HostsFileGet can export a plan-only Windows DNS Client Name Resolution Policy Ta
 
 This is not a live DNS policy mutator. HostsFileGet does not run `Add-DnsClientNrptRule`, does not edit local NRPT policy, and does not change a Group Policy object.
 
+Generated plans include the shared `hostsfileget.handoff-contract.v1` block described in `docs/integration-handoff-contract.md`.
+
 ## CLI
 
 ```powershell
@@ -35,6 +37,7 @@ The JSON includes:
 - `powershell_script`: a review script that clears prior HostsFileGet-prefixed NRPT rules and recreates chunked rules.
 - `rollback`: the clear command plus change-management guidance.
 - `warnings`: local safety boundaries.
+- `handoff_contract`: machine-readable boundary text with schema `hostsfileget.handoff-contract.v1`.
 
 ## Boundary
 
@@ -43,6 +46,8 @@ NRPT can redirect DNS resolution for selected namespaces. That is broader than a
 HostsFileGet therefore exports an explicit plan only. Run generated scripts only after review from an elevated PowerShell session or through a managed policy workflow. For GPO output, test in a lab OU before broad deployment.
 
 Resolver IPs are accepted when they are valid IPv4 or IPv6 addresses. Private, loopback, link-local, reserved, and other non-global resolvers are allowed because enterprise DNS commonly uses them, but the plan calls them out as operational risk.
+
+The handoff contract records that HostsFileGet will not run DnsClient cmdlets, edit Group Policy, verify resolver ownership, convert hosts entries into DNS enforcement, or guarantee roaming-client behavior after an external operator applies the plan.
 
 ## Source Basis
 

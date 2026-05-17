@@ -20,8 +20,12 @@ from hosts_editor import (
     BLOCK_PAGE_SCHEMA,
     BLOCK_SINK_IPS,
     CONFIG_SCHEMA_VERSION,
+    CLOUD_DNS_ADAPTER_PLAN_SCHEMA,
     DEFAULT_PROFILE_ID,
+    DNS_INTEGRATION_EXPORT_SCHEMA,
+    DNS_INTEGRATION_HANDOFF_JSON_SUFFIX,
     DNS_REWRITE_PLAN_SCHEMA,
+    HANDOFF_CONTRACT_SCHEMA,
     CT_WATCHDOG_PLAN_SCHEMA,
     CTI_ENRICHMENT_PLAN_SCHEMA,
     MOBILE_DNS_PROFILE_EXPORT_SCHEMA,
@@ -355,6 +359,16 @@ from hosts_editor import (
 
 
 class HostsEditorLogicTests(unittest.TestCase):
+    def assertHandoffContract(self, payload, surface, plan_schema):
+        contract = payload.get("handoff_contract")
+        self.assertIsInstance(contract, dict)
+        self.assertEqual(contract["schema"], HANDOFF_CONTRACT_SCHEMA)
+        self.assertEqual(contract["surface"], surface)
+        self.assertEqual(contract["plan_schema"], plan_schema)
+        self.assertTrue(contract["plan_only"])
+        self.assertEqual(contract["writes_performed"], "local-artifacts-only")
+        self.assertGreaterEqual(len(contract.get("will_not") or []), 3)
+
     def test_multi_domain_hosts_line_expands_to_multiple_entries(self):
         entries, domains, transformed = normalize_line_to_hosts_entries("0.0.0.0 a.example b.example")
         self.assertEqual(entries, ["0.0.0.0 a.example", "0.0.0.0 b.example"])
@@ -2811,6 +2825,11 @@ profile:
                 "||ads.example^",
                 "||tracker.example^",
             ])
+            handoff_payload = json.loads(
+                (Path(str(output_path) + DNS_INTEGRATION_HANDOFF_JSON_SUFFIX)).read_text(encoding="utf-8")
+            )
+            self.assertEqual(handoff_payload["schema"], DNS_INTEGRATION_EXPORT_SCHEMA)
+            self.assertHandoffContract(handoff_payload, "dns-integration", DNS_INTEGRATION_EXPORT_SCHEMA)
 
     def test_cli_cloud_adapters_write_plan_and_log_import(self):
         import tempfile
@@ -2850,6 +2869,9 @@ profile:
                 )
 
             plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            self.assertEqual(plan["schema"], CLOUD_DNS_ADAPTER_PLAN_SCHEMA)
+            self.assertTrue(plan["plan_only"])
+            self.assertHandoffContract(plan, "cloud-dns", CLOUD_DNS_ADAPTER_PLAN_SCHEMA)
             self.assertEqual(plan["adapter_id"], "nextdns-denylist")
             self.assertEqual(plan["requests"][0]["headers"], {"X-Api-Key": "<NEXTDNS_API_KEY>"})
             self.assertEqual(domains_path.read_text(encoding="utf-8").splitlines(), ["ads.example"])
@@ -4047,7 +4069,9 @@ profile:
         self.assertIn("S1", plan["references"])
         self.assertIn("S2", plan["references"])
         self.assertIn("S16", plan["references"])
+        self.assertHandoffContract(plan, "nrpt", NRPT_POLICY_PLAN_SCHEMA)
         self.assertIn("Plan only: yes", formatted)
+        self.assertIn("What this will not do", formatted)
 
     def test_cli_nrpt_policy_plan_writes_json_without_policy_changes(self):
         import tempfile
@@ -4077,6 +4101,7 @@ profile:
         self.assertEqual(payload["name_servers"], ["10.0.0.53"])
         self.assertIn("Get-DnsClientNrptRule", payload["powershell_script"])
         self.assertIn("Add-DnsClientNrptRule", payload["powershell_script"])
+        self.assertHandoffContract(payload, "nrpt", NRPT_POLICY_PLAN_SCHEMA)
 
     def test_sandbox_vm_hosts_plan_builds_bundle_and_review_commands(self):
         plan = build_sandbox_vm_hosts_plan(
@@ -4175,8 +4200,11 @@ profile:
         self.assertIn("dnsmasq --test", plan["shell_script"])
         self.assertIn("router.lan", plan["commands"][0]["command"])
         self.assertIn("S20", plan["references"])
+        self.assertHandoffContract(plan, "router-gateway", ROUTER_GATEWAY_PLAN_SCHEMA)
         self.assertIn("Plan only: yes", formatted)
+        self.assertIn("What this will not do", formatted)
         self.assertIn("openwrt-dnsmasq", catalog)
+        self.assertIn("What these adapters will not do", catalog)
 
     def test_managed_package_targets_are_guarded_exports(self):
         target_ids = {target["id"] for target in list_managed_package_targets()}
@@ -4218,6 +4246,9 @@ profile:
         self.assertIn("IntuneWinAppUtil.exe", plan["target_export_content"])
         self.assertIn("Get-FileHash", plan["install_script"])
         self.assertIn("Copy-Item -LiteralPath $sourcePath", plan["install_script"])
+        self.assertHandoffContract(plan, "managed-package", MANAGED_PACKAGE_PLAN_SCHEMA)
+        self.assertIn("handoff_contract", plan["target_export_content"])
+        self.assertIn("What this will not do", plan["readme_content"])
         self.assertIn("Roadmap source IDs", formatted)
 
     def test_cli_managed_package_export_writes_bundle_without_deploying(self):
@@ -4253,6 +4284,7 @@ profile:
         self.assertEqual(result, 0)
         self.assertEqual(plan["target"]["id"], "pdq-deploy")
         self.assertEqual(plan["execution"], "not-run")
+        self.assertHandoffContract(plan, "managed-package", MANAGED_PACKAGE_PLAN_SCHEMA)
         self.assertEqual(artifacts_exist, [True, True, True, True])
         self.assertIn("0.0.0.0 ads.example", managed_hosts_text)
 
@@ -4385,6 +4417,7 @@ profile:
         self.assertTrue(payload["plan_only"])
         self.assertEqual(payload["adapter_id"], "generic-unbound")
         self.assertEqual(payload["remote"]["identity"], "admin@gateway.lan")
+        self.assertHandoffContract(payload, "router-gateway", ROUTER_GATEWAY_PLAN_SCHEMA)
         self.assertIn('local-zone: "ads.example." always_nxdomain', config_text)
         self.assertIn("HOSTSFILEGET_CONFIRM", script_text)
         self.assertIn("unbound-checkconf", payload["shell_script"])
@@ -5226,14 +5259,19 @@ profile:
         ]
 
         agh = build_dns_integration_export(lines, "agh")
+        self.assertEqual(agh["schema"], DNS_INTEGRATION_EXPORT_SCHEMA)
+        self.assertTrue(agh["plan_only"])
         self.assertEqual(agh["integration_id"], "adguard-home")
         self.assertEqual(agh["content"].splitlines(), ["||ads.example^", "||tracker.example^"])
         self.assertEqual(agh["domain_count"], 2)
         self.assertIn("does not authenticate", "\n".join(agh["warnings"]))
+        self.assertHandoffContract(agh, "dns-integration", DNS_INTEGRATION_EXPORT_SCHEMA)
 
         technitium = build_dns_integration_export(lines, "technitium-dns-server")
         self.assertEqual(technitium["content"].splitlines(), ["ads.example", "tracker.example"])
-        self.assertIn("Technitium", format_dns_integration_export_summary(technitium, "out.txt"))
+        summary = format_dns_integration_export_summary(technitium, "out.txt")
+        self.assertIn("Technitium", summary)
+        self.assertIn("What this will not do", summary)
 
     def test_build_dns_integration_export_rejects_unknown_pack(self):
         with self.assertRaises(ValueError):
@@ -5285,6 +5323,9 @@ profile:
         ]
 
         nextdns = build_cloud_dns_adapter_plan(lines, "nextdns-deny", profile_id="abc 123")
+        self.assertEqual(nextdns["schema"], CLOUD_DNS_ADAPTER_PLAN_SCHEMA)
+        self.assertTrue(nextdns["plan_only"])
+        self.assertEqual(nextdns["execution"], "not-run")
         self.assertEqual(nextdns["adapter_id"], "nextdns-denylist")
         self.assertEqual(nextdns["domain_count"], 2)
         self.assertEqual(nextdns["request_count"], 2)
@@ -5293,7 +5334,10 @@ profile:
         self.assertEqual(nextdns["requests"][0]["json"], {"id": "ads.example", "active": True})
         self.assertIn("/profiles/abc%20123/denylist", nextdns["requests"][0]["url"])
         self.assertNotIn("API_KEY", json.dumps(nextdns["domains"]))
-        self.assertIn("Cloud DNS Adapter Plan", format_cloud_dns_adapter_report(nextdns))
+        self.assertHandoffContract(nextdns, "cloud-dns", CLOUD_DNS_ADAPTER_PLAN_SCHEMA)
+        cloud_report = format_cloud_dns_adapter_report(nextdns)
+        self.assertIn("Cloud DNS Adapter Plan", cloud_report)
+        self.assertIn("What this will not do", cloud_report)
 
         controld = build_cloud_dns_adapter_plan(lines, "control-d", profile_id="profile-1")
         self.assertEqual(controld["adapter_id"], "controld-block-rules")
@@ -5334,7 +5378,9 @@ profile:
         self.assertIn("SupplementalMatchDomains", plan["apple_mobileconfig"])
         self.assertIn("dns.example.com", plan["qr_payloads_text"])
         self.assertIn("https://dns.example.com/dns-query", plan["qr_payloads_text"])
+        self.assertHandoffContract(plan, "mobile-dns", MOBILE_DNS_PROFILE_EXPORT_SCHEMA)
         self.assertIn("Mobile DNS Profile Export", rendered)
+        self.assertIn("What this will not do", rendered)
         self.assertIn("Roadmap source IDs", rendered)
 
         nextdns = build_mobile_dns_profile_export("nextdns", profile_id="abc123")
@@ -5362,6 +5408,7 @@ profile:
                 payload = json.load(fp)
 
         self.assertEqual(payload["schema"], MOBILE_DNS_PROFILE_EXPORT_SCHEMA)
+        self.assertHandoffContract(payload, "mobile-dns", MOBILE_DNS_PROFILE_EXPORT_SCHEMA)
         self.assertIn("resolver1.dns.controld.com", payload["qr_payloads_text"])
 
     def test_roaming_endpoint_strategy_catalog_and_plan_are_boundary_only(self):

@@ -196,7 +196,7 @@ The UI has many power-user workflows. Documentation drift is an avoidable usabil
 
 ## P2 - Opportunistic Work
 
-### [ ] R009 - Integration Handoff Quality Pack
+### [x] R009 - Integration Handoff Quality Pack
 
 Evidence: `C1`, `C2`, `C3`, `C4`, `C5`, `C6`, `S1`, `S2`, `S3`, `S7`, `S8`, `S9`, `S10`, `S11`.
 
@@ -205,6 +205,12 @@ Deliverables:
 - Improve generated handoff bundles for NextDNS, Control D, Pi-hole, AdGuard Home, Technitium, blocky, NRPT, router DNS, mobile DNS, and managed deployment artifacts.
 - Add "what this will not do" warnings to every handoff format where hosts semantics differ from DNS/provider semantics.
 - Add schema-versioned JSON for generated handoff plans.
+
+Completed 2026-05-17:
+
+- Added shared `hostsfileget.handoff-contract.v1` metadata to DNS integration, cloud DNS, NRPT, router/gateway, mobile DNS, and managed package plans.
+- Added schema `hostsfileget.dns-integration-export.v1` plus `OUTPUT.handoff.json` sidecar output for file-first Pi-hole, AdGuard, Technitium, and blocky exports.
+- Added explicit "What this will not do" sections to generated reports/readmes/catalogs and documented the shared contract in `docs/integration-handoff-contract.md`.
 
 Why later:
 
@@ -253,7 +259,7 @@ These are intentionally not active roadmap items unless a future product decisio
 
 A future implementation pass should finish with:
 
-- Integration handoff quality improvements for DNS/provider/mobile/managed export plans.
+- False-positive and allowlist workflow refresh.
 - `ROADMAP.md` checkboxes updated only after verification.
 - Real verification commands recorded in the change summary or commit message.
 

@@ -105,8 +105,8 @@ At the start of future work:
 
 ## Recommended Next Pass
 
-Start with the next `ROADMAP.md` P1 item:
+Start with the next unchecked `ROADMAP.md` item:
 
-1. Integration Handoff Quality Pack.
+1. R010 - False-Positive and Allowlist Workflow Refresh.
 
-The source catalog reset, source catalog extraction, release identity hygiene, runtime compatibility matrix, config/profile service extraction, source-health remediation assistant, release trust hardening, and keyboard/documentation consistency pass are complete. R009 is next because the repo already has many plan-only integrations, and the highest-value next step is making those handoff artifacts more consistent and explicit about hosts-vs-DNS/provider boundaries.
+The source catalog reset, source catalog extraction, release identity hygiene, runtime compatibility matrix, config/profile service extraction, source-health remediation assistant, release trust hardening, keyboard/documentation consistency pass, and integration handoff quality pack are complete. R010 is next because the repo already has provenance, source metadata, allowlist, and why-blocked foundations; the remaining value is tying them into a safer temporary-allow and upstream-report workflow.

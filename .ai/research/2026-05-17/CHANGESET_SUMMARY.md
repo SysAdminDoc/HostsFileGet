@@ -124,3 +124,13 @@ R008 Keyboard and Documentation Consistency Pass was implemented after R007:
 - Added `docs/keyboard-and-commands.md` as the canonical shortcut/entry-point table.
 - Added `scripts/audit_shortcuts.py` and `tests/test_shortcuts.py` so docs coverage can be checked without starting the GUI.
 - Updated README, accessibility, release/runtime docs, CI/release workflows, changelogs, `ROADMAP.md`, and `PROJECT_CONTEXT.md`; the next roadmap item is R009.
+
+## 2026-05-17 R009 Implementation Follow-Up
+
+R009 Integration Handoff Quality Pack was implemented after R008:
+
+- Added shared `hostsfileget.handoff-contract.v1` metadata and formatter output for DNS integration exports, cloud DNS adapter plans, NRPT policy exports, router/gateway bundles, mobile DNS profile bundles, and managed package export bundles.
+- Added `hostsfileget.dns-integration-export.v1` plus `OUTPUT.handoff.json` sidecar output for Pi-hole, AdGuard Home/DNS, Technitium, and blocky file-first exports.
+- Added explicit "What this will not do" contract sections to generated reports, catalogs, managed package readmes, and target field maps where the parent artifact crosses hosts-file semantics into DNS/provider/mobile/router/managed-deployment tooling.
+- Added `docs/integration-handoff-contract.md` and updated DNS/cloud/mobile/router/NRPT/managed docs plus README.
+- Updated `ROADMAP.md`, `CHANGELOG.md`, `CODEX_CHANGELOG.md`, and `PROJECT_CONTEXT.md`; the next roadmap item is R010.

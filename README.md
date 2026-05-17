@@ -514,6 +514,7 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Portable bundle config: `docs/portable-config.md`
 - DNS interoperability pack: `docs/dns-integrations.md`
 - Cloud DNS adapters: `docs/cloud-dns-adapters.md`
+- Integration handoff contract: `docs/integration-handoff-contract.md`
 - Mobile DNS profile export: `docs/mobile-dns-profile-export.md`
 - Roaming endpoint strategy: `docs/roaming-endpoint-strategy.md`
 - Adblock syntax lint: `docs/adblock-lint.md`
