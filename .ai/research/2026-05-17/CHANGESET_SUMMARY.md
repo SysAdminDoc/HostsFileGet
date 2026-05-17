@@ -114,3 +114,13 @@ R007 Release Trust Hardening was implemented after R006:
 - Replaced inline release-workflow checksum/package-manifest PowerShell with the new artifact script and added EXE CLI verification before checksum generation.
 - Extended `scripts/check_release_identity.py` so the release workflow must keep the release identity, artifact generation, and EXE verification scripts wired in.
 - Updated release/package/runtime docs, changelogs, `ROADMAP.md`, and `PROJECT_CONTEXT.md`; the next roadmap item is R008.
+
+## 2026-05-17 R008 Implementation Follow-Up
+
+R008 Keyboard and Documentation Consistency Pass was implemented after R007:
+
+- Added `hostsfileget/shortcuts.py` as the shortcut and command-entry registry.
+- Updated `hosts_editor.py` to bind global shortcuts and render the About dialog shortcut list from the registry.
+- Added `docs/keyboard-and-commands.md` as the canonical shortcut/entry-point table.
+- Added `scripts/audit_shortcuts.py` and `tests/test_shortcuts.py` so docs coverage can be checked without starting the GUI.
+- Updated README, accessibility, release/runtime docs, CI/release workflows, changelogs, `ROADMAP.md`, and `PROJECT_CONTEXT.md`; the next roadmap item is R009.

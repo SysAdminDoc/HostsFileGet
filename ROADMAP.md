@@ -178,7 +178,9 @@ Why now:
 
 Hosts-file editors touch a protected system file and are often run elevated. Release provenance and repeatable verification matter more than cosmetic packaging polish.
 
-### [ ] R008 - Keyboard and Documentation Consistency Pass
+### [x] R008 - Keyboard and Documentation Consistency Pass
+
+Status: completed 2026-05-17 in `docs: add shortcut command registry`. `hostsfileget.shortcuts` now owns the shortcut and command-entry registry, `hosts_editor.py` binds global shortcuts from that registry, `docs/keyboard-and-commands.md` is the canonical table, and `scripts/audit_shortcuts.py` checks README/docs coverage without starting the GUI.
 
 Evidence: `L2`, `L3`, `L4`, `G1`, `G2`.
 
@@ -251,7 +253,7 @@ These are intentionally not active roadmap items unless a future product decisio
 
 A future implementation pass should finish with:
 
-- Keyboard and documentation consistency checks for shortcuts and command entry points.
+- Integration handoff quality improvements for DNS/provider/mobile/managed export plans.
 - `ROADMAP.md` checkboxes updated only after verification.
 - Real verification commands recorded in the change summary or commit message.
 

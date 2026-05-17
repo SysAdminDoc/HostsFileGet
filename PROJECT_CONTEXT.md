@@ -47,6 +47,7 @@ Extracted package modules observed:
 - `hostsfileget/fetch.py`
 - `hostsfileget/source_catalog.py`
 - `hostsfileget/config_profiles.py`
+- `hostsfileget/shortcuts.py`
 - `hostsfileget/compression.py`
 - `hostsfileget/atomic_io.py`
 - `hostsfileget/parsing.py`
@@ -106,6 +107,6 @@ At the start of future work:
 
 Start with the next `ROADMAP.md` P1 item:
 
-1. Keyboard and Documentation Consistency Pass.
+1. Integration Handoff Quality Pack.
 
-The source catalog reset, source catalog extraction, release identity hygiene, runtime compatibility matrix, config/profile service extraction, source-health remediation assistant, and release trust hardening are complete. R008 is next because the UI has many power-user entry points and documentation drift is now the most practical usability risk.
+The source catalog reset, source catalog extraction, release identity hygiene, runtime compatibility matrix, config/profile service extraction, source-health remediation assistant, release trust hardening, and keyboard/documentation consistency pass are complete. R009 is next because the repo already has many plan-only integrations, and the highest-value next step is making those handoff artifacts more consistent and explicit about hosts-vs-DNS/provider boundaries.

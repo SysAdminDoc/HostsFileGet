@@ -136,6 +136,9 @@ from hostsfileget.constants import (
     APP_VERSION,
     CONFIG_FILENAME,
 )
+from hostsfileget.shortcuts import (
+    GLOBAL_KEYBOARD_SHORTCUTS,
+)
 from hostsfileget.fetch import (
     IMPORT_FETCH_MAX_ATTEMPTS,
     IMPORT_FETCH_MAX_WORKERS,
@@ -15175,21 +15178,13 @@ class HostsFileEditor:
         self.text_area.bind("<<Modified>>", self._on_text_modified_debounced)
         self.manual_text_area.bind("<<Modified>>", self._on_manual_modified)
         self.whitelist_text_area.bind("<<Modified>>", self._on_whitelist_modified)
-        self.root.bind("<Control-f>", self._focus_search_shortcut)
-        self.root.bind("<Control-s>", self._save_cleaned_shortcut)
-        self.root.bind("<Control-Shift-s>", self._save_raw_shortcut)
-        self.root.bind("<Control-Shift-S>", self._save_raw_shortcut)
-        self.root.bind("<F5>", self._refresh_shortcut)
 
         # Editor context menu + comment-toggle shortcut.
         self._build_editor_context_menu()
         # Windows fires Button-3 for right-click; Mac uses Button-2.
         self.text_area.bind("<Button-3>", self._show_editor_context_menu)
         self.text_area.bind("<Button-2>", self._show_editor_context_menu)
-        self.text_area.bind("<Control-slash>", self.toggle_selection_comment)
-        self.root.bind("<Control-p>", self.show_goto_anything)
-        self.root.bind("<Control-h>", self.show_find_replace_dialog)
-        self.root.bind("<Control-H>", self.show_find_replace_dialog)
+        self._bind_global_shortcuts()
 
         # Init
         try:
@@ -15863,6 +15858,13 @@ class HostsFileEditor:
             suffix = f" for '{query}'" if query else ""
             self.catalog_summary_label.config(text=f"Showing {matched_sources} sources across {matched_categories} categories{suffix}.")
 
+    def _bind_global_shortcuts(self):
+        for shortcut in GLOBAL_KEYBOARD_SHORTCUTS:
+            handler = getattr(self, shortcut["handler"])
+            target = self.text_area if shortcut.get("widget") == "text_area" else self.root
+            for sequence in shortcut["sequences"]:
+                target.bind(sequence, handler)
+
     def _focus_search_shortcut(self, event=None):
         self.search_entry.focus_set()
         self.search_entry.selection_range(0, tk.END)
@@ -16336,17 +16338,11 @@ class HostsFileEditor:
             "The fastest path through the workspace.",
             accent=PALETTE["green"],
         )
-        for shortcut, label in (
-            ("Ctrl+F", "Focus search"),
-            ("Ctrl+S", "Save Cleaned"),
-            ("Ctrl+Shift+S", "Save Raw"),
-            ("F5", "Reload from disk"),
-            ("Ctrl+P", "Goto Anything"),
-        ):
+        for shortcut in GLOBAL_KEYBOARD_SHORTCUTS:
             row = ttk.Frame(shortcuts, style="Section.TFrame")
             row.pack(fill="x", pady=2)
-            ttk.Label(row, text=shortcut, style="SectionTitle.TLabel").pack(side="left")
-            ttk.Label(row, text=label, style="SectionBody.TLabel").pack(side="right")
+            ttk.Label(row, text=shortcut["keys"], style="SectionTitle.TLabel").pack(side="left")
+            ttk.Label(row, text=shortcut["action"], style="SectionBody.TLabel").pack(side="right")
 
         footer = ttk.Frame(dialog)
         footer.pack(fill="x", padx=20, pady=(0, 20))

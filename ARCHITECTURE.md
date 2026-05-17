@@ -68,12 +68,14 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `tests/test_hosts_editor_logic.py` | Regression suite for pure logic, deterministic parser fuzzers, golden cleaned-output fixtures, legacy re-export compatibility, and selected GUI-adjacent helper paths |
 | `tests/test_source_catalog.py` | Focused source-catalog module tests for manifest validation, source records, bundles, health reports, and `hosts_editor` compatibility re-exports |
 | `tests/test_config_profiles.py` | Focused config/profile module tests for config migration, profile switching, declarative round trips, portable path resolution, and `hosts_editor` compatibility re-exports |
+| `tests/test_shortcuts.py` | Focused shortcut registry and documentation audit tests that do not start Tkinter |
 | `tests/test_gui_smoke.py` | Tk smoke tests for patched main-window startup and basic modal construction; skips when Tk cannot create a root |
 | `tests/test_benchmarks.py` | Smoke coverage for the benchmark harness without enforcing hardware-dependent timing budgets |
 | `benchmarks/large_file_benchmark.py` | Deterministic large-file parser/cleaner benchmark with human and JSON output |
 | `scripts/check_release_identity.py` | Release-facing version, PyInstaller advisory pin, `pip-audit`, and checklist guard |
 | `scripts/build_release_artifacts.py` | Deterministic release checksum, package-manifest, package-manifest zip, and artifact-manifest generation |
 | `scripts/verify_release_artifact.py` | Non-GUI built-EXE smoke check for `--version` and `--help` |
+| `scripts/audit_shortcuts.py` | Shortcut and command-entry documentation audit |
 
 ## Package Modules
 
@@ -81,6 +83,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | --- | --- |
 | `hostsfileget/config_profiles.py` | Config schema migration, local-vs-portable config paths, profile snapshots and switching, activation schedules, declarative profile import/export, encrypted profile sync, signed share patches, and config-owned sanitizers |
 | `hostsfileget/source_catalog.py` | Curated-source manifest validation, lifecycle metadata, bundle expansion, source-health reports/diffs, and source record dataclasses |
+| `hostsfileget/shortcuts.py` | Canonical shortcut and command-entry reference data |
 
 ## Repository Layout
 

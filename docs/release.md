@@ -22,7 +22,8 @@ Run from the repository root:
 python -m pip install --upgrade pip
 python -m pip install -r requirements-build.txt
 python -m pip install -r requirements-security.txt
-python -m py_compile hosts_editor.py hostsfileget\source_catalog.py hostsfileget\config_profiles.py tests\test_source_catalog.py tests\test_config_profiles.py tests\test_hosts_editor_logic.py tests\test_gui_smoke.py tests\test_benchmarks.py tests\test_package_manifests.py benchmarks\large_file_benchmark.py scripts\render_package_manifests.py scripts\build_release_artifacts.py scripts\verify_release_artifact.py scripts\check_release_identity.py
+python -m py_compile hosts_editor.py hostsfileget\source_catalog.py hostsfileget\config_profiles.py hostsfileget\shortcuts.py tests\test_source_catalog.py tests\test_config_profiles.py tests\test_hosts_editor_logic.py tests\test_gui_smoke.py tests\test_benchmarks.py tests\test_package_manifests.py tests\test_shortcuts.py benchmarks\large_file_benchmark.py scripts\render_package_manifests.py scripts\build_release_artifacts.py scripts\verify_release_artifact.py scripts\audit_shortcuts.py scripts\check_release_identity.py
+python scripts\audit_shortcuts.py
 python scripts\check_release_identity.py
 python -m unittest discover -s tests -v
 python -m pip_audit -r requirements-build.txt --strict
@@ -72,18 +73,19 @@ The workflow:
 2. Installs Python 3.12.
 3. Installs pinned build dependencies from `requirements-build.txt`.
 4. Compiles Python sources.
-5. Checks release identity/version hygiene.
-6. Runs unit tests.
-7. Parses `PythonLauncher.ps1`.
-8. Builds `dist\HostsFileGet.exe` with PyInstaller.
-9. Bundles `data/blocklist_sources.json` into the executable runtime.
-10. Signs the executable when signing secrets are configured.
-11. Records Authenticode signature status.
-12. Runs `scripts\verify_release_artifact.py` against `dist\HostsFileGet.exe --version` and `--help`.
-13. Runs `scripts\build_release_artifacts.py` to write `dist\HostsFileGet.exe.sha256`, render package-manager manifests, create a reproducible package-manifest zip, and write `dist\HostsFileGet.release-artifacts.json`.
-14. Writes `dist\HostsFileGet.sbom.cdx.json` and audits pinned build dependencies.
-15. Uploads release files as workflow artifacts.
-16. On tag builds, creates or updates the matching GitHub release assets.
+5. Audits shortcut documentation.
+6. Checks release identity/version hygiene.
+7. Runs unit tests.
+8. Parses `PythonLauncher.ps1`.
+9. Builds `dist\HostsFileGet.exe` with PyInstaller.
+10. Bundles `data/blocklist_sources.json` into the executable runtime.
+11. Signs the executable when signing secrets are configured.
+12. Records Authenticode signature status.
+13. Runs `scripts\verify_release_artifact.py` against `dist\HostsFileGet.exe --version` and `--help`.
+14. Runs `scripts\build_release_artifacts.py` to write `dist\HostsFileGet.exe.sha256`, render package-manager manifests, create a reproducible package-manifest zip, and write `dist\HostsFileGet.release-artifacts.json`.
+15. Writes `dist\HostsFileGet.sbom.cdx.json` and audits pinned build dependencies.
+16. Uploads release files as workflow artifacts.
+17. On tag builds, creates or updates the matching GitHub release assets.
 
 ## Code Signing
 
