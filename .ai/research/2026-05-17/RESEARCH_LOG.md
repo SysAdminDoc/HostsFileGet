@@ -212,3 +212,12 @@ Local implementation evidence recorded during R006:
 - `hosts_editor.py` exposes **Tools > Source Health Remediation...** for running bounded curated-source checks, copying replacement-search terms, opening upstream issue URLs where the source URL maps to GitHub/GitLab, exporting JSON, and pre-excluding failed URLs from the next batch-import review.
 - `BulkSelectionDialog` starts remediation-excluded URLs unselected and keeps bulk select-all from reselecting them automatically.
 - Focused validation covered remediation grouping for current `diagnostic_class` rows and legacy diagnostic text fallback rows.
+
+## R007 Release Trust Follow-Up
+
+Local implementation evidence recorded during R007:
+
+- `scripts/build_release_artifacts.py` now centralizes checksum generation, package-manager manifest rendering, reproducible package-manifest zipping, and release-artifact metadata output.
+- `scripts/verify_release_artifact.py` now provides a local and workflow-friendly command to verify built EXE `--version` and `--help` behavior without GUI startup.
+- `.github/workflows/release.yml` runs EXE verification before artifact generation and uploads `HostsFileGet.release-artifacts.json` with the EXE, checksum, SBOM, and package-manifest zip.
+- Focused validation covered the artifact script, deterministic zip timestamps, release identity checks, and fake-CLI release verification.

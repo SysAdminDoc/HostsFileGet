@@ -36,6 +36,7 @@ Important root files:
 - `benchmarks/large_file_benchmark.py`: large-file benchmark harness.
 - `docs/`: feature, integration, export, source, and operational documentation.
 - `docs/runtime-compatibility.md`: Python minor-version support matrix and CI/release runtime policy.
+- `scripts/build_release_artifacts.py`, `scripts/verify_release_artifact.py`, `scripts/check_release_identity.py`: release trust guard scripts for artifact generation, EXE CLI smoke verification, and release-facing version/build-tool checks.
 - `ARCHITECTURE.md`, `CHANGELOG.md`, `CODEX_CHANGELOG.md`, `TROUBLESHOOTING.md`, `README.md`: durable project documentation.
 - `AGENTS.md`, `CLAUDE.md`: tool/session instructions. `AGENTS.md` points to `CLAUDE.md`.
 - `ROADMAP.md`: active prioritized plan after the 2026-05-17 research reset.
@@ -67,7 +68,7 @@ Extracted package modules observed:
 
 - `hosts_editor.py` remains too large and owns too many workflows, which raises regression risk during feature work.
 - `data/blocklist_sources.json` has lifecycle metadata from the 2026-05-17 source-health reset. The baseline found 122 healthy, 21 warning, and 34 failed sources; hard-gone sources are now retained as `retired` and removed from built-in bundles. The GUI source-health remediation assistant now groups these issues and lets users pre-exclude failed sources from the next batch-import review.
-- Release identity now has an explicit guard: `scripts/check_release_identity.py` checks README badge/version text, release-facing examples, PyInstaller advisory-safe pins, `pip-audit`, and release workflow gating.
+- Release identity and artifact generation now have explicit guards: `scripts/check_release_identity.py` checks README badge/version text, release-facing examples, PyInstaller advisory-safe pins, `pip-audit`, and release workflow gating; `scripts/build_release_artifacts.py` produces checksums/package manifests; `scripts/verify_release_artifact.py` checks the built EXE's `--version` and `--help` paths without opening the GUI.
 - The project has many plan-only integrations. Future work must continue distinguishing reviewed handoff artifacts from active external writers.
 - Python/PyInstaller compatibility should be stated explicitly as Python 3.14 and PyInstaller 6.x evolve.
 
@@ -97,7 +98,7 @@ At the start of future work:
 2. Check `git status --short --branch` and recent commits.
 3. Verify current app version with `python hosts_editor.py --version`.
 4. For source/catalog work, inspect `.ai/research/2026-05-17/source-health-report.json` and `data/blocklist_sources.json`.
-5. For release/runtime work, inspect `docs/runtime-compatibility.md`, `requirements-build.txt`, `requirements-security.txt`, `HostsFileGet.spec`, `.github/workflows/`, and the latest PyInstaller advisory status.
+5. For release/runtime work, inspect `docs/runtime-compatibility.md`, `docs/release.md`, `requirements-build.txt`, `requirements-security.txt`, `HostsFileGet.spec`, `.github/workflows/`, `scripts/build_release_artifacts.py`, `scripts/verify_release_artifact.py`, and the latest PyInstaller advisory status.
 6. For config/profile work, inspect `hostsfileget/config_profiles.py`, `docs/config-schema.md`, `docs/cli-profiles.md`, `docs/declarative-config.md`, `docs/profile-quick-switch.md`, and `docs/profile-activation-schedule.md`.
 7. Run focused tests before broad tests; this repository has a large monolithic import surface.
 
@@ -105,6 +106,6 @@ At the start of future work:
 
 Start with the next `ROADMAP.md` P1 item:
 
-1. Release Trust Hardening.
+1. Keyboard and Documentation Consistency Pass.
 
-The source catalog reset, source catalog extraction, release identity hygiene, runtime compatibility matrix, config/profile service extraction, and source-health remediation assistant are complete. R007 is next because release provenance and repeatable local artifact verification are the highest remaining safety lever for a Windows app that edits a protected system file.
+The source catalog reset, source catalog extraction, release identity hygiene, runtime compatibility matrix, config/profile service extraction, source-health remediation assistant, and release trust hardening are complete. R008 is next because the UI has many power-user entry points and documentation drift is now the most practical usability risk.

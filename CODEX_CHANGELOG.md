@@ -11,6 +11,12 @@ This file is a handoff note for future agents, including Claude.
 
 ## 2026-05-17 Roadmap Continuation Notes
 
+- Completed R007: Release Trust Hardening.
+- Added `scripts/build_release_artifacts.py` for deterministic SHA-256 generation, package-manager manifest rendering, reproducible package-manifest zipping, and `HostsFileGet.release-artifacts.json` metadata.
+- Added `scripts/verify_release_artifact.py` to run built EXE `--version` and `--help` smoke checks without opening the GUI.
+- Updated CI/release workflow wiring, release docs, package-manager docs, release identity checks, and package-manifest tests.
+- Next roadmap item: R008 Keyboard and Documentation Consistency Pass.
+
 - Completed R006: Source Health UX and Remediation Assistant.
 - Added grouped source-health remediation report helpers in `hostsfileget/source_catalog.py` with compatibility re-exports through `hosts_editor.py`.
 - Added **Tools > Source Health Remediation...** for bounded health checks, grouped output, search-term copy, upstream issue URL opening, JSON export, and reviewed failed-source exclusion for the next batch import.

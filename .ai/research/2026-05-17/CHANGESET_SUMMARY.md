@@ -104,3 +104,13 @@ R006 Source Health UX and Remediation Assistant was implemented after R005:
 - Updated the batch source picker so remediation-excluded failed URLs start unselected and bulk select-all keeps them excluded.
 - Added focused source-catalog tests for grouped remediation reports, including fallback handling for legacy diagnostics without `diagnostic_class`.
 - Updated source-health docs, changelogs, `ROADMAP.md`, and `PROJECT_CONTEXT.md`; the next roadmap item is R007.
+
+## 2026-05-17 R007 Implementation Follow-Up
+
+R007 Release Trust Hardening was implemented after R006:
+
+- Added `scripts/build_release_artifacts.py` for release EXE SHA-256 generation, package-manager manifest rendering, reproducible package-manifest zip output, and `HostsFileGet.release-artifacts.json`.
+- Added `scripts/verify_release_artifact.py` to smoke-check built executables through `--version` and `--help` without launching the GUI.
+- Replaced inline release-workflow checksum/package-manifest PowerShell with the new artifact script and added EXE CLI verification before checksum generation.
+- Extended `scripts/check_release_identity.py` so the release workflow must keep the release identity, artifact generation, and EXE verification scripts wired in.
+- Updated release/package/runtime docs, changelogs, `ROADMAP.md`, and `PROJECT_CONTEXT.md`; the next roadmap item is R008.

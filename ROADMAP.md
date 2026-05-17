@@ -161,7 +161,9 @@ Why now:
 
 The current source-health data is actionable but too raw for routine maintenance. The app should make feed decay visible without forcing users to inspect JSON.
 
-### [ ] R007 - Release Trust Hardening
+### [x] R007 - Release Trust Hardening
+
+Status: completed 2026-05-17 in `chore: harden release artifact pipeline`. Release artifact generation now runs through `scripts/build_release_artifacts.py` for SHA-256, package manifests, a reproducible package-manifest zip, and a release-artifact manifest. Release builds also run `scripts/verify_release_artifact.py` against the built EXE's `--version` and `--help` paths before checksums are generated, while the release identity guard ensures these scripts stay wired into the workflow.
 
 Evidence: `L4`, `D3`, `D4`, `D5`, `D6`, `P1`.
 
@@ -249,7 +251,7 @@ These are intentionally not active roadmap items unless a future product decisio
 
 A future implementation pass should finish with:
 
-- Release trust hardening for reproducible artifacts, checksums, security audit, and local EXE verification.
+- Keyboard and documentation consistency checks for shortcuts and command entry points.
 - `ROADMAP.md` checkboxes updated only after verification.
 - Real verification commands recorded in the change summary or commit message.
 

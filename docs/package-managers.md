@@ -15,6 +15,19 @@ Templates use these tokens:
 
 ## Render Locally
 
+For a built release executable, prefer the reproducible release-artifact script because it computes the SHA-256, renders the manifests, and writes the zip in one pass:
+
+```powershell
+python scripts\build_release_artifacts.py `
+  --exe dist\HostsFileGet.exe `
+  --version 2.27.0 `
+  --tag v2.27.0 `
+  --repository SysAdminDoc/HostsFileGet `
+  --output-dir dist
+```
+
+The lower-level renderer is still available when you already have a release URL and checksum:
+
 ```powershell
 python scripts\render_package_manifests.py `
   --version 2.27.0 `
@@ -25,13 +38,13 @@ python scripts\render_package_manifests.py `
 
 ## Release Workflow
 
-`.github/workflows/release.yml` renders the manifests after `dist\HostsFileGet.exe.sha256` is written, then stores them in:
+`.github/workflows/release.yml` runs `scripts\build_release_artifacts.py` after signing and non-GUI executable verification, then stores the package manifests in:
 
 ```text
 dist\HostsFileGet.package-manifests.zip
 ```
 
-That zip is uploaded as a workflow artifact and as a GitHub release asset on tag builds.
+That zip and `dist\HostsFileGet.release-artifacts.json` are uploaded as workflow artifacts and as GitHub release assets on tag builds.
 
 ## Managed Deployment Handoffs
 
