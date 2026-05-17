@@ -22,8 +22,9 @@ Run from the repository root:
 python -m pip install --upgrade pip
 python -m pip install -r requirements-build.txt
 python -m pip install -r requirements-security.txt
-python -m py_compile hosts_editor.py hostsfileget\source_catalog.py hostsfileget\config_profiles.py hostsfileget\shortcuts.py tests\test_source_catalog.py tests\test_config_profiles.py tests\test_hosts_editor_logic.py tests\test_gui_smoke.py tests\test_benchmarks.py tests\test_package_manifests.py tests\test_shortcuts.py benchmarks\large_file_benchmark.py scripts\render_package_manifests.py scripts\build_release_artifacts.py scripts\verify_release_artifact.py scripts\audit_shortcuts.py scripts\check_release_identity.py
+python -m py_compile hosts_editor.py hostsfileget\source_catalog.py hostsfileget\config_profiles.py hostsfileget\shortcuts.py tests\test_source_catalog.py tests\test_config_profiles.py tests\test_hosts_editor_logic.py tests\test_gui_smoke.py tests\test_benchmarks.py tests\test_package_manifests.py tests\test_shortcuts.py tests\test_cli_contracts.py benchmarks\large_file_benchmark.py scripts\render_package_manifests.py scripts\build_release_artifacts.py scripts\verify_release_artifact.py scripts\audit_shortcuts.py scripts\audit_cli_contract.py scripts\check_release_identity.py
 python scripts\audit_shortcuts.py
+python scripts\audit_cli_contract.py
 python scripts\check_release_identity.py
 python -m unittest discover -s tests -v
 python -m pip_audit -r requirements-build.txt --strict
@@ -74,18 +75,19 @@ The workflow:
 3. Installs pinned build dependencies from `requirements-build.txt`.
 4. Compiles Python sources.
 5. Audits shortcut documentation.
-6. Checks release identity/version hygiene.
-7. Runs unit tests.
-8. Parses `PythonLauncher.ps1`.
-9. Builds `dist\HostsFileGet.exe` with PyInstaller.
-10. Bundles `data/blocklist_sources.json` into the executable runtime.
-11. Signs the executable when signing secrets are configured.
-12. Records Authenticode signature status.
-13. Runs `scripts\verify_release_artifact.py` against `dist\HostsFileGet.exe --version` and `--help`.
-14. Runs `scripts\build_release_artifacts.py` to write `dist\HostsFileGet.exe.sha256`, render package-manager manifests, create a reproducible package-manifest zip, and write `dist\HostsFileGet.release-artifacts.json`.
-15. Writes `dist\HostsFileGet.sbom.cdx.json` and audits pinned build dependencies.
-16. Uploads release files as workflow artifacts.
-17. On tag builds, creates or updates the matching GitHub release assets.
+6. Audits the CLI automation contract snapshot.
+7. Checks release identity/version hygiene.
+8. Runs unit tests.
+9. Parses `PythonLauncher.ps1`.
+10. Builds `dist\HostsFileGet.exe` with PyInstaller.
+11. Bundles `data/blocklist_sources.json` into the executable runtime.
+12. Signs the executable when signing secrets are configured.
+13. Records Authenticode signature status.
+14. Runs `scripts\verify_release_artifact.py` against `dist\HostsFileGet.exe --version` and `--help`.
+15. Runs `scripts\build_release_artifacts.py` to write `dist\HostsFileGet.exe.sha256`, render package-manager manifests, create a reproducible package-manifest zip, and write `dist\HostsFileGet.release-artifacts.json`.
+16. Writes `dist\HostsFileGet.sbom.cdx.json` and audits pinned build dependencies.
+17. Uploads release files as workflow artifacts.
+18. On tag builds, creates or updates the matching GitHub release assets.
 
 ## Code Signing
 
@@ -102,7 +104,7 @@ When signing is configured, `WINDOWS_SIGNING_CERTIFICATE_PASSWORD` is required, 
 
 `requirements-build.txt` pins PyInstaller to `6.20.0`. This is above the vulnerable `<6.0.0` range in [GHSA-p2xp-xx3r-mffc](https://github.com/advisories/GHSA-p2xp-xx3r-mffc). The advisory marks `6.0.0` as patched and notes that `6.10.0` further reworked bootstrap path handling; the pinned build dependency should not be lowered below `6.0.0`.
 
-`scripts/check_release_identity.py` verifies the README version badge, release-facing example versions, PyInstaller pin, `pip-audit` pin, this checklist, and the release workflow gates for `check_release_identity.py`, `build_release_artifacts.py`, and `verify_release_artifact.py`.
+`scripts/check_release_identity.py` verifies the README version badge, release-facing example versions, PyInstaller pin, `pip-audit` pin, this checklist, and the release workflow gates for `check_release_identity.py`, `build_release_artifacts.py`, `verify_release_artifact.py`, and `audit_cli_contract.py`.
 
 ## Release Checklist
 
@@ -111,6 +113,7 @@ Before tagging:
 - Confirm `CHANGELOG.md` includes the release version and date.
 - Confirm `python hosts_editor.py --version`, `APP_VERSION` in `hostsfileget.constants`, the README badge, and the tag agree.
 - Run `python scripts\check_release_identity.py`.
+- Run `python scripts\audit_cli_contract.py`.
 - Confirm `data/blocklist_sources.json` validates through the unit tests.
 - Confirm `requirements-build.txt` keeps PyInstaller above the `GHSA-p2xp-xx3r-mffc` vulnerable range.
 - Run `python -m pip_audit -r requirements-build.txt --strict` and review the dependency audit.

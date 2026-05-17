@@ -43,5 +43,5 @@ Recommended order:
 
 ## Implementation Notes
 
-- R001-R010 have been implemented as of the 2026-05-17 autonomous continuation passes.
-- R011 is the next unchecked roadmap item and should focus on stable CLI contract snapshots for high-risk commands.
+- R001-R011 have been implemented as of the 2026-05-17 autonomous continuation passes.
+- R011 added stable CLI contract snapshots, pure route probes, automation-user documentation, and CI/release audit wiring. No unchecked item remains in this dated roadmap.

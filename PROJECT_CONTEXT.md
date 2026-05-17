@@ -36,7 +36,7 @@ Important root files:
 - `benchmarks/large_file_benchmark.py`: large-file benchmark harness.
 - `docs/`: feature, integration, export, source, and operational documentation.
 - `docs/runtime-compatibility.md`: Python minor-version support matrix and CI/release runtime policy.
-- `scripts/build_release_artifacts.py`, `scripts/verify_release_artifact.py`, `scripts/check_release_identity.py`: release trust guard scripts for artifact generation, EXE CLI smoke verification, and release-facing version/build-tool checks.
+- `scripts/build_release_artifacts.py`, `scripts/verify_release_artifact.py`, `scripts/check_release_identity.py`, `scripts/audit_cli_contract.py`: release trust and automation guard scripts for artifact generation, EXE CLI smoke verification, release-facing version/build-tool checks, and CLI contract snapshots.
 - `ARCHITECTURE.md`, `CHANGELOG.md`, `CODEX_CHANGELOG.md`, `TROUBLESHOOTING.md`, `README.md`: durable project documentation.
 - `AGENTS.md`, `CLAUDE.md`: tool/session instructions. `AGENTS.md` points to `CLAUDE.md`.
 - `ROADMAP.md`: active prioritized plan after the 2026-05-17 research reset.
@@ -105,8 +105,11 @@ At the start of future work:
 
 ## Recommended Next Pass
 
-Start with the next unchecked `ROADMAP.md` item:
+No unchecked item remains in the 2026-05-17 research-reset `ROADMAP.md`.
 
-1. R011 - CLI Contract Snapshot Tests.
+Recommended next steps:
 
-The source catalog reset, source catalog extraction, release identity hygiene, runtime compatibility matrix, config/profile service extraction, source-health remediation assistant, release trust hardening, keyboard/documentation consistency pass, integration handoff quality pack, and false-positive/allowlist workflow refresh are complete. R011 is next because the CLI surface is broad and now needs stable contract snapshots for high-risk commands.
+1. Refresh `.ai/research/2026-05-17/source-health-report.json` and external dependency/security evidence before creating a new dated roadmap.
+2. If continuing without a new research pass, promote a deferred backlog item from `.ai/research/2026-05-17/FEATURE_BACKLOG.md` into a new explicit roadmap item.
+
+The source catalog reset, source catalog extraction, release identity hygiene, runtime compatibility matrix, config/profile service extraction, source-health remediation assistant, release trust hardening, keyboard/documentation consistency pass, integration handoff quality pack, false-positive/allowlist workflow refresh, and CLI contract snapshot tests are complete. R011 added a contract fixture, audit script, docs, CI/release wiring, and a fix for the `--source-cache-prune` early CLI detector.

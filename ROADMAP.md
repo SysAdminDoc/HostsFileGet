@@ -236,7 +236,7 @@ Why later:
 
 False-positive UX is already present. Source catalog decay is a more immediate risk.
 
-### [ ] R011 - CLI Contract Snapshot Tests
+### [x] R011 - CLI Contract Snapshot Tests
 
 Evidence: `L7`, `L8`, `P1`.
 
@@ -245,6 +245,13 @@ Deliverables:
 - Capture stable `--help` sections for high-risk commands.
 - Add tests that confirm GUI initialization is not required for pure CLI reports.
 - Add a compatibility note for automation users.
+
+Completed 2026-05-17:
+
+- Added `tests/fixtures/cli_contract_snapshot.json` with stable high-risk `--help` phrases for hosts-write, source-health/cache, plan-only handoff, provider/DNS, local report, and automation-service command families.
+- Added `scripts/audit_cli_contract.py` and `tests/test_cli_contracts.py`; the audit captures `--help`, validates the snapshot, and probes representative pure CLI routes with Tk and `HostsFileEditor` initialization patched to fail.
+- Added `docs/cli-automation-contract.md`, README/release links, and CI/release workflow audit steps.
+- Fixed `--source-cache-prune` by adding it to the early CLI flag detector so the existing parser handler is reachable without GUI startup.
 
 Why later:
 
@@ -263,11 +270,13 @@ These are intentionally not active roadmap items unless a future product decisio
 
 ## Completion Criteria for the Next Development Pass
 
-A future implementation pass should finish with:
+The 2026-05-17 research-reset roadmap is complete as of R011. A future implementation pass should start by refreshing the research/source-health evidence or by promoting deferred backlog items into a new dated roadmap.
+
+Completed pass requirements:
 
 - CLI contract snapshot tests.
 - `ROADMAP.md` checkboxes updated only after verification.
-- Real verification commands recorded in the change summary or commit message.
+- Real verification commands recorded in the change summary and commit message.
 
 ## Source Key
 
