@@ -24,7 +24,7 @@ jobs:
 
       - name: Compile Python sources
         shell: pwsh
-        run: python -m py_compile hosts_editor.py tests\test_hosts_editor_logic.py
+        run: python -m py_compile hosts_editor.py hostsfileget\source_catalog.py tests\test_source_catalog.py tests\test_hosts_editor_logic.py
 
       - name: Check curated source health
         shell: pwsh

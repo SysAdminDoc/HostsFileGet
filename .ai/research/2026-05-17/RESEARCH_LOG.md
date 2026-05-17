@@ -185,3 +185,13 @@ No researched competitor or source category produced a higher-priority item than
 ## Final Research Position
 
 The next roadmap should be narrower than the previous F001-F070 feature ledger. The highest-value next work is to stabilize the live source catalog, continue modularization around source/config/profile layers, and tighten release identity/security.
+
+## R004 Runtime Follow-Up
+
+Local runtime evidence recorded during R004:
+
+- `python --version`: Python 3.12.10.
+- `sys.version`: `3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]`.
+- `platform.platform()`: `Windows-11-10.0.26100-SP0`.
+
+CI was expanded to record runtime details for Python 3.12 and Python 3.14 on Windows.

@@ -4,6 +4,11 @@ All notable changes to HostsFileGet will be documented in this file.
 
 ## [Unreleased]
 
+**Runtime compatibility**
+- Added `docs/runtime-compatibility.md` with the supported/tested Python matrix for direct run, unit tests, PyInstaller release builds, optional TUI, and launcher bootstrap behavior.
+- Expanded CI to validate Windows on Python 3.12 and Python 3.14 while keeping release builds pinned to Python 3.12.
+- CI now records exact Python/runtime details in workflow logs for compatibility evidence.
+
 **Release identity and build-tool hygiene**
 - Updated release-facing README/docs examples to v2.27.0 and replaced the preview version badge with the current runtime version.
 - Added `scripts/check_release_identity.py` plus release workflow and unit-test coverage to catch stale `version-preview` text, stale release example URLs, missing release-checklist hardening items, unsafe PyInstaller pins, and missing `pip-audit` pins.
