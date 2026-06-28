@@ -11,3 +11,9 @@ build/
 dist/
 *.spec
 !HostsFileGet.spec
+
+# AI config
+CODEX_CHANGELOG.md
+AGENTS.md
+.claude/
+.codex/
