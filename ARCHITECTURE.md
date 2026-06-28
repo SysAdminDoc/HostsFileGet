@@ -94,7 +94,6 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `ROADMAP.md` | Sourced feature register and implementation progress |
 | `ARCHITECTURE.md` | Current implementation map |
 | `TROUBLESHOOTING.md` | Hosts-file limitations and operational recovery guide |
-| `CODEX_CHANGELOG.md` | Development-agent handoff notes |
 | `data/blocklist_sources.json` | Versioned curated blocklist catalog loaded at startup |
 | `data/i18n/en-US.json` | Versioned English UI string catalog and contribution template source |
 | `docs/source-manifest.md` | Curated source manifest schema and maintenance rules |
@@ -154,7 +153,7 @@ Profile quick switching follows the same config-only boundary. HostsFileGet can 
 | `docs/accessibility.md` | Contrast audit, font assumptions, and manual Windows accessibility release checks |
 | `docs/runtime-compatibility.md` | Python minor-version support, CI matrix, PyInstaller, optional TUI, and launcher compatibility |
 | `docs/i18n.md` | String catalog schema, fallback behavior, contribution CLI, and localization guardrails |
-| `CLAUDE.md` | Compact architecture and gotchas snapshot for agents |
+
 | `default.txt` | Sample/default hosts content |
 | `icon.png` | App branding asset |
 | `build/`, `dist/` | Local PyInstaller outputs, not source-of-truth |
