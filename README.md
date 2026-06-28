@@ -549,7 +549,6 @@ Open the local accessibility audit from **Tools > Accessibility Audit...**. It r
 - Runtime compatibility: `docs/runtime-compatibility.md`
 - Release build notes: `docs/release.md`
 - Package manager manifests: `docs/package-managers.md`
-- Codex handoff notes: `CODEX_CHANGELOG.md`
 
 ## License
 
